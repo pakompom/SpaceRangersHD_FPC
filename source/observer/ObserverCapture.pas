@@ -36,6 +36,12 @@ type
     RingKind, Owner: Byte;
     Poses: array[0..ObserverSamples - 1] of TObserverPose;
   end;
+  TObserverTrackSlot = record
+    Id: Cardinal;
+    Kind: Integer;
+    Track: TObserverTrack;
+  end;
+  TObserverTrackIndex = array of TObserverTrackSlot;
   TObserverEffect = class
     AtTime: Double;
     SourceKey, TargetKey: AnsiString;
@@ -65,6 +71,10 @@ type
     constructor Create(Star: TStar);
     destructor Destroy; override;
     procedure Capture(Star: TStar; Step: Integer);
+  private
+    TrackIndex: TObserverTrackIndex;
+    procedure GrowTrackIndex;
+    function FindTrackSlot(ObjectId: Cardinal; Kind: Integer): SizeUInt;
   end;
   TObserverRecording = class
     Turn: Integer;
@@ -164,6 +174,45 @@ begin
   inherited Destroy
 end;
 
+// CHANGE: PERFORMANCE - Resolve existing tracks by numeric identity without
+// allocating and hashing a string for every object at every simulation step.
+// Keep managed array allocation/finalization out of the per-pose lookup path.
+procedure TObserverSystem.GrowTrackIndex;
+var
+  NewIndex: TObserverTrackIndex;
+  I: SizeInt;
+  Slot, Mask: SizeUInt;
+begin
+  SetLength(NewIndex, Max(16, Length(TrackIndex) * 2));
+  Mask := Length(NewIndex) - 1;
+  for I := 0 to High(TrackIndex) do
+    if TrackIndex[I].Track <> nil then
+    begin
+      Slot :=
+          ((SizeUInt(TrackIndex[I].Id) * 2654435761)
+                  xor (SizeUInt(Cardinal(TrackIndex[I].Kind)) * 2246822519))
+              and Mask;
+      while NewIndex[Slot].Track <> nil do
+        Slot := (Slot + 1) and Mask;
+      NewIndex[Slot] := TrackIndex[I];
+    end;
+  TrackIndex := NewIndex;
+end;
+
+function TObserverSystem.FindTrackSlot(ObjectId: Cardinal; Kind: Integer): SizeUInt;
+var
+  Mask: SizeUInt;
+begin
+  if Tracks.Count >= Length(TrackIndex) div 2 then
+    GrowTrackIndex;
+  Mask := Length(TrackIndex) - 1;
+  Result :=
+      ((SizeUInt(ObjectId) * 2654435761) xor (SizeUInt(Cardinal(Kind)) * 2246822519)) and Mask;
+  while (TrackIndex[Result].Track <> nil)
+      and ((TrackIndex[Result].Id <> ObjectId) or (TrackIndex[Result].Kind <> Kind)) do
+    Result := (Result + 1) and Mask;
+end;
+
 procedure TObserverSystem.Capture(Star: TStar; Step: Integer);
 var
   I, J, StatusCount: Integer;
@@ -173,7 +222,13 @@ var
   Missile: TMissile;
   Item: TItem;
   Track: TObserverTrack;
-  NewTrack, SavedRandom: Boolean;
+  NewTrack, SavedRandom, AsteroidTextReady: Boolean;
+  AsteroidName, AsteroidInfo: WideString;
+  GoodsReady: set of 0..7;
+  GoodsText: array[0..7] of record
+    Portrait, Info: WideString;
+  end;
+  GoodsKind: Integer;
   procedure Add(
       Id: Cardinal;
       Kind: Integer;
@@ -185,18 +240,23 @@ var
   var
     Key: AnsiString;
     P: TPlanetSE;
+    Slot: SizeUInt;
   begin
     Track := nil;
     NewTrack := False;
     if (Graphic = nil) or (Graphic.GraphKey = '') then
       Exit;
-    Key := IntToStr(Kind) + ':' + UIntToStr(Id);
-    Track := TObserverTrack(Tracks.Find(Key));
+    Slot := FindTrackSlot(Id, Kind);
+    Track := TrackIndex[Slot].Track;
     if Track = nil then
     begin
       NewTrack := True;
+      Key := IntToStr(Kind) + ':' + UIntToStr(Id);
       Track := TObserverTrack.Create;
       Tracks.Add(Key, Track);
+      TrackIndex[Slot].Id := Id;
+      TrackIndex[Slot].Kind := Kind;
+      TrackIndex[Slot].Track := Track;
       Track.Key := Key;
       Track.Kind := Kind;
       Track.Name := Name;
@@ -221,6 +281,8 @@ var
 begin
   Step := EnsureRange(Step, 0, ObserverSamples - 1);
   CapturedStep := Step;
+  AsteroidTextReady := False;
+  GoodsReady := [];
   // A boundary may be captured again; explicitly remove stale presence bits.
   for I := 0 to Tracks.Count - 1 do
     TObserverTrack(Tracks[I]).Poses[Step].Visible := False;
@@ -385,11 +447,20 @@ begin
   for I := 0 to Star.Asteroids.Count - 1 do
   begin
     Asteroid := TAsteroid(Star.Asteroids[I]);
-    Add(Asteroid.Id, 3, Asteroid.GraphObject, Asteroid.Position, 0, Asteroid.GetDisplayName);
+    Add(Asteroid.Id, 3, Asteroid.GraphObject, Asteroid.Position, 0, '');
     if (Track <> nil) and NewTrack then
     begin
+      // CHANGE: PERFORMANCE - Store names once per track and share localized templates.
+      // Keep the cache local so script/configuration changes between samples are respected.
+      if not AsteroidTextReady then
+      begin
+        AsteroidName := LocalizedText('Asteroid.Name');
+        AsteroidInfo := LocalizedText('Asteroid.Text');
+        AsteroidTextReady := True;
+      end;
+      Track.Name := Asteroid.GetDisplayName(AsteroidName);
       Track.Category := 'Asteroid';
-      Track.Info := Asteroid.GetInfoText
+      Track.Info := Asteroid.GetInfoText(AsteroidInfo)
     end;
   end;
   for I := 0 to Star.Missiles.Count - 1 do
@@ -403,10 +474,11 @@ begin
           Missile.Graphic,
           Missile.Position,
           HeadingDegreesToByte(Missile.Direction),
-          Missile.GetDisplayName
+          ''
       );
       if (Track <> nil) and NewTrack then
       begin
+        Track.Name := Missile.GetDisplayName;
         Track.Category := 'Missile';
         Track.Info := Missile.GetInfoText;
         if Missile.OwnerShip <> nil then
@@ -422,7 +494,10 @@ begin
     SavedRandom := ObserverVisualRandom;
     ObserverVisualRandom := True;
     try
-      Add(Item.Id, 5, Item.GetGraphObject, Item.Position, 0, Item.GetDisplayName)
+      // CHANGE: PERFORMANCE - Avoid rebuilding localized loot names at every simulation step.
+      Add(Item.Id, 5, Item.GetGraphObject, Item.Position, 0, '');
+      if (Track <> nil) and NewTrack then
+        Track.Name := Item.GetDisplayName;
     finally
       ObserverVisualRandom := SavedRandom
     end;
@@ -446,8 +521,26 @@ begin
       end;
       if Item is TGoods then
       begin
-        Track.Portrait := 'GI,' + GetItemTypeBitmapPath(Item.ItemType);
-        Track.Info := LocalizedText('Items.Goods.Text.' + IntToStr(Ord(Item.ItemType) + 1));
+        // CHANGE: PERFORMANCE - Thousands of mineral drops share these two strings.
+        // Only cache within this capture; names and numeric item data remain per object.
+        GoodsKind := Ord(Item.ItemType);
+        if GoodsKind in [0..7] then
+        begin
+          if not (GoodsKind in GoodsReady) then
+          begin
+            GoodsText[GoodsKind].Portrait := 'GI,' + GetItemTypeBitmapPath(Item.ItemType);
+            GoodsText[GoodsKind].Info :=
+                LocalizedText('Items.Goods.Text.' + IntToStr(GoodsKind + 1));
+            Include(GoodsReady, GoodsKind);
+          end;
+          Track.Portrait := GoodsText[GoodsKind].Portrait;
+          Track.Info := GoodsText[GoodsKind].Info;
+        end
+        else
+        begin
+          Track.Portrait := 'GI,' + GetItemTypeBitmapPath(Item.ItemType);
+          Track.Info := LocalizedText('Items.Goods.Text.' + IntToStr(GoodsKind + 1));
+        end;
       end
       else
       begin

@@ -92,7 +92,7 @@ type
     NextTransitGlow: Integer;
     LastTick: QWord;
     Playing, SingleStep, Dragging, Still, ZoomAnchored, ShowHelp: Boolean;
-    RadarDragging, FollowSelection, ShowOrbits, DragMoved: Boolean;
+    RadarDragging, FollowSelection, ShowOrbits, DragMoved, ShowAllIcons: Boolean;
     LastDrag, AnchorPixel: TPoint;
     DragStart: TPoint;
     FocusedSystem, CompletedTurns, DetailSystems: Integer;
@@ -471,6 +471,7 @@ begin
   Still := True;
   DurationMs := 800;
   ShowOrbits := True;
+  ShowAllIcons := True;
   SelectedStar := -1;
   HoverStar := -1;
   Canvas := Classes.Rect(0, 0, GameScreenWidth, GameScreenHeight - 80);
@@ -786,7 +787,7 @@ begin
     Text := 'Paused: ' + Failure
   else
     Text :=
-        'Wheel: zoom   Drag: pan   Click: inspect   F: follow   O: orbits   G: galaxy   Space: pause   N: turn   +/-: speed';
+        'Wheel: zoom   Drag: pan   Click: inspect   F: follow   O: orbits   I: icons   G: galaxy   Space: pause   N: turn   +/-: speed';
   Caption.SetText(Text);
   UpdateRadar;
 
@@ -819,6 +820,7 @@ var
     sr_gpu_draw(nil, 6, Segments, @V, SizeOf(TScreenVertexGR), 0, 0);
   end;
 begin
+  FlushObserverIconBatch;
   Disc(Radius * 2, Alpha div 2, 0);
   Disc(Radius, Alpha, 0);
   Disc(Radius * 0.4, Alpha, Alpha);
@@ -1055,62 +1057,68 @@ begin
       Inc(DetailSystems)
     end;
     sr_gpu_clip(Canvas.Left, Canvas.Top, Canvas.Right, Canvas.Bottom);
-    for J := 0 to S.Data.Tracks.Count - 1 do
-    begin
-      Track := TObserverTrack(S.Data.Tracks[J]);
-      if (Zoom < 0.01) and (Track.Kind <> 0) then
-        Continue;
-      if (Zoom < 0.02) and (Track.Kind >= 3) then
-        Continue;
-      Alpha := 255 - SpriteAlpha(Track, Zoom);
-      if not Detail then
-        Alpha := 255;
-      if Alpha <= 0 then
-        Continue;
-      Pose := SampleObserverPose(Track, Progress, S.Data.Steps, Still);
-      if not Pose.Visible then
-        Continue;
-      X := SX + Pose.Position.X * Zoom;
-      Y := SY + Pose.Position.Y * Zoom;
-      if (X < Canvas.Left - 10)
-          or (X > Canvas.Right + 10)
-          or (Y < Canvas.Top - 10)
-          or (Y > Canvas.Bottom + 10) then
-        Continue;
-      Color := ObserverOwnerColor(Track.Owner);
-      Size := 3.4;
-      case Track.Kind of
-        0:
-        begin
-          DrawBlip(X, Y, 3.4, $FFD36A, Alpha);
-          Continue
+    BeginObserverIconBatch;
+    try
+      for J := 0 to S.Data.Tracks.Count - 1 do
+      begin
+        Track := TObserverTrack(S.Data.Tracks[J]);
+        // CHANGE: ENHANCEMENT - Apply the optional zoom cutoffs to drawing and picking alike.
+        if not ShowAllIcons
+            and (((Zoom < 0.01) and (Track.Kind <> 0))
+                or ((Zoom < 0.02) and (Track.Kind >= 3))) then
+          Continue;
+        Alpha := 255 - SpriteAlpha(Track, Zoom);
+        if not Detail then
+          Alpha := 255;
+        if Alpha <= 0 then
+          Continue;
+        Pose := SampleObserverPose(Track, Progress, S.Data.Steps, Still);
+        if not Pose.Visible then
+          Continue;
+        X := SX + Pose.Position.X * Zoom;
+        Y := SY + Pose.Position.Y * Zoom;
+        if (X < Canvas.Left - 10)
+            or (X > Canvas.Right + 10)
+            or (Y < Canvas.Top - 10)
+            or (Y > Canvas.Bottom + 10) then
+          Continue;
+        Color := ObserverOwnerColor(Track.Owner);
+        Size := 3.4;
+        case Track.Kind of
+          0:
+          begin
+            DrawBlip(X, Y, 3.4, $FFD36A, Alpha);
+            Continue
+          end;
+          1:
+          begin
+            DrawBlip(X, Y, 1.8, Color, Alpha);
+            ObserverRing(X, Y, 3.0, Color, Alpha div 2);
+            Continue
+          end;
+          3:
+          begin
+            Color := $9AAFB6;
+            Size := 2.2;
+            Alpha := Alpha * 2 div 3
+          end;
+          4:
+          begin
+            Color := $F7B480;
+            Size := 2.5
+          end;
+          5:
+          begin
+            Color := $E6C380;
+            Size := 3;
+            if Track.Mineral then
+              Color := $A0C9D5
+          end;
         end;
-        1:
-        begin
-          DrawBlip(X, Y, 1.8, Color, Alpha);
-          ObserverRing(X, Y, 3.0, Color, Alpha div 2);
-          Continue
-        end;
-        3:
-        begin
-          Color := $9AAFB6;
-          Size := 2.2;
-          Alpha := Alpha * 2 div 3
-        end;
-        4:
-        begin
-          Color := $F7B480;
-          Size := 2.5
-        end;
-        5:
-        begin
-          Color := $E6C380;
-          Size := 3;
-          if Track.Mineral then
-            Color := $A0C9D5
-        end;
+        ObserverIcon(X, Y, Size, Pose.Angle * 2 * Pi / 256, Track.Kind, Color, Alpha);
       end;
-      ObserverIcon(X, Y, Size, Pose.Angle * 2 * Pi / 256, Track.Kind, Color, Alpha);
+    finally
+      EndObserverIconBatch;
     end;
     S.LabelControl.SetPosition(Classes.Point(Round(SX) + 9, Round(SY) - 24));
     S.LabelControl.SetText(S.Data.Name);
@@ -1155,9 +1163,9 @@ begin
     for J := 0 to S.Data.Tracks.Count - 1 do
     begin
       T := TObserverTrack(S.Data.Tracks[J]);
-      if (Zoom < 0.01) and (T.Kind <> 0) then
-        Continue;
-      if (Zoom < 0.02) and (T.Kind >= 3) then
+      // CHANGE: ENHANCEMENT - Apply the optional zoom cutoffs to drawing and picking alike.
+      if not ShowAllIcons
+          and (((Zoom < 0.01) and (T.Kind <> 0)) or ((Zoom < 0.02) and (T.Kind >= 3))) then
         Continue;
       P := SampleObserverPose(T, Progress, S.Data.Steps, Still);
       if not P.Visible then
@@ -1353,6 +1361,8 @@ begin
     end;
     VK_F1: ShowHelp := not ShowHelp;
     Ord('O'): ShowOrbits := not ShowOrbits;
+    // CHANGE: ENHANCEMENT - I toggles zoom-based icon hiding; all icons are shown by default.
+    Ord('I'): ShowAllIcons := not ShowAllIcons;
     Ord('F'):
     begin
       FollowSelection := not FollowSelection;

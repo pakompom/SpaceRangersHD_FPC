@@ -4504,9 +4504,8 @@ begin
       Ship.LoadFromBuffer(Buffer, Galaxy);
     end;
     Stage := 7;
+    // CHANGE: FIX - Long campaigns can exceed 10,000 loose items; the save count is a Word.
     Count := Buffer.GetWord;
-    if (Count < 0) or (Count > 10000) then
-      raise EAbort.Create('Err');
     Stage := 8;
     for I := 0 to Count - 1 do
     begin

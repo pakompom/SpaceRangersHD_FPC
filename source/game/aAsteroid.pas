@@ -37,8 +37,10 @@ type
     procedure SpawnSiblingAsteroidInCurrentStar;
     procedure IntegrateMotion(TimeScale: Single);
     procedure WritePredictedPositions(Positions: PPointF; Count: Integer);
-    function GetDisplayName: WideString;
-    function GetInfoText: WideString;
+    function GetDisplayName: WideString; overload;
+    function GetDisplayName(const Template: WideString): WideString; overload;
+    function GetInfoText: WideString; overload;
+    function GetInfoText(const Template: WideString): WideString; overload;
   end;
 const
   AsteroidGravitationalConstant: Single = 6.672041391597716e-11;
@@ -251,15 +253,26 @@ end;
 
 function TAsteroid.GetDisplayName: WideString;
 begin
-  Result := LocalizedText('Asteroid.Name');
+  Result := GetDisplayName(LocalizedText('Asteroid.Name'));
+end;
+
+// CHANGE: PERFORMANCE - Batch callers can share the unchanged localized template.
+function TAsteroid.GetDisplayName(const Template: WideString): WideString;
+begin
+  Result := Template;
   ReplaceTextToken(Result, '<Number>', IntToWideString(Id), '<color=255,240,100>');
 end;
 
 function TAsteroid.GetInfoText: WideString;
+begin
+  Result := GetInfoText(LocalizedText('Asteroid.Text'));
+end;
+
+function TAsteroid.GetInfoText(const Template: WideString): WideString;
 var
   Speed: Single;
 begin
-  Result := LocalizedText('Asteroid.Text');
+  Result := Template;
   ReplaceTextToken(Result, '<Number>', IntToWideString(Id), '<color=255,240,100>');
   Speed := Sqrt(Sqr(Velocity.X) + Sqr(Velocity.Y));
   Speed := Speed * 200 * 19968 * AsteroidWorldScale;

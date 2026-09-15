@@ -792,21 +792,32 @@ begin
     Result := Copy(Result, 0, Width);
 end;
 
+// CHANGE: PERFORMANCE - Write UTF-16 digits directly instead of allocating and
+// converting one ANSI character for every digit. Preserve the legacy Abs edge case.
 function IntToWideString(Value: Integer): WideString;
 var
-  Magnitude: Integer;
+  Magnitude, Index: Integer;
+  Digits: array[0..11] of WideChar;
 begin
-  Result := '';
   Magnitude := Abs(Value);
+  Index := High(Digits);
+  if Magnitude <= 0 then
+  begin
+    Digits[Index] := '0';
+    Dec(Index);
+  end;
   while Magnitude > 0 do
   begin
-    Result := Chr(Magnitude mod 10 + Ord('0')) + Result;
+    Digits[Index] := WideChar(Magnitude mod 10 + Ord('0'));
+    Dec(Index);
     Magnitude := Magnitude div 10;
   end;
-  if Result = '' then
-    Result := '0';
   if Value < 0 then
-    Result := '-' + Result;
+  begin
+    Digits[Index] := '-';
+    Dec(Index);
+  end;
+  SetString(Result, PWideChar(@Digits[Index + 1]), High(Digits) - Index);
 end;
 
 function BoolToWideString(Value: Boolean): WideString;

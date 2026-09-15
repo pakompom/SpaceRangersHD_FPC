@@ -5,6 +5,9 @@ unit ObserverDrawing;
 interface
 uses
   EC_Struct;
+procedure BeginObserverIconBatch;
+procedure FlushObserverIconBatch;
+procedure EndObserverIconBatch;
 procedure ObserverLine(X1, Y1, X2, Y2, Width: Double; Color: Cardinal; Alpha: Integer);
 procedure ObserverRing(X, Y, Radius: Double; Color: Cardinal; Alpha: Integer);
 procedure ObserverBox(L, T, R, B: Double; Color: Cardinal; Alpha: Integer);
@@ -16,6 +19,33 @@ uses
   Math,
   GR_DX,
   GameNative;
+var
+  IconBatchActive: Boolean;
+  IconVertexCount: Integer;
+  IconVertices: array[0..8189] of TScreenVertexGR;
+
+// CHANGE: PERFORMANCE - Submit adjacent icon edges together, preserving every
+// vertex and its order. The batch never crosses another draw or a clip/view change.
+procedure FlushObserverIconBatch;
+begin
+  if IconVertexCount = 0 then
+    Exit;
+  sr_gpu_draw(nil, 4, IconVertexCount div 3, @IconVertices, SizeOf(TScreenVertexGR), 0, 0);
+  IconVertexCount := 0;
+end;
+
+procedure BeginObserverIconBatch;
+begin
+  FlushObserverIconBatch;
+  IconBatchActive := True;
+end;
+
+procedure EndObserverIconBatch;
+begin
+  IconBatchActive := False;
+  FlushObserverIconBatch;
+end;
+
 function ObserverOwnerColor(Owner: Integer): Cardinal;
 begin
   case Owner and $7F of
@@ -62,6 +92,7 @@ begin
     V[I].RHW := 1;
     V[I].Color := Color or (Cardinal(Alpha) shl 24)
   end;
+  FlushObserverIconBatch;
   sr_gpu_draw(nil, 6, 2, @V, SizeOf(TScreenVertexGR), 0, 0);
 end;
 procedure ObserverLine(X1, Y1, X2, Y2, Width: Double; Color: Cardinal; Alpha: Integer);
@@ -98,7 +129,15 @@ begin
   Strip(-Width / 2 - 0.8, -Width / 2, 0, Alpha);
   Strip(-Width / 2, Width / 2, Alpha, Alpha);
   Strip(Width / 2, Width / 2 + 0.8, Alpha, 0);
-  sr_gpu_draw(nil, 4, 6, @V, SizeOf(TScreenVertexGR), 0, 0);
+  if IconBatchActive then
+  begin
+    if IconVertexCount + Length(V) > Length(IconVertices) then
+      FlushObserverIconBatch;
+    Move(V, IconVertices[IconVertexCount], SizeOf(V));
+    Inc(IconVertexCount, Length(V));
+  end
+  else
+    sr_gpu_draw(nil, 4, 6, @V, SizeOf(TScreenVertexGR), 0, 0);
 end;
 procedure ObserverRing(X, Y, Radius: Double; Color: Cardinal; Alpha: Integer);
 var
@@ -141,6 +180,7 @@ begin
     Strip(Radius - 0.2, Radius + 0.2, Alpha, Alpha);
     Strip(Radius + 0.2, Radius + 1.0, Alpha, 0);
   end;
+  FlushObserverIconBatch;
   sr_gpu_draw(nil, 4, N * 6, @V, SizeOf(TScreenVertexGR), 0, 0);
 end;
 procedure ObserverIcon(X, Y, Size, Heading: Double; Kind: Integer; Color: Cardinal; Alpha: Integer);
