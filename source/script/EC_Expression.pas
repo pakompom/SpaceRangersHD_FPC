@@ -537,6 +537,25 @@ procedure EF_LibraryFunction(av: array of TVarEC; code: TCodeEC);
 procedure EF_New(av: array of TVarEC; code: TCodeEC);
 procedure EF_Delete(av: array of TVarEC; code: TCodeEC);
 procedure RegisterExpressionBuiltins(Scope: TVarArrayEC);
+// CHANGE: PORTABILITY - Keep the script DLL import/save protocol, but resolve
+// known exports to native callbacks. IDs in LibraryFunData are registry slots,
+// never truncated ARM64 code pointers or addresses from the Windows executable.
+procedure RegisterNativeScriptFunction(
+    const LibraryName, Signature: WideString;
+    Callback: TExpressionCallback
+);
+function LoadNativeScriptLibrary(const Path: WideString): Cardinal;
+function FreeNativeScriptLibrary(Handle: Cardinal): Boolean;
+function NativeScriptLibraryName(Handle: Cardinal): WideString;
+function InitNativeScriptFunction(
+    Cell: TVarEC;
+    Handle: Cardinal;
+    const ExportName: WideString;
+    const Signature: WideString = ''
+): Boolean;
+procedure InitAllNativeScriptFunctions(Scope: TVarArrayEC; Handle: Cardinal);
+procedure InvokeNativeScriptFunction(Cell: TVarEC; av: array of TVarEC; Code: TCodeEC);
+
 // Optional host snapshot encoding; nil preserves the ordinary save format.
 var
   SnapshotObjectIdentity: function(Value: PtrUInt): WideString;
@@ -544,6 +563,206 @@ implementation
 uses
   EC_Str,
   Math;
+type
+  TNativeExport = record
+    LibraryHandle: Cardinal;
+    Name, Signature: WideString;
+    Callback: TExpressionCallback;
+  end;
+var
+  Libraries: array of WideString;
+  NativeExports: array of TNativeExport;
+
+function LibraryKey(const Path: WideString): WideString;
+var
+  S: WideString;
+  I: Integer;
+begin
+  S := Path;
+  for I := 1 to Length(S) do
+    if S[I] = '\' then
+      S[I] := '/';
+  I := Length(S);
+  while (I > 0) and (S[I] <> '/') do
+    Dec(I);
+  Result := LowerCase(Copy(S, I + 1, MaxInt));
+  if Copy(Result, Length(Result) - 3, 4) = '.dll' then
+    Delete(Result, Length(Result) - 3, 4);
+end;
+
+function LoadNativeScriptLibrary(const Path: WideString): Cardinal;
+var
+  I: Integer;
+  Key: WideString;
+begin
+  Key := LibraryKey(Path);
+  for I := 0 to High(Libraries) do
+    if Libraries[I] = Key then
+      Exit(I + 1);
+  Result := 0;
+end;
+
+function FreeNativeScriptLibrary(Handle: Cardinal): Boolean;
+begin
+  // Native code is part of the executable; freeing an import does not unload it.
+  Result := (Handle > 0) and (Handle <= Cardinal(Length(Libraries)));
+end;
+
+function NativeScriptLibraryName(Handle: Cardinal): WideString;
+begin
+  if not FreeNativeScriptLibrary(Handle) then
+    raise ExceptionExpressionEC.Create('Unknown native script library');
+  Result := Libraries[Handle - 1];
+end;
+
+procedure RegisterNativeScriptFunction(
+    const LibraryName, Signature: WideString;
+    Callback: TExpressionCallback
+);
+var
+  Handle: Cardinal;
+  N: Integer;
+begin
+  Handle := LoadNativeScriptLibrary(LibraryName);
+  if Handle = 0 then
+  begin
+    SetLength(Libraries, Length(Libraries) + 1);
+    Handle := Length(Libraries);
+    Libraries[Handle - 1] := LibraryKey(LibraryName);
+  end;
+  N := Length(NativeExports);
+  SetLength(NativeExports, N + 1);
+  NativeExports[N].LibraryHandle := Handle;
+  NativeExports[N].Name := ExtractDelimitedPartW(Signature, 1, ',');
+  NativeExports[N].Signature := Signature;
+  NativeExports[N].Callback := Callback;
+end;
+
+function InitNativeScriptFunction(
+    Cell: TVarEC;
+    Handle: Cardinal;
+    const ExportName, Signature: WideString
+): Boolean;
+var
+  I, J, Count: Integer;
+  Text, Kind: WideString;
+  Data: array of Dword;
+begin
+  Result := False;
+  for I := 0 to High(NativeExports) do
+    if (NativeExports[I].LibraryHandle = Handle) and (NativeExports[I].Name = ExportName) then
+    begin
+      Text := Signature;
+      if Text = '' then
+        Text := NativeExports[I].Signature;
+      Count := CountDelimitedPartsW(Text, ',');
+      if Count <> CountDelimitedPartsW(NativeExports[I].Signature, ',') then
+        raise ExceptionExpressionEC.Create(
+            'Native library signature argument count: ' + ExportName);
+      SetLength(Data, Count);
+      Data[1] := I + 1;
+      for J := 0 to Count - 1 do
+      begin
+        if J = 1 then
+          Continue;
+        Kind := ExtractDelimitedPartW(Text, J, ',');
+        if Kind <> ExtractDelimitedPartW(NativeExports[I].Signature, J, ',') then
+          raise ExceptionExpressionEC.Create('Native library signature type: ' + ExportName);
+        if Kind = 'void' then
+          Data[J] := Ord(lvVoid)
+        else if Kind = 'int' then
+          Data[J] := Ord(lvInt)
+        else if Kind = 'dword' then
+          Data[J] := Ord(lvDword)
+        else if Kind = 'float' then
+          Data[J] := Ord(lvFloat)
+        else if Kind = 'str' then
+          Data[J] := Ord(lvString)
+        else
+          raise ExceptionExpressionEC.Create('Unsupported native library type: ' + Kind);
+      end;
+      // Rebinding must retain the saved library/alias identity: ConvertToKind
+      // clears StringValue even when the cell is already a library function.
+      Cell := Cell.Resolve;
+      if Cell.Kind <> vkLibraryFun then
+        Cell.ConvertToKind(vkLibraryFun);
+      Cell.SetLibrarySignature(Data);
+      Exit(True);
+    end;
+end;
+
+procedure InitAllNativeScriptFunctions(Scope: TVarArrayEC; Handle: Cardinal);
+var
+  I: Integer;
+  Cell: TVarEC;
+begin
+  for I := 0 to High(NativeExports) do
+    if NativeExports[I].LibraryHandle = Handle then
+    begin
+      Cell := Scope.GetVarNE(NativeExports[I].Name);
+      if Cell = nil then
+        Cell := Scope.Add(NativeExports[I].Name, vkLibraryFun);
+      if Cell.RealVType <> vkLibraryFun then
+        Continue;
+      Cell.SetString(NativeScriptLibraryName(Handle) + ',' + NativeExports[I].Name);
+      InitNativeScriptFunction(Cell, Handle, NativeExports[I].Name);
+    end;
+end;
+
+procedure InvokeNativeScriptFunction(Cell: TVarEC; av: array of TVarEC; Code: TCodeEC);
+var
+  I, Slot: Integer;
+  Args: array of TVarEC;
+  SingleValue: Single;
+begin
+  if (Length(Cell.LibraryFunData) < 2) or (Length(Cell.LibraryFunData) <> Length(av) + 1) then
+    raise ExceptionExpressionEC.Create('Count variable: ' + Cell.Name);
+  Slot := Cell.LibraryFunData[1];
+  if (Slot < 1) or (Slot > Length(NativeExports)) then
+    raise ExceptionExpressionEC.Create('Unresolved native library function: ' + Cell.GetString);
+  SetLength(Args, Length(av));
+  try
+    // DLL arguments were converted according to the import declaration. In
+    // particular float is Single, while dword can also carry a native object.
+    for I := 0 to High(Args) do
+    begin
+      Args[I] := TVarEC.Create(vkEmpty);
+      if I = 0 then
+        Continue;
+      case TLibraryValueKind(Cell.LibraryFunData[I + 1]) of
+        lvInt: Args[I].SetInt(av[I].GetInt);
+        lvDword: Args[I].SetDword(av[I].GetDword);
+        lvFloat:
+        begin
+          SingleValue := av[I].GetFloat;
+          Args[I].SetFloat(SingleValue);
+        end;
+        lvString:
+        begin
+          if av[I].RealVType <> vkString then
+            raise ExceptionExpressionEC.Create('Variable not string');
+          Args[I].SetString(av[I].GetString);
+        end;
+      end;
+    end;
+    NativeExports[Slot - 1].Callback(Args, Code);
+    av[0].ResetKind(vkEmpty);
+    case TLibraryValueKind(Cell.LibraryFunData[0]) of
+      lvInt: av[0].SetInt(Args[0].GetInt);
+      lvDword: av[0].SetDword(Args[0].GetDword);
+      lvFloat:
+      begin
+        SingleValue := Args[0].GetFloat;
+        av[0].SetFloat(SingleValue);
+      end;
+      lvString: av[0].SetString(Args[0].GetString);
+    end;
+  finally
+    for I := 0 to High(Args) do
+      Args[I].Free;
+  end;
+end;
+
 // Reference parameters avoid copies of Self and RunStart in composed inline calls.
 procedure FlushTokenRun(
     var Analyzer: TCodeAnalyzerEC;
@@ -4632,7 +4851,6 @@ procedure TExpressionEC.Evaluate(
     DebugContext: TScriptDebugState
 );
 var
-  LibraryWord: Dword;
   i, j: Integer;
   Instruction: TExpressionInstrEC;
   Dest, Left, Right: TExpressionVarEC;
@@ -4640,7 +4858,6 @@ var
   Value, IndexValue, Callee, Argument: TVarEC;
   Invocation: TCodeEC;
   ResultKind: TVarKind;
-  SingleValue: Single;
 begin
   i := 0;
   while i < VariableCount do
@@ -4762,53 +4979,21 @@ begin
       Callee := Left.Resolve(vkEmpty);
       if Callee.RealVType = vkLibraryFun then
       begin
-        Value := Callee.Resolve;
-        if High(Value.LibraryFunData) + 1 - 2 <> Instruction.OperandCount - 2 then
-          raise ExceptionExpressionEC.Create('Count variable : ' + Left.Name);
-        for j := Instruction.OperandCount - 2 - 1 downto 0 do
+        // CHANGE: PORTABILITY - Native exports retain DLL argument conversion
+        // and saved import identities without building a Win32 argument stack.
+        SetLength(Arguments, Instruction.OperandCount - 1);
+        Arguments[0] := Dest.Value;
+        for j := 2 to Instruction.OperandCount - 1 do
+          Arguments[j - 1] := GetVariable(Instruction.Operands[j]).Resolve(vkEmpty);
+        if Code <> nil then
         begin
-          Argument := GetVariable(Instruction.Operands[j + 2]).Resolve(vkEmpty);
-          case TLibraryValueKind(Value.LibraryFunData[2 + j]) of
-            lvInt: LibraryWord := Argument.GetInt;
-            lvDword: LibraryWord := Argument.GetDword;
-            lvFloat:
-            begin
-              SingleValue := Argument.GetFloat;
-              LibraryWord := PDword(@SingleValue)^;
-            end;
-            lvString:
-            begin
-              IndexValue := Argument.Resolve;
-              if IndexValue.Kind <> vkString then
-                raise ExceptionExpressionEC.Create('Variable not string');
-              if Length(IndexValue.StringValue) <= 0 then
-                LibraryWord := 0
-              else
-                LibraryWord := Dword(PWideChar(IndexValue.StringValue));
-            end;
-            lvRef: LibraryWord := Dword(Argument);
-            lvCode: LibraryWord := Dword(Code);
-          else
-            LibraryWord := 0;
-          end;
-          // The imported function consumes its dynamically constructed argument stack.
-          raise ExceptionExpressionEC.Create(
-              'Win32 script DLL calls are unavailable in the FPC port');
+          Code.Process := Process;
+          Code.DebugContext := DebugContext;
         end;
         ScriptCallTrace[ScriptCallTracePosition] := Callee;
         ScriptCallTraceCount := Min(20, ScriptCallTraceCount + 1);
         ScriptCallTracePosition := (ScriptCallTracePosition + 1) mod 20;
-        LibraryWord := Value.LibraryFunData[1];
-        raise ExceptionExpressionEC.Create(
-            'Win32 script DLL calls are unavailable in the FPC port');
-        if Value.LibraryFunData[0] = 1 then
-          Dest.Value.SetInt(LibraryWord)
-        else if Value.LibraryFunData[0] = 2 then
-          Dest.Value.SetDword(LibraryWord)
-        else if Value.LibraryFunData[0] = 3 then
-          Dest.Value.SetFloat(PSingle(@LibraryWord)^)
-        else if Value.LibraryFunData[0] = 4 then
-          Dest.Value.SetString(AnsiString('') + PWideChar(LibraryWord));
+        InvokeNativeScriptFunction(Callee.Resolve, Arguments, Code);
       end
       else if Callee.RealVType = vkExternFun then
       begin
@@ -7301,14 +7486,14 @@ procedure EF_LoadLibrary(av: array of TVarEC; code: TCodeEC);
 begin
   if High(av) <> 1 then
     Exit;
-  av[0].SetDword(LoadLibraryW(PWideChar(av[1].GetString)));
+  av[0].SetDword(LoadNativeScriptLibrary(av[1].GetString));
 end;
 
 procedure EF_FreeLibrary(av: array of TVarEC; code: TCodeEC);
 begin
   if High(av) <> 1 then
     Exit;
-  av[0].SetInt(Integer(FreeLibrary(av[1].GetDword)));
+  av[0].SetInt(Ord(FreeNativeScriptLibrary(av[1].GetDword)));
 end;
 
 procedure TVarEC.SetLibrarySignature(Signature: array of Dword);
@@ -7323,49 +7508,21 @@ end;
 
 procedure EF_LibraryFunction(av: array of TVarEC; code: TCodeEC);
 var
-  i: Integer;
-  Proc: Pointer;
-  KindName: WideString;
+  I: Integer;
+  Signature: WideString;
 begin
   if High(av) < 3 then
     Exit;
-  Proc := GetProcAddress(av[1].GetDword, PAnsiChar(AnsiString(av[3].GetString)));
-  if Proc = nil then
+  Signature := av[2].GetString + ',' + av[3].GetString;
+  for I := 4 to High(av) do
+    Signature := Signature + ',' + av[I].GetString;
+  if not InitNativeScriptFunction(av[0], av[1].GetDword, av[3].GetString, Signature) then
   begin
     av[0].SetInt(0);
     Exit;
   end;
-  av[0].ConvertToKind(vkLibraryFun);
-  SetLength(av[0].LibraryFunData, 2 + High(av) - 3);
-  if av[2].GetString = 'int' then
-    av[0].LibraryFunData[0] := 1
-  else if av[2].GetString = 'dword' then
-    av[0].LibraryFunData[0] := 2
-  else if av[2].GetString = 'float' then
-    av[0].LibraryFunData[0] := 3
-  else if av[2].GetString = 'str' then
-    av[0].LibraryFunData[0] := 4
-  else
-    av[0].LibraryFunData[0] := 0;
-  av[0].LibraryFunData[1] := Dword(Proc);
-  for i := 0 to High(av) - 3 - 1 do
-  begin
-    KindName := av[4 + i].GetString;
-    if KindName = 'int' then
-      av[0].LibraryFunData[2 + i] := 1
-    else if KindName = 'dword' then
-      av[0].LibraryFunData[2 + i] := 2
-    else if KindName = 'float' then
-      av[0].LibraryFunData[2 + i] := 3
-    else if KindName = 'str' then
-      av[0].LibraryFunData[2 + i] := 4
-    else if KindName = 'ref' then
-      av[0].LibraryFunData[2 + i] := 5
-    else if KindName = 'code' then
-      av[0].LibraryFunData[2 + i] := 6
-    else
-      raise ExceptionExpressionEC.Create('LibraryFunction. Unknown type');
-  end;
+  // CHANGE: PORTABILITY - Explicit imports can be rebound after a save/load too.
+  av[0].SetString(NativeScriptLibraryName(av[1].GetDword) + ',' + av[3].GetString);
 end;
 
 procedure EF_New(av: array of TVarEC; code: TCodeEC);

@@ -4568,69 +4568,26 @@ end;
 destructor TLibraryHandler.Destroy;
 begin
   if ModuleHandle <> 0 then
-    FreeLibrary(ModuleHandle);
+    FreeNativeScriptLibrary(ModuleHandle);
   inherited Destroy;
 end;
 
 procedure TLibraryHandler.InitFunction(Cell: TVarEC);
 var
-  Name, Text, Kind: WideString;
-  I, Count: Integer;
-  Proc: Pointer;
-  Signature: array of Dword;
+  Name, Text, ExportName: WideString;
 begin
-  Text := Cell.GetString;
-  Name := ExtractDelimitedPartW(Text, 1, ',');
-  Text := DefinitionBlock.GetParam(Name);
-  Count := CountDelimitedPartsW(Text, ',');
-  if Count < 2 then
-    raise Exception.Create(
-        AnsiString('Failed to init library function ' + Name + ' from ' + LibraryName));
-  Proc := GetProcAddress(ModuleHandle, PAnsiChar(AnsiString(ExtractDelimitedPartW(Text, 1, ','))));
-  if Proc = nil then
+  Name := ExtractDelimitedPartW(Cell.GetString, 1, ',');
+  Text := '';
+  if (DefinitionBlock <> nil) and (DefinitionBlock.CountParams(Name) > 0) then
+    Text := DefinitionBlock.GetParam(Name);
+  ExportName := Name;
+  if Text <> '' then
+    ExportName := ExtractDelimitedPartW(Text, 1, ',');
+  // CHANGE: PORTABILITY - Configured aliases still resolve the declared export.
+  // The built-in signature also exposes newer exports missing from older mods.
+  if not InitNativeScriptFunction(Cell, ModuleHandle, ExportName, Text) then
     raise Exception.Create(
         AnsiString('Failed to find library function ' + Name + ' in ' + LibraryName));
-  SetLength(Signature, Count);
-  Kind := ExtractDelimitedPartW(Text, 0, ',');
-  if Kind = 'int' then
-    Signature[0] := Ord(lvInt)
-  else if Kind = 'dword' then
-    Signature[0] := Ord(lvDword)
-  else if Kind = 'float' then
-    Signature[0] := Ord(lvFloat)
-  else if Kind = 'str' then
-    Signature[0] := Ord(lvString)
-  else
-    Signature[0] := Ord(lvVoid);
-  Signature[1] := Cardinal(Proc);
-  for I := 2 to Count - 1 do
-  begin
-    Kind := ExtractDelimitedPartW(Text, I, ',');
-    if Kind = 'int' then
-      Signature[I] := Ord(lvInt)
-    else if Kind = 'dword' then
-      Signature[I] := Ord(lvDword)
-    else if Kind = 'float' then
-      Signature[I] := Ord(lvFloat)
-    else if Kind = 'str' then
-      Signature[I] := Ord(lvString)
-    else if Kind = 'ref' then
-      Signature[I] := Ord(lvRef)
-    else if Kind = 'code' then
-      Signature[I] := Ord(lvCode)
-    else
-      raise Exception.Create(
-          AnsiString(
-              'Failed to init library function '
-                  + Name
-                  + ' from '
-                  + LibraryName
-                  + ' - unknown type '
-                  + Kind
-          ));
-  end;
-  Cell.SetLibrarySignature(Signature);
-  SetLength(Signature, 0);
 end;
 
 procedure TLibraryHandler.InitAllFunctions(Scope: TVarArrayEC);
@@ -4639,6 +4596,11 @@ var
   Name: WideString;
   Cell: TVarEC;
 begin
+  if DefinitionBlock = nil then
+  begin
+    InitAllNativeScriptFunctions(Scope, ModuleHandle);
+    Exit;
+  end;
   Count := DefinitionBlock.GetParamCount;
   for I := 0 to Count - 1 do
   begin
@@ -4683,9 +4645,12 @@ var
   begin
     Result := nil;
     Definition := GameDataConfig.FindBlockByPath('ScriptLibs.' + Name);
+    // CHANGE: PORTABILITY - No PE file is needed for a native library. Resolve
+    // by configured filename, or by its name when restoring explicit imports.
     if Definition = nil then
-      Exit;
-    Module := LoadLibraryW(PWideChar(Definition.GetParam('Path')));
+      Module := LoadNativeScriptLibrary(Name)
+    else
+      Module := LoadNativeScriptLibrary(Definition.GetParam('Path'));
     if Module = 0 then
       raise Exception.Create(AnsiString('Failed to load library ' + Name));
     Result := TLibraryHandler.Create(Name, Module, Definition);

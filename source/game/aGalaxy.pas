@@ -299,6 +299,11 @@ type
     SpecialSimulationMode: Byte;
     CheatsDisabled: Boolean;
     Gap1DA: array[0..1] of Byte;
+    // CHANGE: PORTABILITY - UtilityFunctions' capital freeze is applied at the
+    // recalculation site instead of racing the simulation with a 1 ms thread.
+    // These are process-local mod state, deliberately absent from the save format.
+    UtilityCapitalOverrideActive: Boolean;
+    UtilityCapitalOverrideValue: Integer;
     constructor Create;
     destructor Destroy; override;
     procedure InitializeCampaignState;
@@ -8401,6 +8406,9 @@ begin
         AverageRangerCapital := Total;
     end;
   end;
+  // Keep wealthiest-ranger and maximum-wealth statistics current while frozen.
+  if UtilityCapitalOverrideActive then
+    AverageRangerCapital := UtilityCapitalOverrideValue;
 end;
 procedure TGalaxy.RefreshRangerStrengthStats;
 var
