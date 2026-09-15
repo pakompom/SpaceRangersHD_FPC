@@ -1,4 +1,4 @@
-"""Bootstrap the vendored LLVM compiler and its platform runtimes."""
+"""Bootstrap the FPC submodule's LLVM compiler and platform runtimes."""
 
 import hashlib
 import os
@@ -17,6 +17,9 @@ def source_revision() -> str:
     """Invalidate generated compilers when their source or build recipe changes."""
     digest = hashlib.sha256(Path(__file__).read_bytes())
     for path in sorted(VENDOR.rglob("*")):
+        # A submodule's .git file describes its checkout, not compiler inputs.
+        if ".git" in path.relative_to(VENDOR).parts:
+            continue
         if path.is_file() and path.suffix not in (".md", ".txt"):
             digest.update(str(path.relative_to(VENDOR)).encode())
             digest.update(path.read_bytes())
@@ -31,6 +34,10 @@ def prepare_compiler(
     target: str, run_step, toolchain: Path | None = None
 ) -> tuple[Path, list[str]]:
     """Use one host compiler with a separate runtime for each target."""
+    if not (VENDOR / "compiler/pp.pas").is_file():
+        raise FileNotFoundError(
+            "Initialize dependencies with: git submodule update --init --recursive"
+        )
     revision = source_revision()
     WORK.mkdir(parents=True, exist_ok=True)
     compiler = SOURCE / "compiler/ppca64"
@@ -43,7 +50,7 @@ def prepare_compiler(
         stamp.unlink(missing_ok=True)
         if SOURCE.exists():
             shutil.rmtree(SOURCE)
-        shutil.copytree(VENDOR, SOURCE)
+        shutil.copytree(VENDOR, SOURCE, ignore=shutil.ignore_patterns(".git"))
         run_step(WORK, "compiler", [
             "gmake", "-C", SOURCE, "compiler_cycle", "LLVM=1", "NOWPOCYCLE=1",
             f"PP={bootstrap}", f"OPT=-O2 -XR{sdk}", "OPTNEW=-Clv17.0",

@@ -1,3 +1,6 @@
 [submodule "vendor/okgf"]
 	path = vendor/okgf
 	url = https://github.com/pakompom/okgf
+[submodule "vendor/fpc"]
+	path = vendor/fpc
+	url = https://github.com/pakompom/fpc_sr.git

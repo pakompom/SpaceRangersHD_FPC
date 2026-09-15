@@ -1,3 +1,0 @@
-unit System.ISO7185;
-{$DEFINE FPC_DOTTEDUNITS}
-{$i iso7185.pp}

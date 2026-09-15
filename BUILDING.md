@@ -5,7 +5,7 @@
 The macOS ARM64 build requires Python 3, FPC 3.2.2 for bootstrapping, GNU Make,
 Xcode command-line tools, CMake, pkg-config, SDL2, SDL2_mixer, libjpeg, and libpng.
 
-The build creates the vendored FPC 3.3.1 LLVM compiler in `.local/fpc/` on first
+The build creates the pinned FPC 3.3.1 LLVM compiler in `.local/fpc/` on first
 use and rebuilds it when its source changes. `FPC_BOOTSTRAP` selects the installed
 bootstrap compiler. The same generated compiler serves macOS and Android, with
 a runtime compiled for each target. Pascal compiles through LLVM IR and Clang;
@@ -67,7 +67,7 @@ and the Android SDK/NDK. Set these dependency paths:
   and libpng; SDL2_mixer and image libraries are linked statically.
 - `SDL_SOURCE`: matching SDL2 source tree, supplying its Android Java classes.
 
-Android Pascal and C code use the NDK's LLVM tools. The vendored compiler includes
+Android Pascal and C code use the NDK's LLVM tools. The compiler submodule includes
 [Android LLVM support](vendor/fpc/PORT.md).
 
 `JAVA_HOME` selects the JDK. The APK contains code; the launcher imports game

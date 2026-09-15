@@ -1,3 +1,0 @@
-unit DOSApi.GO32;
-{$DEFINE FPC_DOTTEDUNITS}
-{$i go32.pp}
