@@ -35,6 +35,16 @@ Optional mods go in `game/Mods/` and are selected through the original mod manag
 Generated output stays in `.local/`.
 Use `--release` with both scripts for an optimized build.
 
+Builds reuse unchanged Pascal units. On macOS, the native libraries also build
+incrementally. Use `./tools/build.py --rebuild` (with `--release` if needed) to
+force a full game rebuild. Changes to the compiler or Pascal flags automatically
+rebuild the units.
+
+Both macOS configurations keep matching `.dSYM` bundles beside `Rangers` and the
+native libraries. Keep these with the corresponding binaries: crash backtraces
+use them to print source paths and line numbers, including in release builds.
+The macOS runtime uses `/usr/bin/atos` when FPC cannot resolve an address itself.
+
 Saves/settings default to `~/Library/Application Support/SpaceRangersHD/`.
 Game options include `--user-dir=/path/to/profile`, `--language=english`,
 `--renderer=sdl`, and `--transitions=original`.

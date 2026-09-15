@@ -204,7 +204,8 @@ var
       UpCallback := ShowProblemsClick;
       UserValue := PtrInt(Info);
     end;
-    Switch.UserState := Integer(TLabelGI.Create(TabPanels[Tab]));
+    // CHANGE: BUGFIX - Preserve the full label pointer on 64-bit builds.
+    Switch.UserState := PtrInt(TLabelGI.Create(TabPanels[Tab]));
     with TLabelGI(Switch.UserState) do
     begin
       SetFontName(NormalFontName);
