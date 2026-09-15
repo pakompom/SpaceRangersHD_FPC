@@ -190,7 +190,8 @@ type
     DueTick: Cardinal;
     Prev: PCallbackTimerGI;
     Next: PCallbackTimerGI;
-    Gap1C: array[0..3] of Byte;
+    // CHANGE: PERFORMANCE - Remember the deadline used by the lookup cache.
+    CachedDueTick: Cardinal;
   end;
   TSavedLineGI = record
     First: TPoint;
@@ -227,6 +228,9 @@ type
     TimerTick: Cardinal;
     FirstTimer: PCallbackTimerGI;
     LastTimer: PCallbackTimerGI;
+    // CHANGE: PERFORMANCE - First timer at each cached deadline; collisions fall back to the list.
+    TimerDeadlineHeads: array[0..255] of PCallbackTimerGI;
+    TimerDeadlineCacheDisabled: Boolean;
     NextTimerToProcess: PCallbackTimerGI;
     LastObservedTimerTick: Cardinal;
     SavedPixels16: Pointer;
@@ -311,6 +315,7 @@ type
     procedure CancelCallbackTimer(Timer: PCallbackTimerGI);
     procedure UpdateCallbackTimer(Timer: PCallbackTimerGI; DelayMs: Integer; RepeatMs: Integer);
     procedure ReinsertCallbackTimer(Timer: PCallbackTimerGI);
+    procedure UncacheCallbackTimer(Timer: PCallbackTimerGI);
     procedure RefreshTimerTick;
     procedure SetCursorImage(const ImagePath: WideString; HotSpot: TPoint);
     procedure SetCursorByName(const Name: WideString);
@@ -1735,10 +1740,18 @@ begin
             CaptureRecordingFrame;
             RecordingTime := timeGetTime - RecordingTime;
             Inc(TimerTick, RecordingTime);
+            // CHANGE: PERFORMANCE - Recording shifts all deadlines without reordering.
+            FillChar(TimerDeadlineHeads, SizeOf(TimerDeadlineHeads), 0);
             NextTimerToProcess := FirstTimer;
             while NextTimerToProcess <> nil do
             begin
+              // A bulk shift can wrap the queue out of numeric order. Retain
+              // the original list search until the queue becomes empty again.
+              if Cardinal(NextTimerToProcess.DueTick + RecordingTime)
+                  < NextTimerToProcess.DueTick then
+                TimerDeadlineCacheDisabled := True;
               Inc(NextTimerToProcess.DueTick, RecordingTime);
+              NextTimerToProcess.CachedDueTick := NextTimerToProcess.DueTick;
               NextTimerToProcess := NextTimerToProcess.Next;
             end;
           end;
@@ -2626,6 +2639,7 @@ begin
   if FirstTimer = nil then
     FirstTimer := Timer;
   Timer.DueTick := TimerTick + Cardinal(DelayMs);
+  Timer.CachedDueTick := Timer.DueTick;
   Timer.RepeatMs := RepeatMs;
   Timer.UserData := UserData;
   Timer.Callback := Callback;
@@ -2637,6 +2651,7 @@ var
   Current: PCallbackTimerGI;
 begin
   Current := Timer;
+  UncacheCallbackTimer(Current);
   if NextTimerToProcess = Current then
     NextTimerToProcess := NextTimerToProcess.Next;
   if Current.Prev <> nil then
@@ -2660,11 +2675,32 @@ begin
   Current.RepeatMs := RepeatMs;
   ReinsertCallbackTimer(Current);
 end;
+// CHANGE: PERFORMANCE - Never retain a timer after it moves or is cancelled.
+procedure TMessageLoopGI.UncacheCallbackTimer(Timer: PCallbackTimerGI);
+var
+  Slot: Cardinal;
+begin
+  Slot := Timer.CachedDueTick and High(TimerDeadlineHeads);
+  if TimerDeadlineHeads[Slot] <> Timer then
+    Exit;
+  if (Timer.Next <> nil) and (Timer.Next.DueTick = Timer.CachedDueTick) then
+    TimerDeadlineHeads[Slot] := Timer.Next
+  else
+    TimerDeadlineHeads[Slot] := nil;
+end;
 procedure TMessageLoopGI.ReinsertCallbackTimer(Timer: PCallbackTimerGI);
 var
-  Current, Before: PCallbackTimerGI;
+  Current, Before, DeadlineHead: PCallbackTimerGI;
+  Slot: Cardinal;
 begin
   Current := Timer;
+  UncacheCallbackTimer(Current);
+  Slot := Current.DueTick and High(TimerDeadlineHeads);
+  DeadlineHead := TimerDeadlineHeads[Slot];
+  Current.CachedDueTick := Current.DueTick;
+  // Insertion is always before equal deadlines, retaining the original tie order.
+  if not TimerDeadlineCacheDisabled then
+    TimerDeadlineHeads[Slot] := Current;
   if Current.Prev <> nil then
     Current.Prev.Next := Current.Next;
   if Current.Next <> nil then
@@ -2675,10 +2711,25 @@ begin
     FirstTimer := Current.Next;
   if FirstTimer = nil then
   begin
+    TimerDeadlineCacheDisabled := False;
+    TimerDeadlineHeads[Slot] := Current;
     FirstTimer := Current;
     LastTimer := Current;
     Current.Prev := nil;
     Current.Next := nil;
+    Exit;
+  end;
+  // CHANGE: PERFORMANCE - Animation timers commonly share a deadline. Avoid
+  // walking thousands of later timers to find the same insertion point again.
+  if (DeadlineHead <> nil) and (DeadlineHead.DueTick = Current.DueTick) then
+  begin
+    Current.Prev := DeadlineHead.Prev;
+    Current.Next := DeadlineHead;
+    if DeadlineHead.Prev <> nil then
+      DeadlineHead.Prev.Next := Current
+    else
+      FirstTimer := Current;
+    DeadlineHead.Prev := Current;
     Exit;
   end;
   if LastTimer.DueTick < Current.DueTick then

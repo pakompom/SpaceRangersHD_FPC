@@ -1415,6 +1415,33 @@ var
   I, Count: Integer;
   Data: TBufEC;
   ObjectIndex: Integer;
+  ObjectKeys: array of TEFilmObj;
+  ObjectIndices: array of Integer;
+  Slot, IndexMask, IndexCapacity: SizeUInt;
+
+  // CHANGE: PERFORMANCE - Index the fixed object list once instead of scanning for every command.
+  function FindObjectIndex(Value: TEFilmObj): Integer;
+  var
+    Bucket: SizeUInt;
+  begin
+    if Value = nil then
+      Exit(FilmNullObjectIndex);
+    Bucket := ((PtrUInt(Value) shr 4) * 2654435761) and IndexMask;
+    while ObjectKeys[Bucket] <> nil do
+    begin
+      if ObjectKeys[Bucket] = Value then
+        Exit(ObjectIndices[Bucket]);
+      Bucket := (Bucket + 1) and IndexMask;
+    end;
+    Result := -1;
+  end;
+
+  function ObjToNom(Value: TEFilmObj): Integer;
+  begin
+    Result := FindObjectIndex(Value);
+    if Result < 0 then
+      raise Exception.Create('Error in TEFilm.ObjToNom');
+  end;
 begin
   Buffer.Clear;
   Buffer.AddWideStringZ(SystemProcessName);
@@ -1440,10 +1467,24 @@ begin
     Data := TBufEC(DataBuffers[I]);
     Buffer.AddBuffer(Data);
   end;
-  Buffer.AddWideChar(WideChar(ObjectCount));
+  Count := ObjectCount;
+  Buffer.AddWideChar(WideChar(Count));
+  IndexCapacity := 1;
+  while IndexCapacity < SizeUInt(Count) * 2 do
+    IndexCapacity := IndexCapacity * 2;
+  IndexMask := IndexCapacity - 1;
+  SetLength(ObjectKeys, IndexCapacity);
+  SetLength(ObjectIndices, IndexCapacity);
+  I := 0;
   Obj := FirstObject;
   while Obj <> nil do
   begin
+    Slot := ((PtrUInt(Obj) shr 4) * 2654435761) and IndexMask;
+    while ObjectKeys[Slot] <> nil do
+      Slot := (Slot + 1) and IndexMask;
+    ObjectKeys[Slot] := Obj;
+    ObjectIndices[Slot] := I;
+    Inc(I);
     Buffer.AddDWord(Obj.ObjectId);
     Buffer.AddWideStringZ(Obj.KindName);
     Buffer.AddWideStringZ(Obj.GraphKey);

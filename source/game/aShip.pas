@@ -13989,7 +13989,7 @@ end;
 
 procedure TShip.RepelFollowingShips;
 var
-  I, Count: Integer;
+  I, Count, RandomWeight: Integer;
   Other: TShip;
   Distance,
   Overlap,
@@ -14018,20 +14018,21 @@ begin
           Inc(I);
           Continue;
         end;
-        OtherWeight :=
-            Max(
-                0.01,
-                Other.CalculateSpeed
-                    / Max(0.01, PointDistance(Other.RepulsionPosition, Other.Position))
-            );
-        Fraction :=
-            SeededRandomIntRange(95, 105, Cardinal(Galaxy.CurrentTurn) * (Other.Seed + Seed))
-                * (SelfWeight / (SelfWeight + OtherWeight))
-                * 0.01;
+        // CHANGE: PERFORMANCE - Preserve chaotic RNG draws even for nonoverlapping ships.
+        RandomWeight :=
+            SeededRandomIntRange(95, 105, Cardinal(Galaxy.CurrentTurn) * (Other.Seed + Seed));
         Distance := PointDistance(RepulsionPosition, Other.RepulsionPosition);
         Overlap := Distance - CollisionRadius - Other.CollisionRadius - 5;
         if Overlap < -0.01 then
         begin
+          // CHANGE: PERFORMANCE - Only evaluate equipment-derived speed when separation is needed.
+          OtherWeight :=
+              Max(
+                  0.01,
+                  Other.CalculateSpeed
+                      / Max(0.01, PointDistance(Other.RepulsionPosition, Other.Position))
+              );
+          Fraction := RandomWeight * (SelfWeight / (SelfWeight + OtherWeight)) * 0.01;
           Overlap := -Overlap;
           if Distance <= 1 then
           begin
