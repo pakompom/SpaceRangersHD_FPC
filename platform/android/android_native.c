@@ -6,6 +6,29 @@
 static atomic_int keys[256];
 static atomic_int right_click;
 static atomic_int hover_only;
+/* UTF-16 avoids JNI's modified-UTF-8 rules for Unicode filesystem names. */
+int sr_android_open_document(const uint16_t *path, int length) {
+    JNIEnv *env = SDL_AndroidGetJNIEnv();
+    jobject activity = SDL_AndroidGetActivity();
+    if (!env || !activity)
+        return 0;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID method = (*env)->GetMethodID(env, cls, "openDocument", "(Ljava/lang/String;)Z");
+    jstring name = (*env)->NewString(env, (const jchar *)path, length);
+    int opened = 0;
+    if (method && name)
+        opened = (*env)->CallBooleanMethod(env, activity, method, name);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        opened = 0;
+    }
+    if (name)
+        (*env)->DeleteLocalRef(env, name);
+    (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
+    return opened;
+}
 int sr_android_key(int key) { return key >= 0 && key < 256 ? atomic_load(&keys[key]) : 0; }
 int sr_android_right(void) { return atomic_load(&right_click); }
 int sr_android_hover(void) { return atomic_load(&hover_only); }

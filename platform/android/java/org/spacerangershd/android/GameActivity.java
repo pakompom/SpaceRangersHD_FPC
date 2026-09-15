@@ -2,6 +2,7 @@ package org.spacerangershd.android;
 
 import org.libsdl.app.SDLActivity;
 import android.os.Bundle;
+import android.content.Intent;
 import android.view.*;
 import android.widget.*;
 import java.io.File;
@@ -14,6 +15,15 @@ public final class GameActivity extends SDLActivity {
     private boolean right;
     private boolean hover;
     private LinearLayout panel;
+
+    // Called on the game thread through ShellExecuteA's native compatibility layer.
+    public boolean openDocument(String path) {
+        if (!new File(path).isFile())
+            return false;
+        runOnUiThread(
+            () -> startActivity(new Intent(this, ManualActivity.class).putExtra("path", path)));
+        return true;
+    }
 
     @Override
     protected String[] getLibraries() {
