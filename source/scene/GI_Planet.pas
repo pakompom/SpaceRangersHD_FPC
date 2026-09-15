@@ -1,0 +1,1211 @@
+{$EXCESSPRECISION OFF}
+unit GI_Planet;
+{$R-}
+{$Q-}
+{$B-}
+{$A8}
+interface
+uses
+  Types,
+  Classes,
+  EC_CachePalBitmap,
+  EC_CacheRotateBuf,
+  EC_CachePlanetTempl,
+  EC_CacheLightPal,
+  EC_CacheBitmap,
+  GI_MessageLoop,
+  GR_DX,
+  GR_GraphBufPal,
+  EC_BlockPar,
+  GR_GraphBuf;
+type
+  TPlanetGI = class;
+  TPlanetGI = class(TObjectGI)
+    TemplateCache: TCPlanetTemplControlEC;
+    SurfaceImageCache: TCPalBitmapControlEC;
+    SurfacePaletteCache: TCLightPalControlEC;
+    Cloud1ImageCache: TCPalBitmapControlEC;
+    Cloud1PaletteCache: TCLightPalControlEC;
+    Cloud2ImageCache: TCPalBitmapControlEC;
+    Cloud2PaletteCache: TCLightPalControlEC;
+    Cloud3ImageCache: TCPalBitmapControlEC;
+    Cloud3PaletteCache: TCLightPalControlEC;
+    LightRotationCache: TCRotateBufControlEC;
+    AtmosphereRotationCache: TCRotateBufControlEC;
+    AtmosphereBuffer: TGraphBufPalGR;
+    AtmosphereImageCache: TCBitmapControlEC;
+    AtmosphereMaskCache: TCBitmapControlEC;
+    AtmosphereColor: Cardinal;
+    AtmosphereDirty: Boolean;
+    AtmospherePaletteDirty: Boolean;
+    Gap15E: array[0..1] of Byte;
+    MapWidthMask: Integer;
+    SurfaceMapOffset: Integer;
+    Cloud1MapOffset: Integer;
+    Cloud2MapOffset: Integer;
+    Cloud3MapOffset: Integer;
+    RenderedMapOffsets: array[0..3] of Integer;
+    SourceLightBuffer: Pointer;
+    RotatedLightBuffer: Pointer;
+    LightAngle: Byte;
+    Gap18D: array[0..2] of Byte;
+    MapWidth: Integer;
+    MapHeight: Integer;
+    TextureCache: TTextureGR;
+    TextureSize: TPoint;
+    AtmosphereTextureSize: TPoint;
+    procedure Clear; override;
+    procedure QueueImageLoad(PendingLoads: TList); override;
+    procedure LoadFromConfigPath(const Path: WideString); override;
+    procedure Draw(ClipRect: TRect); override;
+    procedure LoadFromBlock(Block: TBlockParEC); override;
+    constructor Create(Owner: TObjectGI);
+    destructor Destroy; override;
+    procedure SetImage(
+        const MaskPath: WideString;
+        const ImagePath: WideString;
+        const LightMapPath: WideString
+    );
+    procedure SetCloud1Image(const Path: WideString);
+    procedure SetCloud2Image(const Path: WideString);
+    procedure SetCloud3Image(const Path: WideString);
+    procedure SetImageWithRadius(
+        const MaskPath: WideString;
+        const ImagePath: WideString;
+        const LightMapPath: WideString;
+        Radius: Integer
+    );
+    procedure SetImageFromTemplate(
+        const TemplateKey: WideString;
+        const ImagePath: WideString;
+        Radius: Integer
+    );
+    procedure SetAtmosphere(ImagePath: WideString; MaskPath: WideString; Color: Cardinal);
+    procedure BuildAtmospherePalette;
+    procedure RebuildAtmosphereImage;
+    procedure SetSurfaceMapOffset(Value: Integer);
+    procedure SetCloud1MapOffset(Value: Integer);
+    procedure SetCloud2MapOffset(Value: Integer);
+    procedure SetCloud3MapOffset(Value: Integer);
+    procedure SetLightAngle(Value: Byte);
+    procedure RenderSurfaceToBuffer(Buffer: TGraphBufGR);
+  end;
+implementation
+uses
+  Math,
+  SysUtils,
+  EC_Cache,
+  EC_Mem,
+  GR_Main,
+  GI_Main,
+  GlobalsV,
+  Direct3D9;
+
+constructor TPlanetGI.Create(Owner: TObjectGI);
+begin
+  inherited Create(Owner);
+  TemplateCache := TCPlanetTemplControlEC.Create;
+  GlobalCache.ResetControl(TemplateCache);
+  SurfaceImageCache := TCPalBitmapControlEC.Create;
+  GlobalCache.ResetControl(SurfaceImageCache);
+  SurfacePaletteCache := TCLightPalControlEC.Create;
+  GlobalCache.ResetControl(SurfacePaletteCache);
+  Cloud1ImageCache := TCPalBitmapControlEC.Create;
+  GlobalCache.ResetControl(Cloud1ImageCache);
+  Cloud1PaletteCache := TCLightPalControlEC.Create;
+  GlobalCache.ResetControl(Cloud1PaletteCache);
+  Cloud2ImageCache := TCPalBitmapControlEC.Create;
+  GlobalCache.ResetControl(Cloud2ImageCache);
+  Cloud2PaletteCache := TCLightPalControlEC.Create;
+  GlobalCache.ResetControl(Cloud2PaletteCache);
+  Cloud3ImageCache := TCPalBitmapControlEC.Create;
+  GlobalCache.ResetControl(Cloud3ImageCache);
+  Cloud3PaletteCache := TCLightPalControlEC.Create;
+  GlobalCache.ResetControl(Cloud3PaletteCache);
+  LightRotationCache := TCRotateBufControlEC.Create;
+  GlobalCache.ResetControl(LightRotationCache);
+  AtmosphereRotationCache := TCRotateBufControlEC.Create;
+  GlobalCache.ResetControl(AtmosphereRotationCache);
+  AtmosphereBuffer := TGraphBufPalGR.Create;
+  AtmosphereImageCache := TCBitmapControlEC.Create;
+  GlobalCache.ResetControl(AtmosphereImageCache);
+  AtmosphereMaskCache := TCBitmapControlEC.Create;
+  GlobalCache.ResetControl(AtmosphereMaskCache);
+  RenderedMapOffsets[0] := $FFFFFF;
+  RenderedMapOffsets[1] := RenderedMapOffsets[0];
+  RenderedMapOffsets[2] := RenderedMapOffsets[0];
+  RenderedMapOffsets[3] := RenderedMapOffsets[0];
+  TextureCache := nil;
+end;
+
+destructor TPlanetGI.Destroy;
+begin
+  TemplateCache.Free;
+  TemplateCache := nil;
+  SurfacePaletteCache.Free;
+  SurfacePaletteCache := nil;
+  SurfaceImageCache.Free;
+  SurfaceImageCache := nil;
+  Cloud1PaletteCache.Free;
+  Cloud1PaletteCache := nil;
+  Cloud1ImageCache.Free;
+  Cloud1ImageCache := nil;
+  Cloud2PaletteCache.Free;
+  Cloud2PaletteCache := nil;
+  Cloud2ImageCache.Free;
+  Cloud2ImageCache := nil;
+  Cloud3PaletteCache.Free;
+  Cloud3PaletteCache := nil;
+  Cloud3ImageCache.Free;
+  Cloud3ImageCache := nil;
+  LightRotationCache.Free;
+  LightRotationCache := nil;
+  AtmosphereRotationCache.Free;
+  AtmosphereRotationCache := nil;
+  AtmosphereBuffer.Free;
+  AtmosphereBuffer := nil;
+  AtmosphereImageCache.Free;
+  AtmosphereImageCache := nil;
+  AtmosphereMaskCache.Free;
+  AtmosphereMaskCache := nil;
+  if TextureCache <> nil then
+  begin
+    FreeTextureCache(TextureCache);
+    TextureCache := nil;
+  end;
+  inherited Destroy;
+end;
+
+procedure TPlanetGI.Clear;
+begin
+  if SourceLightBuffer <> nil then
+  begin
+    Ex_OKGR_LightBuf_Destroy(SourceLightBuffer);
+    SourceLightBuffer := nil;
+  end;
+  if RotatedLightBuffer <> nil then
+  begin
+    Ex_OKGR_LightBuf_Destroy(RotatedLightBuffer);
+    RotatedLightBuffer := nil;
+  end;
+  LightAngle := 0;
+  inherited Clear;
+end;
+
+procedure TPlanetGI.SetImage(const MaskPath, ImagePath, LightMapPath: WideString);
+var
+  Image: TCPalBitmapEC;
+  LightControl: TCPalBitmapControlEC;
+  LightImage: TCPalBitmapEC;
+begin
+  Invalidate;
+  if SourceLightBuffer <> nil then
+  begin
+    Ex_OKGR_LightBuf_Destroy(SourceLightBuffer);
+    SourceLightBuffer := nil;
+  end;
+  if RotatedLightBuffer <> nil then
+  begin
+    Ex_OKGR_LightBuf_Destroy(RotatedLightBuffer);
+    RotatedLightBuffer := nil;
+  end;
+  SurfaceImageCache.SetCacheKey(ImagePath);
+  SurfacePaletteCache.SetCacheKey(ImagePath);
+  Image := AcquireOrCreatePalBitmap(SurfaceImageCache);
+  try
+    MapWidth := Image.Bitmap.Width;
+    MapHeight := Image.Bitmap.Height;
+    if (Cardinal(Image.Bitmap.Width) shr 1) < Cardinal(Image.Bitmap.Height) then
+      raise Exception.Create('TPlanetGI.SetImage. Error create template planet. (LenX div 2)<LenY');
+    if (Image.Bitmap.Width <> 16)
+        and (Image.Bitmap.Width <> 32)
+        and (Image.Bitmap.Width <> 64)
+        and (Image.Bitmap.Width <> 128)
+        and (Image.Bitmap.Width <> 256)
+        and (Image.Bitmap.Width <> 512)
+        and (Image.Bitmap.Width <> 1024)
+        and (Image.Bitmap.Width <> 2048) then
+      raise Exception.Create(
+          'TPlanetGI.SetImage. Error create template planet. LenX<>16 or 32 or 64 or 128 or 256 or 512 or 1024 or 2048');
+    MapWidthMask := Image.Bitmap.Width - 1;
+    SetSize(Classes.Point(Image.Bitmap.Height + 1, Image.Bitmap.Height + 1));
+    TemplateCache.SetCacheKey(
+        MaskPath
+            + '?'
+            + IntToStr(Cardinal(Image.Bitmap.Width))
+            + ','
+            + IntToStr(Cardinal(Image.Bitmap.Height))
+    );
+    LightControl := TCPalBitmapControlEC.Create;
+    GlobalCache.ResetControl(LightControl);
+    LightControl.SetCacheKey(LightMapPath);
+    LightImage := AcquireOrCreatePalBitmap(LightControl);
+    try
+      if (Cardinal(Image.Bitmap.Height) > Cardinal(LightImage.Bitmap.Width))
+          or (Cardinal(Image.Bitmap.Height) > Cardinal(LightImage.Bitmap.Height)) then
+        raise Exception.Create('TPlanetGI.SetImage. Error: Size light map < planet.');
+      SourceLightBuffer :=
+          Ex_OKGR_LightBuf_Create(LightImage.Bitmap.Width, LightImage.Bitmap.Height);
+      Ex_OKGR_LightBuf_SetSme(
+          SourceLightBuffer,
+          LightImage.Bitmap.Width shr 1,
+          LightImage.Bitmap.Height shr 1
+      );
+      if SourceLightBuffer = nil then
+        raise Exception.Create('TPlanetGI.SetImage. Error create light buffer.');
+      RotatedLightBuffer :=
+          Ex_OKGR_LightBuf_Create(LightImage.Bitmap.Width, LightImage.Bitmap.Height);
+      Ex_OKGR_LightBuf_SetSme(
+          RotatedLightBuffer,
+          LightImage.Bitmap.Width shr 1,
+          LightImage.Bitmap.Height shr 1
+      );
+      if RotatedLightBuffer = nil then
+        raise Exception.Create('TPlanetGI.SetImage. Error create light buffer.');
+      Ex_OKGR_LightBuf_Init(SourceLightBuffer, 0);
+      Ex_OKGR_LightBuf_Init(RotatedLightBuffer, 0);
+      try
+        LightRotationCache.SetCacheKey(
+            IntToStr(Cardinal(LightImage.Bitmap.Width))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Width))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Width shr 1))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height shr 1))
+        );
+      except
+        raise Exception.Create('Error in TPlanetGI.SetImage');
+      end;
+      Ex_OKGR_LightBuf_LoadFromPalBuf(
+          SourceLightBuffer,
+          LightImage.Bitmap.Pixels,
+          LightImage.Bitmap.Width,
+          LightImage.Bitmap.Height,
+          LightImage.Bitmap.PitchBytes,
+          LightImage.Bitmap.Palette
+      );
+    finally
+      LightControl.Release;
+      LightControl.Free;
+    end;
+  finally
+    SurfaceImageCache.Release;
+  end;
+  LightAngle := 1;
+  SetLightAngle(0);
+end;
+
+procedure TPlanetGI.SetCloud1Image(const Path: WideString);
+var
+  Image: TCPalBitmapEC;
+begin
+  Cloud1ImageCache.SetCacheKey(Path);
+  Cloud1PaletteCache.SetCacheKey(Path);
+  Image := AcquireOrCreatePalBitmap(Cloud1ImageCache);
+  try
+    if (MapWidth <> Image.Bitmap.Width) or (MapHeight <> Image.Bitmap.Height) then
+      raise Exception.Create('Cloud size incorrect');
+  finally
+    Cloud1ImageCache.Release;
+  end;
+end;
+
+procedure TPlanetGI.SetCloud2Image(const Path: WideString);
+var
+  Image: TCPalBitmapEC;
+begin
+  Cloud2ImageCache.SetCacheKey(Path);
+  Cloud2PaletteCache.SetCacheKey(Path);
+  Image := AcquireOrCreatePalBitmap(Cloud2ImageCache);
+  try
+    if (MapWidth <> Image.Bitmap.Width) or (MapHeight <> Image.Bitmap.Height) then
+      raise Exception.Create('Cloud size incorrect');
+  finally
+    Cloud2ImageCache.Release;
+  end;
+end;
+
+procedure TPlanetGI.SetCloud3Image(const Path: WideString);
+var
+  Image: TCPalBitmapEC;
+begin
+  Cloud3ImageCache.SetCacheKey(Path);
+  Cloud3PaletteCache.SetCacheKey(Path);
+  Image := AcquireOrCreatePalBitmap(Cloud3ImageCache);
+  try
+    if (MapWidth <> Image.Bitmap.Width) or (MapHeight <> Image.Bitmap.Height) then
+      raise Exception.Create('Cloud size incorrect');
+  finally
+    Cloud3ImageCache.Release;
+  end;
+end;
+
+procedure TPlanetGI.SetImageWithRadius(
+    const MaskPath, ImagePath, LightMapPath: WideString;
+    Radius: Integer
+);
+var
+  Image: TCPalBitmapEC;
+  LightControl: TCPalBitmapControlEC;
+  LightImage: TCPalBitmapEC;
+begin
+  Invalidate;
+  if SourceLightBuffer <> nil then
+  begin
+    Ex_OKGR_LightBuf_Destroy(SourceLightBuffer);
+    SourceLightBuffer := nil;
+  end;
+  if RotatedLightBuffer <> nil then
+  begin
+    Ex_OKGR_LightBuf_Destroy(RotatedLightBuffer);
+    RotatedLightBuffer := nil;
+  end;
+  SurfaceImageCache.SetCacheKey(ImagePath);
+  SurfacePaletteCache.SetCacheKey(ImagePath);
+  Image := AcquireOrCreatePalBitmap(SurfaceImageCache);
+  try
+    MapWidth := Image.Bitmap.Width;
+    MapHeight := Image.Bitmap.Height;
+    if (Cardinal(Image.Bitmap.Width) shr 1) < Cardinal(Image.Bitmap.Height) then
+      raise Exception.Create('TPlanetGI.SetImage. Error create template planet. (LenX div 2)<LenY');
+    if (Image.Bitmap.Width <> 16)
+        and (Image.Bitmap.Width <> 32)
+        and (Image.Bitmap.Width <> 64)
+        and (Image.Bitmap.Width <> 128)
+        and (Image.Bitmap.Width <> 256)
+        and (Image.Bitmap.Width <> 512)
+        and (Image.Bitmap.Width <> 1024)
+        and (Image.Bitmap.Width <> 2048) then
+      raise Exception.Create(
+          'TPlanetGI.SetImage. Error create template planet. LenX<>16 or 32 or 64 or 128 or 256 or 512 or 1024 or 2048');
+    MapWidthMask := Image.Bitmap.Width - 1;
+    SetSize(Classes.Point(Radius * 2 + 1, Radius * 2 + 1));
+    TemplateCache.SetCacheKey(
+        MaskPath
+            + '?'
+            + IntToStr(Cardinal(Image.Bitmap.Width))
+            + ','
+            + IntToStr(Cardinal(Image.Bitmap.Height))
+    );
+    LightControl := TCPalBitmapControlEC.Create;
+    GlobalCache.ResetControl(LightControl);
+    LightControl.SetCacheKey(LightMapPath);
+    LightImage := AcquireOrCreatePalBitmap(LightControl);
+    try
+      SourceLightBuffer :=
+          Ex_OKGR_LightBuf_Create(LightImage.Bitmap.Width, LightImage.Bitmap.Height);
+      Ex_OKGR_LightBuf_SetSme(
+          SourceLightBuffer,
+          LightImage.Bitmap.Width shr 1,
+          LightImage.Bitmap.Height shr 1
+      );
+      if SourceLightBuffer = nil then
+        raise Exception.Create('TPlanetGI.SetImage. Error create light buffer.');
+      RotatedLightBuffer :=
+          Ex_OKGR_LightBuf_Create(LightImage.Bitmap.Width, LightImage.Bitmap.Height);
+      Ex_OKGR_LightBuf_SetSme(
+          RotatedLightBuffer,
+          LightImage.Bitmap.Width shr 1,
+          LightImage.Bitmap.Height shr 1
+      );
+      if RotatedLightBuffer = nil then
+        raise Exception.Create('TPlanetGI.SetImage. Error create light buffer.');
+      Ex_OKGR_LightBuf_Init(SourceLightBuffer, 0);
+      Ex_OKGR_LightBuf_Init(RotatedLightBuffer, 0);
+      try
+        LightRotationCache.SetCacheKey(
+            IntToStr(Cardinal(LightImage.Bitmap.Width))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Width))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Width shr 1))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height shr 1))
+        );
+      except
+        raise Exception.Create('Error in TPlanetGI.SetImageEx');
+      end;
+      Ex_OKGR_LightBuf_LoadFromPalBuf(
+          SourceLightBuffer,
+          LightImage.Bitmap.Pixels,
+          LightImage.Bitmap.Width,
+          LightImage.Bitmap.Height,
+          LightImage.Bitmap.PitchBytes,
+          LightImage.Bitmap.Palette
+      );
+    finally
+      LightControl.Release;
+      LightControl.Free;
+    end;
+  finally
+    SurfaceImageCache.Release;
+  end;
+  LightAngle := 1;
+  SetLightAngle(0);
+end;
+
+procedure TPlanetGI.SetImageFromTemplate(const TemplateKey, ImagePath: WideString; Radius: Integer);
+var
+  LightControl: TCPalBitmapControlEC;
+  LightImage: TCPalBitmapEC;
+begin
+  Invalidate;
+  if SurfaceImageCache.HasEmptyCacheKey then
+  begin
+    SurfaceImageCache.SetCacheKey(ImagePath);
+    SurfacePaletteCache.SetCacheKey(ImagePath);
+  end;
+  TemplateCache.SetCacheKey(TemplateKey);
+  SetSize(Classes.Point(Radius * 2, Radius * 2));
+  if SourceLightBuffer = nil then
+  begin
+    MapWidthMask := SatelliteTemplateParameter1 - 1;
+    LightControl := TCPalBitmapControlEC.Create;
+    GlobalCache.ResetControl(LightControl);
+    LightControl.SetCacheKey(SatelliteLightMapPath);
+    LightImage := AcquireOrCreatePalBitmap(LightControl);
+    try
+      SourceLightBuffer :=
+          Ex_OKGR_LightBuf_Create(LightImage.Bitmap.Width, LightImage.Bitmap.Height);
+      Ex_OKGR_LightBuf_SetSme(
+          SourceLightBuffer,
+          LightImage.Bitmap.Width shr 1,
+          LightImage.Bitmap.Height shr 1
+      );
+      if SourceLightBuffer = nil then
+        raise Exception.Create('TPlanetGI.SetImage. Error create light buffer.');
+      RotatedLightBuffer :=
+          Ex_OKGR_LightBuf_Create(LightImage.Bitmap.Width, LightImage.Bitmap.Height);
+      Ex_OKGR_LightBuf_SetSme(
+          RotatedLightBuffer,
+          LightImage.Bitmap.Width shr 1,
+          LightImage.Bitmap.Height shr 1
+      );
+      if RotatedLightBuffer = nil then
+        raise Exception.Create('TPlanetGI.SetImage. Error create light buffer.');
+      Ex_OKGR_LightBuf_Init(SourceLightBuffer, 0);
+      Ex_OKGR_LightBuf_Init(RotatedLightBuffer, 0);
+      try
+        LightRotationCache.SetCacheKey(
+            IntToStr(Cardinal(LightImage.Bitmap.Width))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Width))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Width shr 1))
+                + ','
+                + IntToStr(Cardinal(LightImage.Bitmap.Height shr 1))
+        );
+      except
+        raise Exception.Create('Error in TPlanetGI.SetImageSputnik');
+      end;
+      Ex_OKGR_LightBuf_LoadFromPalBuf(
+          SourceLightBuffer,
+          LightImage.Bitmap.Pixels,
+          LightImage.Bitmap.Width,
+          LightImage.Bitmap.Height,
+          LightImage.Bitmap.PitchBytes,
+          LightImage.Bitmap.Palette
+      );
+    finally
+      LightControl.Release;
+      LightControl.Free;
+    end;
+    LightAngle := 1;
+    SetLightAngle(0);
+  end;
+end;
+
+procedure TPlanetGI.SetAtmosphere(ImagePath, MaskPath: WideString; Color: Cardinal);
+var
+  Image, Mask: TCBitmapEC;
+begin
+  AtmosphereColor := Color;
+  AtmosphereImageCache.SetCacheKey(ImagePath + '?Gray');
+  AtmosphereMaskCache.SetCacheKey(MaskPath + '?Gray');
+  Image := nil;
+  Mask := nil;
+  try
+    Image := AcquireOrCreateBitmap(AtmosphereImageCache);
+    Mask := AcquireOrCreateBitmap(AtmosphereMaskCache);
+    AtmosphereRotationCache.SetCacheKey(
+        IntToStr(Cardinal(Mask.Bitmap.Width))
+            + ','
+            + IntToStr(Cardinal(Mask.Bitmap.Height))
+            + ','
+            + IntToStr(Cardinal(Mask.Bitmap.Width))
+            + ','
+            + IntToStr(Cardinal(Mask.Bitmap.Height))
+            + ','
+            + IntToStr(Cardinal(Mask.Bitmap.Width shr 1))
+            + ','
+            + IntToStr(Cardinal(Mask.Bitmap.Height shr 1))
+    );
+    SetSize(Classes.Point(Image.Bitmap.Width, Image.Bitmap.Height));
+    AtmosphereDirty := True;
+    AtmospherePaletteDirty := True;
+  finally
+    if Image <> nil then
+      AtmosphereImageCache.Release;
+    if Mask <> nil then
+      AtmosphereMaskCache.Release;
+  end;
+end;
+
+procedure TPlanetGI.BuildAtmospherePalette;
+var
+  Index: Integer;
+  Color: PColorRGBA;
+begin
+  Color := AtmosphereBuffer.Palette;
+  for Index := 0 to 255 do
+  begin
+    Color.R := (AtmosphereColor and $FF) and $F8;
+    Color.G := ((AtmosphereColor shr 8) and $FF) and $F8;
+    Color.B := ((AtmosphereColor shr 16) and $FF) and $F8;
+    Color.A := Index and $F8;
+    Color := PColorRGBA(PAnsiChar(Color) + SizeOf(TColorRGBA));
+  end;
+end;
+
+procedure TPlanetGI.RebuildAtmosphereImage;
+var
+  ImagePixels, MaskPixels, DestPixels: Pointer;
+  Width: Integer;
+  MulTable: Pointer;
+  ImageSkip, MaskSkip, DestSkip, Height, Column: Integer;
+  Image, Mask: TCBitmapEC;
+  RotatedMask: TGraphBufGR;
+  Rotation: TCRotateBufEC;
+begin
+  Image := nil;
+  Mask := nil;
+  Rotation := nil;
+  RotatedMask := nil;
+  try
+    Image := AcquireOrCreateBitmap(AtmosphereImageCache);
+    Mask := AcquireOrCreateBitmap(AtmosphereMaskCache);
+    Rotation := AcquireOrCreateRotateBuf(AtmosphereRotationCache);
+    RotatedMask := TGraphBufGR.Create(False);
+    if (AtmosphereBuffer.Width <> Image.Bitmap.Width)
+        or (AtmosphereBuffer.Height <> Image.Bitmap.Height) then
+    begin
+      AtmosphereBuffer.AllocateTight(Image.Bitmap.Width, Image.Bitmap.Height, 256);
+      AtmospherePaletteDirty := True;
+    end;
+    if AtmospherePaletteDirty then
+    begin
+      AtmospherePaletteDirty := False;
+      BuildAtmospherePalette;
+    end;
+    RotatedMask.AllocateGrayscale(
+        Mask.Bitmap.Width + (Mask.Bitmap.Width shr 1),
+        Mask.Bitmap.Height + (Mask.Bitmap.Height shr 1)
+    );
+    RotatedMask.ClearPixels;
+    Ex_OKGR_RotateBuf_Draw_BYTE(
+        RotatedMask.GetPixels,
+        RotatedMask.PitchBytes,
+        Mask.Bitmap.GetPixels,
+        Mask.Bitmap.PitchBytes,
+        RotatedMask.Width shr 1,
+        RotatedMask.Height shr 1,
+        LightAngle,
+        Rotation.Buffer
+    );
+    Width := Image.Bitmap.Width;
+    Height := Image.Bitmap.Height;
+    ImagePixels := Image.Bitmap.GetPixels;
+    MaskPixels :=
+        Pointer(
+            PAnsiChar(RotatedMask.GetPixels)
+                + ((RotatedMask.Width shr 1) - (Width shr 1))
+                + ((RotatedMask.Height shr 1) - (Height shr 1)) * RotatedMask.PitchBytes
+        );
+    DestPixels := AtmosphereBuffer.Pixels;
+    ImageSkip := Image.Bitmap.PitchBytes - Width;
+    MaskSkip := RotatedMask.PitchBytes - Width;
+    DestSkip := AtmosphereBuffer.PitchBytes - Width;
+    MulTable := Ex_OKGF_MulTable256x256;
+    // Portable form of the recovered byte multiplication loop.
+    while Height > 0 do
+    begin
+      for Column := 0 to Width - 1 do
+      begin
+        PByte(DestPixels)^ :=
+            PByte(MulTable)[Integer(PByte(MaskPixels)^) * 256 + PByte(ImagePixels)^];
+        Inc(PByte(ImagePixels));
+        Inc(PByte(MaskPixels));
+        Inc(PByte(DestPixels));
+      end;
+      Inc(PByte(ImagePixels), ImageSkip);
+      Inc(PByte(MaskPixels), MaskSkip);
+      Inc(PByte(DestPixels), DestSkip);
+      Dec(Height);
+    end;
+  finally
+    if Image <> nil then
+      AtmosphereImageCache.Release;
+    if Mask <> nil then
+      AtmosphereMaskCache.Release;
+    if Rotation <> nil then
+      AtmosphereRotationCache.Release;
+    if RotatedMask <> nil then
+      RotatedMask.Free;
+  end;
+end;
+
+procedure TPlanetGI.SetSurfaceMapOffset(Value: Integer);
+begin
+  if SurfaceMapOffset <> Value then
+  begin
+    SurfaceMapOffset := Value;
+    Invalidate;
+  end;
+end;
+
+procedure TPlanetGI.SetCloud1MapOffset(Value: Integer);
+begin
+  if Cloud1MapOffset <> Value then
+  begin
+    Cloud1MapOffset := Value;
+    Invalidate;
+  end;
+end;
+
+procedure TPlanetGI.SetCloud2MapOffset(Value: Integer);
+begin
+  if Cloud2MapOffset <> Value then
+  begin
+    Cloud2MapOffset := Value;
+    Invalidate;
+  end;
+end;
+
+procedure TPlanetGI.SetCloud3MapOffset(Value: Integer);
+begin
+  if Cloud3MapOffset <> Value then
+  begin
+    Cloud3MapOffset := Value;
+    Invalidate;
+  end;
+end;
+
+procedure TPlanetGI.SetLightAngle(Value: Byte);
+var
+  Rotation: TCRotateBufEC;
+begin
+  if LightAngle <> Value then
+  begin
+    LightAngle := Value;
+    Ex_OKGR_LightBuf_Init(RotatedLightBuffer, 0);
+    Rotation := AcquireOrCreateRotateBuf(LightRotationCache);
+    try
+      Ex_OKGR_LightBuf_Rotate(RotatedLightBuffer, SourceLightBuffer, Rotation.Buffer, LightAngle);
+    finally
+      LightRotationCache.Release;
+    end;
+    AtmosphereDirty := True;
+    Invalidate;
+  end;
+end;
+
+procedure TPlanetGI.LoadFromConfigPath(const Path: WideString);
+var
+  Block: TBlockParEC;
+begin
+  inherited LoadFromConfigPath(Path);
+  Block := UiStyleConfig.GetBlockByPath(Path);
+  if (Block.CountParams('Mask') > 0)
+      or (Block.CountParams('Image') > 0)
+      or (Block.CountParams('ImageLight') > 0) then
+    SetImage(Block.GetParam('Mask'), Block.GetParam('Image'), Block.GetParam('ImageLight'));
+  if Block.CountParams('SmeMap') > 0 then
+    SurfaceMapOffset := StrToInt(Block.GetParam('SmeMap'));
+  if Block.CountParams('AngleLight') > 0 then
+    LightAngle := StrToInt(Block.GetParam('AngleLight'));
+end;
+
+procedure TPlanetGI.LoadFromBlock(Block: TBlockParEC);
+begin
+  inherited LoadFromBlock(Block);
+  SetImage(Block.GetParam('Mask'), Block.GetParam('Image'), Block.GetParam('ImageLight'));
+  if Block.CountParams('SmeMap') > 0 then
+    SurfaceMapOffset := StrToInt(Block.GetParam('SmeMap'));
+  if Block.CountParams('AngleLight') > 0 then
+    LightAngle := StrToInt(Block.GetParam('AngleLight'));
+end;
+
+procedure TPlanetGI.Draw(ClipRect: TRect);
+var
+  Image, Cloud1, Cloud2, Cloud3: TCPalBitmapEC;
+  Palette, CloudPalette1, CloudPalette2, CloudPalette3: TCLightPalEC;
+  Template: TCPlanetTemplEC;
+  HasCloud1, HasCloud2, HasCloud3: Boolean;
+  Locked: TD3DLockedRect;
+  Index: Integer;
+  Texture: IDirect3DTexture9;
+  // Native frame retains eight unused bytes; their original types are unknown.
+  UnusedLocals: array[0..7] of Byte;
+begin
+  HasCloud1 := Cloud1ImageCache.CacheKey <> '';
+  HasCloud2 := Cloud2ImageCache.CacheKey <> '';
+  HasCloud3 := Cloud3ImageCache.CacheKey <> '';
+  Image := nil;
+  Palette := nil;
+  Template := nil;
+  Cloud1 := nil;
+  CloudPalette1 := nil;
+  Cloud2 := nil;
+  CloudPalette2 := nil;
+  Cloud3 := nil;
+  CloudPalette3 := nil;
+  try
+    Template := AcquireOrCreatePlanetTemplate(TemplateCache);
+    Image := AcquireOrCreatePalBitmap(SurfaceImageCache);
+    Palette := AcquireOrCreateLightPalette(SurfacePaletteCache);
+    if HasCloud1 then
+    begin
+      Cloud1 := AcquireOrCreatePalBitmap(Cloud1ImageCache);
+      CloudPalette1 := AcquireOrCreateLightPalette(Cloud1PaletteCache);
+    end;
+    if HasCloud2 then
+    begin
+      Cloud2 := AcquireOrCreatePalBitmap(Cloud2ImageCache);
+      CloudPalette2 := AcquireOrCreateLightPalette(Cloud2PaletteCache);
+    end;
+    if HasCloud3 then
+    begin
+      Cloud3 := AcquireOrCreatePalBitmap(Cloud3ImageCache);
+      CloudPalette3 := AcquireOrCreateLightPalette(Cloud3PaletteCache);
+    end;
+    if HardwareRenderingEnabled then
+    begin
+      if TextureCache = nil then
+        TextureCache := CreateTextureCache;
+      if ((HitTestBounds.Right - HitTestBounds.Left) <> TextureSize.X)
+          or ((HitTestBounds.Bottom - HitTestBounds.Top) <> TextureSize.Y) then
+      begin
+        RenderedMapOffsets[0] := $FFFFFF;
+        RenderedMapOffsets[1] := RenderedMapOffsets[0];
+        RenderedMapOffsets[2] := RenderedMapOffsets[0];
+        RenderedMapOffsets[3] := RenderedMapOffsets[0];
+        for Index := 0 to 3 do
+          TextureCache.SetSurface(nil, Index);
+      end;
+      TextureSize :=
+          Classes.Point(
+              HitTestBounds.Right - HitTestBounds.Left,
+              HitTestBounds.Bottom - HitTestBounds.Top
+          );
+      Texture := TextureCache.GetSurface(0);
+      if (SurfaceMapOffset <> RenderedMapOffsets[0]) or (Texture = nil) then
+      begin
+        RenderedMapOffsets[0] := SurfaceMapOffset;
+        if Texture = nil then
+          Texture :=
+              GR_CreateTexture(TextureSize.X, TextureSize.Y, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED);
+        Texture.LockRect(0, Locked, nil, 0);
+        if Locked.Bits <> nil then
+        begin
+          if Image.Bitmap.BytesPerPixel = 2 then
+            Ex_OKGR_Planet3_DrawAndLight_32(
+                Locked.Bits,
+                Locked.Pitch,
+                Template.TemplateData,
+                Image.Bitmap.Pixels,
+                Image.Bitmap.PitchBytes,
+                MapWidthMask,
+                SurfaceMapOffset,
+                RotatedLightBuffer,
+                Palette.PaletteData,
+                TextureSize.X div 2,
+                TextureSize.Y div 2
+            )
+          else
+            Ex_OKGR_Planet2_DrawAndLight_32(
+                Locked.Bits,
+                Locked.Pitch,
+                Template.TemplateData,
+                Image.Bitmap.Pixels,
+                Image.Bitmap.PitchBytes,
+                MapWidthMask,
+                SurfaceMapOffset,
+                RotatedLightBuffer,
+                Palette.PaletteData,
+                TextureSize.X div 2,
+                TextureSize.Y div 2
+            );
+          Texture.UnlockRect(0);
+          TextureCache.SetSurface(Texture, 0);
+        end;
+      end;
+      DrawTexture(
+          Texture,
+          HitTestBounds.Left,
+          HitTestBounds.Top,
+          255,
+          $FFFFFF,
+          @ClipRect,
+          False,
+          False
+      );
+      if HasCloud1 then
+      begin
+        Texture := TextureCache.GetSurface(1);
+        if Cloud1MapOffset <> RenderedMapOffsets[1] then
+        begin
+          RenderedMapOffsets[1] := Cloud1MapOffset;
+          if Texture = nil then
+            Texture :=
+                GR_CreateTexture(TextureSize.X, TextureSize.Y, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED);
+          Texture.LockRect(0, Locked, nil, 0);
+          if Locked.Bits <> nil then
+            Ex_OKGR_Planet4_DrawAndLight_32(
+                Locked.Bits,
+                Locked.Pitch,
+                Template.TemplateData,
+                Cloud1.Bitmap.Pixels,
+                Cloud1.Bitmap.PitchBytes,
+                MapWidthMask,
+                Cloud1MapOffset,
+                RotatedLightBuffer,
+                CloudPalette1.PaletteData,
+                TextureSize.X div 2,
+                TextureSize.Y div 2
+            );
+          Texture.UnlockRect(0);
+          TextureCache.SetSurface(Texture, 1);
+        end;
+        DrawTexture(
+            Texture,
+            HitTestBounds.Left,
+            HitTestBounds.Top,
+            255,
+            $FFFFFF,
+            @ClipRect,
+            False,
+            False
+        );
+      end
+      else
+        TextureCache.SetSurface(nil, 1);
+      if HasCloud2 then
+      begin
+        Texture := TextureCache.GetSurface(2);
+        if Cloud2MapOffset <> RenderedMapOffsets[2] then
+        begin
+          RenderedMapOffsets[2] := Cloud2MapOffset;
+          if Texture = nil then
+            Texture :=
+                GR_CreateTexture(TextureSize.X, TextureSize.Y, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED);
+          Texture.LockRect(0, Locked, nil, 0);
+          if Locked.Bits <> nil then
+            Ex_OKGR_Planet4_DrawAndLight_32(
+                Locked.Bits,
+                Locked.Pitch,
+                Template.TemplateData,
+                Cloud2.Bitmap.Pixels,
+                Cloud2.Bitmap.PitchBytes,
+                MapWidthMask,
+                Cloud2MapOffset,
+                RotatedLightBuffer,
+                CloudPalette2.PaletteData,
+                TextureSize.X div 2,
+                TextureSize.Y div 2
+            );
+          Texture.UnlockRect(0);
+          TextureCache.SetSurface(Texture, 2);
+        end;
+        DrawTexture(
+            Texture,
+            HitTestBounds.Left,
+            HitTestBounds.Top,
+            255,
+            $FFFFFF,
+            @ClipRect,
+            False,
+            False
+        );
+      end
+      else
+        TextureCache.SetSurface(nil, 2);
+      if HasCloud3 then
+      begin
+        Texture := TextureCache.GetSurface(3);
+        if Cloud3MapOffset <> RenderedMapOffsets[3] then
+        begin
+          RenderedMapOffsets[3] := Cloud3MapOffset;
+          if Texture = nil then
+            Texture :=
+                GR_CreateTexture(TextureSize.X, TextureSize.Y, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED);
+          Texture.LockRect(0, Locked, nil, 0);
+          if Locked.Bits <> nil then
+            Ex_OKGR_Planet4_DrawAndLight_32(
+                Locked.Bits,
+                Locked.Pitch,
+                Template.TemplateData,
+                Cloud3.Bitmap.Pixels,
+                Cloud3.Bitmap.PitchBytes,
+                MapWidthMask,
+                Cloud3MapOffset,
+                RotatedLightBuffer,
+                CloudPalette3.PaletteData,
+                TextureSize.X div 2,
+                TextureSize.Y div 2
+            );
+          Texture.UnlockRect(0);
+          TextureCache.SetSurface(Texture, 3);
+        end;
+        DrawTexture(
+            Texture,
+            HitTestBounds.Left,
+            HitTestBounds.Top,
+            255,
+            $FFFFFF,
+            @ClipRect,
+            False,
+            False
+        );
+      end
+      else
+        TextureCache.SetSurface(nil, 3);
+      if not AtmosphereImageCache.HasEmptyCacheKey
+          and AtmosphereDirty
+          and (AtmosphereColor <> 0) then
+      begin
+        AtmosphereDirty := False;
+        RebuildAtmosphereImage;
+        AtmosphereTextureSize := Classes.Point(AtmosphereBuffer.Width, AtmosphereBuffer.Height);
+        Texture :=
+            GR_CreateTexture(
+                AtmosphereTextureSize.X,
+                AtmosphereTextureSize.Y,
+                D3DFMT_A8R8G8B8,
+                D3DPOOL_MANAGED
+            );
+        if Texture <> nil then
+        begin
+          Texture.LockRect(0, Locked, nil, 0);
+          if Locked.Bits <> nil then
+            ExpandPaletteToBgra(
+                Locked.Bits,
+                Locked.Pitch,
+                AtmosphereTextureSize.X,
+                AtmosphereTextureSize.Y,
+                AtmosphereBuffer.Pixels,
+                AtmosphereBuffer.PitchBytes,
+                AtmosphereBuffer.Palette
+            );
+          Texture.UnlockRect(0);
+          TextureCache.SetSurface(Texture, 4);
+        end;
+      end;
+      Texture := TextureCache.GetSurface(4);
+      if not AtmosphereImageCache.HasEmptyCacheKey
+          and (Texture <> nil)
+          and (AtmosphereColor <> 0) then
+        DrawTexture(
+            Texture,
+            HitTestBounds.Left,
+            HitTestBounds.Top,
+            255,
+            $FFFFFF,
+            @ClipRect,
+            False,
+            False
+        );
+    end
+    else
+    begin
+      if Image.Bitmap.BytesPerPixel = 2 then
+        Ex_OKGR_Planet3_DrawAndLightClip_16(
+            ScreenRenderBuffer.GetPixels,
+            ScreenRenderBuffer.PitchBytes,
+            Template.TemplateData,
+            Image.Bitmap.Pixels,
+            Image.Bitmap.PitchBytes,
+            MapWidthMask,
+            SurfaceMapOffset,
+            RotatedLightBuffer,
+            Palette.PaletteData,
+            HitTestBounds.Left + (HitTestBounds.Right - HitTestBounds.Left) div 2,
+            HitTestBounds.Top + (HitTestBounds.Bottom - HitTestBounds.Top) div 2,
+            ClipRect
+        )
+      else
+        Ex_OKGR_Planet2_DrawAndLightClip_16(
+            ScreenRenderBuffer.GetPixels,
+            ScreenRenderBuffer.PitchBytes,
+            Template.TemplateData,
+            Image.Bitmap.Pixels,
+            Image.Bitmap.PitchBytes,
+            MapWidthMask,
+            SurfaceMapOffset,
+            RotatedLightBuffer,
+            Palette.PaletteData,
+            HitTestBounds.Left + (HitTestBounds.Right - HitTestBounds.Left) div 2,
+            HitTestBounds.Top + (HitTestBounds.Bottom - HitTestBounds.Top) div 2,
+            ClipRect
+        );
+      if HasCloud1 then
+        Ex_OKGR_Planet4_DrawAndLightClip_16(
+            ScreenRenderBuffer.GetPixels,
+            ScreenRenderBuffer.PitchBytes,
+            Template.TemplateData,
+            Cloud1.Bitmap.Pixels,
+            Cloud1.Bitmap.PitchBytes,
+            MapWidthMask,
+            Cloud1MapOffset,
+            RotatedLightBuffer,
+            CloudPalette1.PaletteData,
+            HitTestBounds.Left + (HitTestBounds.Right - HitTestBounds.Left) div 2,
+            HitTestBounds.Top + (HitTestBounds.Bottom - HitTestBounds.Top) div 2,
+            ClipRect
+        );
+      if HasCloud2 then
+        Ex_OKGR_Planet4_DrawAndLightClip_16(
+            ScreenRenderBuffer.GetPixels,
+            ScreenRenderBuffer.PitchBytes,
+            Template.TemplateData,
+            Cloud2.Bitmap.Pixels,
+            Cloud2.Bitmap.PitchBytes,
+            MapWidthMask,
+            Cloud2MapOffset,
+            RotatedLightBuffer,
+            CloudPalette2.PaletteData,
+            HitTestBounds.Left + (HitTestBounds.Right - HitTestBounds.Left) div 2,
+            HitTestBounds.Top + (HitTestBounds.Bottom - HitTestBounds.Top) div 2,
+            ClipRect
+        );
+      if HasCloud3 then
+        Ex_OKGR_Planet4_DrawAndLightClip_16(
+            ScreenRenderBuffer.GetPixels,
+            ScreenRenderBuffer.PitchBytes,
+            Template.TemplateData,
+            Cloud3.Bitmap.Pixels,
+            Cloud3.Bitmap.PitchBytes,
+            MapWidthMask,
+            Cloud3MapOffset,
+            RotatedLightBuffer,
+            CloudPalette3.PaletteData,
+            HitTestBounds.Left + (HitTestBounds.Right - HitTestBounds.Left) div 2,
+            HitTestBounds.Top + (HitTestBounds.Bottom - HitTestBounds.Top) div 2,
+            ClipRect
+        );
+      if not AtmosphereImageCache.HasEmptyCacheKey
+          and AtmosphereDirty
+          and (AtmosphereColor <> 0) then
+      begin
+        AtmosphereDirty := False;
+        RebuildAtmosphereImage;
+      end;
+      if not AtmosphereImageCache.HasEmptyCacheKey
+          and (AtmosphereBuffer.Pixels <> nil)
+          and (AtmosphereColor <> 0) then
+        BlendPaletteBuffer16Clipped(
+            ScreenRenderBuffer.GetPixels,
+            ScreenRenderBuffer.PitchBytes,
+            HitTestBounds.Left
+                + (HitTestBounds.Right - HitTestBounds.Left) div 2
+                - (AtmosphereBuffer.Width shr 1),
+            HitTestBounds.Top
+                + (HitTestBounds.Bottom - HitTestBounds.Top) div 2
+                - (AtmosphereBuffer.Height shr 1),
+            AtmosphereBuffer,
+            ClipRect
+        );
+    end;
+  finally
+    if Template <> nil then
+      TemplateCache.Release;
+    if Image <> nil then
+      SurfaceImageCache.Release;
+    if Palette <> nil then
+      SurfacePaletteCache.Release;
+    if Cloud1 <> nil then
+      Cloud1ImageCache.Release;
+    if CloudPalette1 <> nil then
+      Cloud1PaletteCache.Release;
+    if Cloud2 <> nil then
+      Cloud2ImageCache.Release;
+    if CloudPalette2 <> nil then
+      Cloud2PaletteCache.Release;
+    { Native code omits the third cloud layer's two releases. }
+  end;
+end;
+
+procedure TPlanetGI.RenderSurfaceToBuffer(Buffer: TGraphBufGR);
+var
+  Image: TCPalBitmapEC;
+  Palette: TCLightPalEC;
+  Template: TCPlanetTemplEC;
+begin
+  Image := nil;
+  Palette := nil;
+  Template := nil;
+  try
+    Template := AcquireOrCreatePlanetTemplate(TemplateCache);
+    Image := AcquireOrCreatePalBitmap(SurfaceImageCache);
+    Palette := AcquireOrCreateLightPalette(SurfacePaletteCache);
+    Buffer.AllocateRgbaTight(Template.ImageHeight + 4, Template.ImageHeight + 4);
+    Buffer.ClearPixels;
+    if Image.Bitmap.BytesPerPixel = 2 then
+      Ex_OKGR_Planet3_DrawAndLight_32(
+          Buffer.GetPixels,
+          Buffer.PitchBytes,
+          Template.TemplateData,
+          Image.Bitmap.Pixels,
+          Image.Bitmap.PitchBytes,
+          MapWidthMask,
+          SurfaceMapOffset,
+          RotatedLightBuffer,
+          Palette.PaletteData,
+          Buffer.Width shr 1,
+          Buffer.Height shr 1
+      )
+    else
+      Ex_OKGR_Planet2_DrawAndLight_32(
+          Buffer.GetPixels,
+          Buffer.PitchBytes,
+          Template.TemplateData,
+          Image.Bitmap.Pixels,
+          Image.Bitmap.PitchBytes,
+          MapWidthMask,
+          SurfaceMapOffset,
+          RotatedLightBuffer,
+          Palette.PaletteData,
+          Buffer.Width shr 1,
+          Buffer.Height shr 1
+      );
+  finally
+    if Template <> nil then
+      TemplateCache.Release;
+    if Image <> nil then
+      SurfaceImageCache.Release;
+    if Palette <> nil then
+      SurfacePaletteCache.Release;
+  end;
+end;
+
+procedure TPlanetGI.QueueImageLoad(PendingLoads: TList);
+begin
+  TemplateCache.QueueLoadIfMissing(PendingLoads);
+  SurfaceImageCache.QueueLoadIfMissing(PendingLoads);
+  SurfacePaletteCache.QueueLoadIfMissing(PendingLoads);
+  LightRotationCache.QueueLoadIfMissing(PendingLoads);
+end;
+
+end.

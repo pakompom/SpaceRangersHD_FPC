@@ -1,0 +1,244 @@
+{$EXCESSPRECISION OFF}
+unit GI_PDTurretWeapon;
+{$R-}
+{$Q-}
+{$B-}
+{$A8}
+interface
+uses
+  EC_Struct,
+  GI_MessageLoop,
+  GI_PSWeapon,
+  Types;
+type
+  TPSPDWeaponGI = class;
+  PointerToTPDWeaponParticle = ^TPDWeaponParticle;
+  PPDWeaponParticle = PointerToTPDWeaponParticle;
+  TPDWeaponParticle = record
+    Kind: Integer;
+    Position: TPointF;
+    Color: Word;
+    Alpha: Byte;
+    GapF: array[0..0] of Byte;
+    Velocity: TPointF;
+    Gap18: array[0..1] of Byte;
+    Unknown1A: Byte;
+    Gap1B: array[0..0] of Byte;
+  end;
+  TPSPDWeaponGI = class(TPSWeaponGI)
+    Particles: PPDWeaponParticle;
+    ParticleCount: Integer;
+    ParticleCapacity: Integer;
+    OriginalLength: Single;
+    ParticleColor: Word;
+    Gap142: array[0..1] of Byte;
+    procedure UpdateHitTestBounds; override;
+    procedure SetPosition(Position: TPoint); override;
+    procedure SetActive(Enabled: Boolean); override;
+    procedure Invalidate; override;
+    procedure Draw(ClipRect: TRect); override;
+    procedure SetTargetPoint(Point: TPoint); override;
+    procedure Advance(Timer: PCallbackTimerGI; UserData: PtrInt); override;
+    constructor Create(Owner: TObjectGI);
+    destructor Destroy; override;
+    procedure ClearParticles;
+    procedure GrowParticles;
+    function AddParticle: PPDWeaponParticle;
+  end;
+implementation
+uses
+  GlobalsV,
+  Math,
+  EC_Mem,
+  GR_Main,
+  GR_DX;
+
+constructor TPSPDWeaponGI.Create(Owner: TObjectGI);
+begin
+  inherited Create(Owner);
+  RemainingTicks := 25;
+  LifetimeTicks := 25;
+  ParticleColor := CurrentPixelFormat.PackNormalizedRgb(1.0, 0.6, 0.6);
+end;
+
+destructor TPSPDWeaponGI.Destroy;
+begin
+  ClearParticles;
+  inherited Destroy;
+end;
+
+procedure TPSPDWeaponGI.Invalidate;
+begin
+end;
+
+procedure TPSPDWeaponGI.SetPosition(Position: TPoint);
+begin
+  if (LocalPosition.X <> Position.X) or (LocalPosition.Y <> Position.Y) then
+    inherited SetPosition(Position);
+end;
+
+procedure TPSPDWeaponGI.SetTargetPoint(Point: TPoint);
+begin
+  if (TargetPoint.X <> Point.X) or (TargetPoint.Y <> Point.Y) then
+    TargetPoint := Point;
+end;
+
+procedure TPSPDWeaponGI.UpdateHitTestBounds;
+begin
+  HitTestBounds.Left := 0;
+  HitTestBounds.Top := 0;
+  HitTestBounds.Right := GameScreenWidth;
+  HitTestBounds.Bottom := GameScreenHeight;
+end;
+
+procedure TPSPDWeaponGI.SetActive(Enabled: Boolean);
+begin
+  inherited SetActive(Enabled);
+end;
+
+procedure TPSPDWeaponGI.ClearParticles;
+begin
+  if Particles <> nil then
+  begin
+    FreeEC(Particles);
+    Particles := nil;
+  end;
+  ParticleCount := 0;
+  ParticleCapacity := 0;
+end;
+
+procedure TPSPDWeaponGI.GrowParticles;
+begin
+  Inc(ParticleCapacity, 100);
+  Particles := ReAllocREC(Particles, ParticleCapacity * SizeOf(TPDWeaponParticle));
+end;
+
+function TPSPDWeaponGI.AddParticle: PPDWeaponParticle;
+begin
+  if ParticleCount >= ParticleCapacity then
+    GrowParticles;
+  Result := AddPointerOffset(Particles, ParticleCount * SizeOf(TPDWeaponParticle));
+  Inc(ParticleCount);
+end;
+
+procedure TPSPDWeaponGI.Advance(Timer: PCallbackTimerGI; UserData: PtrInt);
+var
+  Particle: PPDWeaponParticle;
+  I, J, K: Integer;
+  Speed: Single;
+begin
+  if RemainingTicks = 25 then
+  begin
+    OriginalLength :=
+        Sqrt(Sqr(LocalPosition.X - TargetPoint.X) + Sqr(LocalPosition.Y - TargetPoint.Y));
+    Speed := (OriginalLength + 288.0) / 25.0;
+    for I := 0 to 7 do
+      for J := 0 to 1 do
+        for K := 0 to 5 do
+        begin
+          Particle := AddParticle;
+          Particle.Kind := 2;
+          Particle.Position.X := J * 6 - 3;
+          Particle.Position.Y := I * 36 - 288 + K;
+          Particle.Color := ParticleColor;
+          Particle.Alpha := 0;
+          Particle.Velocity.X := 0;
+          Particle.Velocity.Y := Speed;
+          Particle.Unknown1A := 0;
+          Particle := AddParticle;
+          Particle.Kind := 2;
+          Particle.Position.X := J * 8 - 4;
+          Particle.Position.Y := I * 36 - 288 + K;
+          Particle.Color := ParticleColor;
+          Particle.Alpha := 0;
+          Particle.Velocity.X := 0;
+          Particle.Velocity.Y := Speed;
+          Particle.Unknown1A := 0;
+        end;
+  end;
+  K := 0;
+  Particle := Particles;
+  I := ParticleCount;
+  UpdateHitTestBounds;
+  while I > 0 do
+  begin
+    if Particle.Kind = 2 then
+    begin
+      Particle.Position.X := Particle.Position.X + Particle.Velocity.X;
+      Particle.Position.Y := Particle.Position.Y + Particle.Velocity.Y;
+      if Particle.Position.Y >= OriginalLength then
+        Particle.Kind := 0;
+      if Particle.Position.Y > 0 then
+      begin
+        if Particle.Alpha < 219 then
+          Inc(Particle.Alpha, 36)
+        else
+          Particle.Alpha := 255;
+      end;
+    end;
+    Inc(K);
+    Particle := AddPointerOffset(Particles, K * SizeOf(TPDWeaponParticle));
+    Dec(I);
+  end;
+  if RemainingTicks > 0 then
+    Dec(RemainingTicks);
+end;
+
+procedure TPSPDWeaponGI.Draw(ClipRect: TRect);
+var
+  X, Y: Integer;
+  PX, PY, Sine, Cosine, Angle, Scale: Single;
+  Particle: PPDWeaponParticle;
+  Count: Integer;
+begin
+  Scale :=
+      Sqrt(Sqr(LocalPosition.X - TargetPoint.X) + Sqr(LocalPosition.Y - TargetPoint.Y))
+          / OriginalLength;
+  PY := -(TargetPoint.Y - LocalPosition.Y);
+  if PY = 0 then
+    PY := 1;
+  Angle := ArcTan2(TargetPoint.X - LocalPosition.X, PY);
+  Sine := Sin(Angle);
+  Cosine := Cos(Angle);
+  Particle := Particles;
+  Count := ParticleCount;
+  if HardwareRenderingEnabled then
+  begin
+    while Count > 0 do
+    begin
+      if Particle.Kind >= 2 then
+      begin
+        PX := Particle.Position.X;
+        PY := Particle.Position.Y * Scale;
+        X := Trunc(PX * Cosine + PY * Sine) + AbsolutePosition.X;
+        Y := Trunc(PX * Sine - PY * Cosine) + AbsolutePosition.Y;
+        QueueDrawPoint(X, Y, Color565ToArgb(Particle.Color), Particle.Alpha);
+      end;
+      Particle := AddPointerOffset(Particle, SizeOf(TPDWeaponParticle));
+      Dec(Count);
+    end;
+    FlushDrawPoints(@ClipRect);
+  end
+  else
+  begin
+    while Count > 0 do
+    begin
+      if Particle.Kind >= 2 then
+      begin
+        PX := Particle.Position.X;
+        PY := Particle.Position.Y * Scale;
+        X := Trunc(PX * Cosine + PY * Sine) + AbsolutePosition.X;
+        Y := Trunc(PX * Sine - PY * Cosine) + AbsolutePosition.Y;
+        if (X >= ClipRect.Left)
+            and (X < ClipRect.Right)
+            and (Y >= ClipRect.Top)
+            and (Y < ClipRect.Bottom) then
+          ScreenRenderBuffer.BlendPixel16(X, Y, Particle.Color, Particle.Alpha);
+      end;
+      Particle := AddPointerOffset(Particle, SizeOf(TPDWeaponParticle));
+      Dec(Count);
+    end;
+  end;
+end;
+
+end.

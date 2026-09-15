@@ -1,0 +1,4 @@
+wrap_column = 100
+begin_style = "always_wrap"
+line_ending = "lf"
+encoding = "utf-8"
