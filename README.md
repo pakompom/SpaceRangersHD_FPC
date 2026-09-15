@@ -4,6 +4,8 @@ A personal, opinionated Free Pascal port of **Space Rangers HD: A War Apart**,
 based on the [original decompilation](https://github.com/pakompom/SpaceRangersHD_decomp).
 Breaking changes can happen at any time.
 
+https://github.com/user-attachments/assets/724f0543-1cb1-4b46-bb47-95ab45cbdfee
+
 This port is developed exclusively with LLMs such as GPT-6 Astra through Codex.
 
 - [Additions and behavior changes](ADDITIONS.md)
