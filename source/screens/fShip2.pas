@@ -9530,7 +9530,8 @@ var
   procedure AddLine(
       Icon: Integer;
       Text, Hint: WideString;
-      Data: Integer
+      // Custom rows pass PCustomShipInfo here; the hover callback dereferences it.
+      Data: PtrInt
   ); // @addr $70FCD4 @ida "void __userpurge $name(int Icon@<eax>, unsigned __int16 *Text@<edx>, unsigned __int16 *Hint@<ecx>, int Data@<^0>, void *ParentFrame@<^4>);" @stackpop 4 @calls "0x7102B1,0x71040A,0x7104EE,0x7105C2,0x710722,0x7107BC,0x710ABD,0x710B4B,0x710E85" Nested helper captures the panel, accumulated height and Self.
   var
     LabelControl: TLabelGI;
@@ -9817,7 +9818,7 @@ begin
         ReplaceTextToken(Title, '<TextData1>', Info.TextData1, '<color=255,240,100>');
         ReplaceTextToken(Title, '<TextData2>', Info.TextData2, '<color=255,240,100>');
         ReplaceTextToken(Title, '<TextData3>', Info.TextData3, '<color=255,240,100>');
-        AddLine(StrToInt(Block.GetParam('Icon')), Title, Title + '~' + Description, Integer(Info));
+        AddLine(StrToInt(Block.GetParam('Icon')), Title, Title + '~' + Description, PtrInt(Info));
       end;
     end;
   end;

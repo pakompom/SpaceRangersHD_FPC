@@ -1947,7 +1947,8 @@ var
   procedure AddRow(
       IconId: Integer;
       Caption, Help: WideString;
-      Data: Integer
+      // Custom rows pass PCustomShipInfo here; the hover callback dereferences it.
+      Data: PtrInt
   ); // @addr $6EF4B0 @stackpop $4 @calls "0x6EF8F6 0x6EFBD8" @ida "void __userpurge $name(int IconId@<eax>, unsigned __int16 *Caption@<edx>, unsigned __int16 *Help@<ecx>, int Data@<^0>, void *ParentFrame@<^4>);"
   begin
     with TLabelGI.Create(Panel) do
@@ -2048,7 +2049,7 @@ begin
             StrToInt(AnsiString(Block.GetParam('Icon'))),
             Caption,
             Caption + '~' + Description,
-            Integer(Info)
+            PtrInt(Info)
         );
       end;
     end;

@@ -106,10 +106,10 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      AppendLogLineThreadSafe('self=' + IntToStr(Cardinal(Self)));
-      AppendLogLineThreadSafe('FGBC=' + IntToStr(Cardinal(ImageCache)));
-      AppendLogLineThreadSafe('FRBC=' + IntToStr(Cardinal(RotationCache)));
-      AppendLogLineThreadSafe('FIR=' + IntToStr(Cardinal(RotatedImage)));
+      AppendLogLineThreadSafe('self=' + UIntToStr(PtrUInt(Self)));
+      AppendLogLineThreadSafe('FGBC=' + UIntToStr(PtrUInt(ImageCache)));
+      AppendLogLineThreadSafe('FRBC=' + UIntToStr(PtrUInt(RotationCache)));
+      AppendLogLineThreadSafe('FIR=' + UIntToStr(PtrUInt(RotatedImage)));
       raise Exception.Create(
           'Error in procedure TRotateImage5GI.Create, label = '
               + IntToStr(RotateImageConstructionStage));

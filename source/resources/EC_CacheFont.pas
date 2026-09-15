@@ -47,7 +47,10 @@ type
   end;
   PAftGlyphEC = PointerToTAftGlyphEC;
   TFontObjectEC = packed record
-    ObjectId: Integer;
+    // Runtime markup data: dialog links use an address here, while other labels
+    // use icon numbers. Match TObjectGI.UserValue so ParseObjectTag preserves
+    // the address through the focus callback (native $6D2F87).
+    ObjectId: PtrInt;
     Width: Integer;
     Height: Integer;
     VerticalMode: Integer;

@@ -5878,7 +5878,9 @@ begin
     if GetPlayer.CurrentStar.Items.IndexOf(Obj) >= 0 then
       Local := True;
   if Local then
-    Result := '<Object=' + IntToStr(Cardinal(Obj)) + ',23,17,0>'
+    // Native $7B28C9 formats the object address as an unsigned decimal value.
+    // The dialog's focus button casts it back to TObject, so retain every bit.
+    Result := '<Object=' + UIntToStr(PtrUInt(Obj)) + ',23,17,0>'
   else
     Result := '';
 end;
@@ -10355,7 +10357,8 @@ begin
     Planet.CurrentStar.Ships.Add(Warrior);
   end;
   Turn := CurrentTurn + SeededRandomIntRange(30, 40, (CurrentTurn + 0) + Planet.GenerationSeed);
-  Station.FlyToStar := TStar(Integer(Target) + 0);
+  // The original + 0 is an evaluation-order artifact; this is a star pointer.
+  Station.FlyToStar := Target;
   Station.FlyDate := Turn + 0;
   Text :=
       PickLocalizedTextVariant(

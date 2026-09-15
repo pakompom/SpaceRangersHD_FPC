@@ -2999,7 +2999,6 @@ begin
   InfoContentHeight := InfoContentHeight + Height + 5;
 end;
 
-// The explicit receiver value preserves native loading before the False argument.
 procedure TfInfo.ToggleVisibleBookmark;
 var
   I, ScrollPosition: Integer;
@@ -3029,7 +3028,8 @@ begin
       begin
         RemovePersistentPlayerMessage(Entry, False);
         MainPanel.Screen.GetByName('PM_WinMsg').SetActive(False);
-        TfPanelMain(Integer(MainPanel) + 0).RebuildMessageButtons(False);
+        // Native + 0 only preserves evaluation order; MainPanel remains an object address.
+        MainPanel.RebuildMessageButtons(False);
         Button.SetDisabled(False);
         SoundManager.PlaySound('Sound.DelMsg');
       end

@@ -842,7 +842,12 @@ begin
       Value := Value.GetArray.GetItem(av[Index].GetInt);
   end;
   case Value.RealVType of
-    vkInt: av[0].SetInt(Value.GetInt);
+    // Cross-script reads copy the cell, including addresses kept in legacy int variables.
+    vkInt:
+    begin
+      av[0].ConvertToKind(vkInt);
+      av[0].SetDword(Value.GetDword);
+    end;
     vkDword: av[0].SetDword(Value.GetDword);
     vkFloat: av[0].SetFloat(Value.GetFloat);
     vkString: av[0].SetString(Value.GetString);
@@ -3183,7 +3188,8 @@ begin
   for I := 0 to Count - 1 do
   begin
     Obj := TObject(av[2 + I].GetDword);
-    if Cardinal(Obj) < $10000 then
+    // Group IDs share this argument with objects; compare the whole address.
+    if PtrUInt(Obj) < $10000 then
     begin
       ShipCount := CurrentScript.Ships.Count;
       for J := 0 to ShipCount - 1 do
@@ -3650,7 +3656,8 @@ begin
     Exit;
   end;
   Obj := TObject(av[2].GetDword);
-  if Cardinal(Obj) < $10000 then
+  // Group IDs share this argument with objects; compare the whole address.
+  if PtrUInt(Obj) < $10000 then
   begin
     for I := 0 to CurrentScript.Ships.Count - 1 do
     begin
@@ -10537,16 +10544,8 @@ begin
   if Args[1].RealVType <> vkArray then
     raise Exception.Create('Error.Script ArrayFind - not array');
   Args[0].SetInt(-1);
-  if Args[2].RealVType = vkInt then
-  begin
-    for ElementIndex := 0 to Args[1].GetArray.Count - 1 do
-      if Args[1].GetArray.GetItem(ElementIndex).GetInt = Args[2].GetInt then
-      begin
-        Args[0].SetInt(ElementIndex);
-        Exit;
-      end;
-  end
-  else if Args[2].RealVType = vkDword then
+  // Both integer kinds can carry object addresses in legacy scripts.
+  if Args[2].RealVType in [vkInt, vkDword] then
   begin
     for ElementIndex := 0 to Args[1].GetArray.Count - 1 do
       if Args[1].GetArray.GetItem(ElementIndex).GetDword = Args[2].GetDword then
@@ -11434,6 +11433,8 @@ var
           Exit;
       end;
     end;
+    // Native $62B8B1 uses int cells for ship addresses. The interpreter keeps
+    // the full address through SetDword/GetDword on wider targets as well.
     Value := TVarEC.Create(vkInt);
     Value.SetDword(PtrUInt(Ship));
     av[1].GetArray.AddItem(Value);
@@ -11720,7 +11721,7 @@ begin
 end;
 procedure SF_EquipmentImageName(av: array of TVarEC; code: TCodeEC);
 var
-  Kind: Cardinal;
+  Kind: PtrUInt;
   Obj: TObject;
   Item: TItem;
 begin
@@ -11735,6 +11736,8 @@ begin
   end
   else
   begin
+    // Native $62CA95 accepts either a small item type or an object address.
+    // Keep the entire pointer before the type test ($62CA9D) and class checks.
     Kind := av[1].GetDword;
     if Kind < 256 then
       av[0].SetString(ItemTypeNames[Byte(Kind)])
@@ -16480,7 +16483,8 @@ begin
     end;
     6:
     begin
-      av[0].SetDword(Cardinal(ShipScreen.SelectedHoldItem));
+      // Detach and Replace return the old item, just like the no-argument query.
+      av[0].SetDword(PtrUInt(ShipScreen.SelectedHoldItem));
       ShipScreen.SelectedHoldItem := nil;
       ShipScreen.SelectedHoldKind := phkEmpty;
       PlayerHoldShip.RefreshDerivedStats(True);
@@ -16496,7 +16500,7 @@ begin
           or not (ShipScreen.SelectedHoldKind in [phkEquipment, phkArtefact]) then
         raise Exception.Create('Error.Script FormShipCurItem no item to replace');
       Item := TObject(av[2].GetDword);
-      av[0].SetDword(Cardinal(ShipScreen.SelectedHoldItem));
+      av[0].SetDword(PtrUInt(ShipScreen.SelectedHoldItem));
       ShipScreen.SelectedHoldItem := TItem(Item);
       if Item is TArtefact then
         ShipScreen.SelectedHoldKind := phkArtefact

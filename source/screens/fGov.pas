@@ -1377,12 +1377,13 @@ begin
           end;
           if Mode = 'block' then
             AddChoice(Text, 0, ScriptDialogBlockCallback)
+                // Injected answers carry a PScriptDialogInjection through the choice callback.
           else if Mode = 'snap' then
-            AddChoice(Text, Integer(ScriptDialogInjections[I]), RunInjectedAnswerKeepingScroll)
+            AddChoice(Text, PtrInt(ScriptDialogInjections[I]), RunInjectedAnswerKeepingScroll)
           else
             AddChoice(
                 PScriptDialogInjection(ScriptDialogInjections[I]).Answer,
-                Integer(ScriptDialogInjections[I]),
+                PtrInt(ScriptDialogInjections[I]),
                 RunInjectedAnswer
             );
         end;

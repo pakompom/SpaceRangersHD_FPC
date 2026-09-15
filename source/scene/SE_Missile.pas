@@ -86,12 +86,12 @@ begin
       AppendLogLineThreadSafe('TMissileSE.Connect');
       AppendLogLineThreadSafe(GraphKey);
       AppendLogLineThreadSafe('lastLabel=' + IntToWideString(RotateImageConstructionStage));
-      AppendLogLineThreadSafe('self=' + IntToWideString(Integer(Self)));
-      AppendLogLineThreadSafe('sp=' + IntToWideString(Integer(ASpace)));
-      AppendLogLineThreadSafe('FSpace=' + IntToWideString(Integer(Space)));
-      AppendLogLineThreadSafe('FImage=' + IntToWideString(Integer(Image)));
+      AppendLogLineThreadSafe('self=' + UIntToStr(PtrUInt(Self)));
+      AppendLogLineThreadSafe('sp=' + UIntToStr(PtrUInt(ASpace)));
+      AppendLogLineThreadSafe('FSpace=' + UIntToStr(PtrUInt(Space)));
+      AppendLogLineThreadSafe('FImage=' + UIntToStr(PtrUInt(Image)));
       if Space <> nil then
-        AppendLogLineThreadSafe('PGI=' + IntToWideString(Integer(Space.MapPanel)));
+        AppendLogLineThreadSafe('PGI=' + UIntToStr(PtrUInt(Space.MapPanel)));
       raise Exception.Create('Error in procedure TMissileSE.Connect, label = ' + IntToStr(Stage));
     end;
   end;

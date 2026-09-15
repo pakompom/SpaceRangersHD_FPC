@@ -158,7 +158,10 @@ type
     Name: WideString;
     Kind: TVarKind;
     Gap9: array[0..2] of Byte;
-    IntValue: Integer;
+    // Win32 mods also use int variables to transport object addresses (e.g.
+    // ShuMercs' art_num = CreateArt(...)). GetInt still provides 32-bit numeric
+    // semantics; GetDword must recover the entire address on wider targets.
+    IntValue: PtrInt;
     DwordValue: PtrUInt;
     StringValue: WideString;
     FloatValue: Double;
@@ -655,6 +658,27 @@ begin
   Result := Sign * Result;
 end;
 
+function ScriptStringToDword(const Text: WideString): PtrUInt;
+var
+  I: Integer;
+begin
+  // Like native $45FE4C, collect all decimal digits, ignore other characters,
+  // and recognize a minus only at the start. Use the target's pointer width:
+  // EvoTranc stores a weapon address in TextData1 between combat phases.
+  Result := 0;
+  for I := 1 to Length(Text) do
+    if (Text[I] >= '0') and (Text[I] <= '9') then
+      Result := Result * 10 + PtrUInt(Ord(Text[I]) - Ord('0'));
+  if (Length(Text) > 0) and (Text[1] = '-') then
+  begin
+    // Keep Win32 negative sentinel strings (notably '-1') as 32-bit bit patterns.
+    if Result <= High(Cardinal) then
+      Result := Dword(0 - Result)
+    else
+      Result := 0 - Result;
+  end;
+end;
+
 function ScriptFloatToString(Value: Double): WideString;
 var
   SavedSeparator: AnsiChar;
@@ -963,6 +987,16 @@ begin
   inherited Destroy;
 end;
 
+function ScriptDwordToIntStorage(Value: PtrUInt): PtrInt;
+begin
+  // Preserve signed Win32 values such as $FFFFFFFF = -1, while allowing an
+  // object address above the Win32 range to survive an int assignment.
+  if Value <= High(Cardinal) then
+    Result := Integer(Value)
+  else
+    Result := PtrInt(Value);
+end;
+
 procedure TVarEC.ConvertToKind(NewKind: TVarKind);
 begin
   if FunctionValue <> nil then
@@ -975,11 +1009,11 @@ begin
     if Kind <> vkInt then
     begin
       if Kind = vkDword then
-        IntValue := Integer(DwordValue)
+        IntValue := ScriptDwordToIntStorage(DwordValue)
       else if Kind = vkFloat then
-        IntValue := Trunc(FloatValue)
+        IntValue := Integer(Trunc(FloatValue))
       else if Kind = vkString then
-        IntValue := ScriptStringToInt(StringValue)
+        IntValue := ScriptDwordToIntStorage(ScriptStringToDword(StringValue))
       else
         IntValue := 0;
     end;
@@ -996,13 +1030,13 @@ begin
   else if NewKind = vkDword then
   begin
     if Kind = vkInt then
-      DwordValue := Dword(IntValue)
+      DwordValue := GetDword
     else if Kind <> vkDword then
     begin
       if Kind = vkFloat then
         DwordValue := Dword(Trunc(FloatValue))
       else if Kind = vkString then
-        DwordValue := Dword(ScriptStringToInt(StringValue))
+        DwordValue := ScriptStringToDword(StringValue)
       else
         DwordValue := 0;
     end;
@@ -1019,7 +1053,7 @@ begin
   else if NewKind = vkFloat then
   begin
     if Kind = vkInt then
-      FloatValue := IntValue
+      FloatValue := GetInt
     else if Kind = vkDword then
       FloatValue := DwordValue
     else if Kind <> vkFloat then
@@ -1253,7 +1287,7 @@ begin
   if Kind = vkEmpty then
     Result := 0
   else if Kind = vkInt then
-    Result := IntValue
+    Result := Integer(IntValue)
   else if Kind = vkDword then
     Result := Integer(DwordValue)
   else if Kind = vkFloat then
@@ -1286,13 +1320,20 @@ begin
   if Kind = vkEmpty then
     Result := 0
   else if Kind = vkInt then
-    Result := Dword(IntValue)
+  begin
+    // Undo sign extension for ordinary signed 32-bit values, but do not
+    // truncate a native address stored in an int cell.
+    if (IntValue >= Low(Integer)) and (IntValue <= High(Integer)) then
+      Result := Dword(IntValue)
+    else
+      Result := PtrUInt(IntValue);
+  end
   else if Kind = vkDword then
     Result := DwordValue
   else if Kind = vkFloat then
     Result := Dword(Trunc(FloatValue))
   else if Kind = vkString then
-    Result := Dword(ScriptStringToInt(StringValue))
+    Result := ScriptStringToDword(StringValue)
   else if Kind = vkExternFun then
     Result := 0
   else if Kind = vkLibraryFun then
@@ -1305,8 +1346,12 @@ begin
     Result := 0
   else if Kind = vkRef then
   begin
+    // Native $4615BC delegates to GetInt. That preserves all DWORD bits on
+    // Win32, but truncates object addresses in pointer-width script DWORDs.
     if RefValue = nil then
       Result := 0
+    else if RefValue.RealVType in [vkInt, vkDword, vkString] then
+      Result := RefValue.GetDword
     else
       Result := Dword(RefValue.GetInt);
   end
@@ -1319,7 +1364,7 @@ begin
   if Kind = vkEmpty then
     Result := 0
   else if Kind = vkInt then
-    Result := IntValue
+    Result := GetInt
   else if Kind = vkDword then
     Result := DwordValue
   else if Kind = vkFloat then
@@ -1555,7 +1600,7 @@ begin
     DwordValue := Value;
   end
   else if Kind = vkInt then
-    IntValue := Integer(Value)
+    IntValue := ScriptDwordToIntStorage(Value)
   else if Kind = vkDword then
     DwordValue := Value
   else if Kind = vkFloat then
@@ -1576,7 +1621,16 @@ begin
   else if Kind = vkRef then
   begin
     if RefValue <> nil then
-      RefValue.SetInt(Integer(Value))
+    begin
+      // Native $461FD0 delegates to SetInt. Preserve that signed conversion
+      // for other scalar types, but retain full object addresses in integer cells.
+      // Empty/string references must also retain addresses outside Win32.
+      if (RefValue.RealVType in [vkInt, vkDword])
+          or ((RefValue.RealVType in [vkEmpty, vkString]) and (Value > High(Cardinal))) then
+        RefValue.SetDword(Value)
+      else
+        RefValue.SetInt(Integer(Value));
+    end
     else
       raise ExceptionExpressionEC.Create('Type error');
   end;
@@ -1590,7 +1644,7 @@ begin
     FloatValue := Value;
   end
   else if Kind = vkInt then
-    IntValue := Trunc(Value)
+    IntValue := Integer(Trunc(Value))
   else if Kind = vkDword then
     DwordValue := Dword(Trunc(Value))
   else if Kind = vkFloat then
@@ -1625,9 +1679,9 @@ begin
     StringValue := Value;
   end
   else if Kind = vkInt then
-    IntValue := ScriptStringToInt(Value)
+    IntValue := ScriptDwordToIntStorage(ScriptStringToDword(Value))
   else if Kind = vkDword then
-    DwordValue := Dword(ScriptStringToInt(Value))
+    DwordValue := ScriptStringToDword(Value)
   else if Kind = vkFloat then
     FloatValue := ScriptStringToFloat(Value)
   else if Kind = vkString then
@@ -2160,7 +2214,7 @@ begin
   if RealVType <> vkEmpty then
   begin
     case Left.RealVType of
-      vkInt: SetInt(Ord((Left.GetInt <> 0) and (Right.GetInt <> 0)));
+      vkInt: SetInt(Ord((Left.GetDword <> 0) and (Right.GetDword <> 0)));
       vkDword: SetDword(Ord((Left.GetDword <> 0) and (Right.GetDword <> 0)));
       vkFloat: SetFloat(Integer((Left.GetFloat <> 0) and (Right.GetFloat <> 0)));
       vkString: SetString('');
@@ -2181,7 +2235,7 @@ begin
   if RealVType <> vkEmpty then
   begin
     case Left.RealVType of
-      vkInt: SetInt(Ord((Left.GetInt <> 0) or (Right.GetInt <> 0)));
+      vkInt: SetInt(Ord((Left.GetDword <> 0) or (Right.GetDword <> 0)));
       vkDword: SetDword(Ord((Left.GetDword <> 0) or (Right.GetDword <> 0)));
       vkFloat: SetFloat(Integer((Left.GetFloat <> 0) or (Right.GetFloat <> 0)));
       vkString: SetString('');
@@ -2244,7 +2298,8 @@ begin
   if RealVType <> vkEmpty then
   begin
     case Left.RealVType of
-      vkInt: SetInt(Ord(Left.GetInt = Right.GetInt));
+      // Equality compares all address bits even when a mod used an int cell.
+      vkInt: SetInt(Ord(Left.GetDword = Right.GetDword));
       vkDword: SetDword(Ord(Left.GetDword = Right.GetDword));
       vkFloat: SetFloat(Integer(Left.GetFloat = Right.GetFloat));
       vkString: SetString(IntToStr(Ord(Left.GetString = Right.GetString)));
@@ -2265,7 +2320,7 @@ begin
   if RealVType <> vkEmpty then
   begin
     case Left.RealVType of
-      vkInt: SetInt(Ord(Left.GetInt <> Right.GetInt));
+      vkInt: SetInt(Ord(Left.GetDword <> Right.GetDword));
       vkDword: SetDword(Ord(Left.GetDword <> Right.GetDword));
       vkFloat: SetFloat(Integer(Left.GetFloat <> Right.GetFloat));
       vkString: SetString(IntToStr(Ord(Left.GetString <> Right.GetString)));
@@ -2371,7 +2426,8 @@ begin
   begin
     case Value.RealVType of
       vkInt: SetInt(-Value.GetInt);
-      vkDword: SetDword(Dword(-Int64(Value.GetDword)));
+      // Match DWORD addition/subtraction at the target's pointer width.
+      vkDword: SetDword(PtrUInt(-Int64(Value.GetDword)));
       vkFloat: SetFloat(-Value.GetFloat);
       vkString: SetString(Value.GetString);
       vkExternFun: SetExternFun(nil);
@@ -2412,8 +2468,9 @@ begin
   if RealVType <> vkEmpty then
   begin
     case Value.RealVType of
-      vkInt: SetInt(Ord(Value.GetInt = 0));
-      vkDword: SetDword(Ord(Value.GetInt = 0));
+      vkInt: SetInt(Ord(Value.GetDword = 0));
+      // A non-nil object can have zero in its low 32 bits.
+      vkDword: SetDword(Ord(Value.GetDword = 0));
       vkFloat: SetFloat(Integer(Value.GetFloat = 0));
       vkString: SetString('');
       vkExternFun: SetExternFun(nil);
@@ -2446,7 +2503,17 @@ begin
   begin
   end
   else if Dest.Kind = vkInt then
-    Dest.SetInt(Source.GetInt)
+  begin
+    // Native $465300/$46530A copies through 32-bit GetInt/SetInt. On a wider
+    // target integer-to-integer assignment must also preserve object addresses.
+    // This path is shared by variable assignment and script function arguments.
+    if Source.RealVType in [vkInt, vkDword] then
+      Dest.SetDword(Source.GetDword)
+    else if Source.RealVType = vkString then
+      Dest.SetString(Source.GetString)
+    else
+      Dest.SetInt(Source.GetInt);
+  end
   else if Dest.Kind = vkDword then
     Dest.SetDword(Source.GetDword)
   else if Dest.Kind = vkFloat then
@@ -2491,7 +2558,7 @@ function TVarEC.EqualsValue(Other: TVarEC): Boolean;
 begin
   case RealVType of
     vkEmpty: Result := IsEmpty = Other.IsEmpty;
-    vkInt: Result := GetInt = Other.GetInt;
+    vkInt: Result := GetDword = Other.GetDword;
     vkDword: Result := GetDword = Other.GetDword;
     vkFloat: Result := GetFloat = Other.GetFloat;
     vkString: Result := GetString = Other.GetString;
@@ -2542,7 +2609,7 @@ function TVarEC.IsTrue: Boolean;
 begin
   case RealVType of
     vkEmpty: Result := False;
-    vkInt: Result := GetInt <> 0;
+    vkInt: Result := GetDword <> 0;
     vkDword: Result := GetDword <> 0;
     vkFloat: Result := GetFloat <> 0;
     vkString: Result := GetString <> '';

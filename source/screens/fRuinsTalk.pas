@@ -2561,12 +2561,13 @@ begin
             end;
             if Prefix = 'block' then
               AddChoice(Text, 0, ScriptDialogBlockCallback)
+                  // Injected answers carry a PScriptDialogInjection through the choice callback.
             else if Prefix = 'snap' then
-              AddChoice(Text, Integer(ScriptDialogInjections[I]), RunInjectedDialogKeepingScroll)
+              AddChoice(Text, PtrInt(ScriptDialogInjections[I]), RunInjectedDialogKeepingScroll)
             else
               AddChoice(
                   PScriptDialogInjection(ScriptDialogInjections[I]).Answer,
-                  Integer(ScriptDialogInjections[I]),
+                  PtrInt(ScriptDialogInjections[I]),
                   RunInjectedDialog
               );
           end;

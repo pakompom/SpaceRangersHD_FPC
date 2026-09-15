@@ -80,7 +80,8 @@ type
     DialogName: WideString;
     Priority: Integer;
     Script: TScript;
-    AnswerData: Cardinal;
+    // Passed back as GAnswerData; mods use both numbers and object pointers.
+    AnswerData: PtrUInt;
   end;
   PScriptPlanetBinding = PointerToTScriptPlanet;
   PScriptShipRequirement = PointerToTScriptShipOtb;
@@ -90,7 +91,8 @@ type
     Text: WideString;
     Answer: WideString;
     Priority: Integer;
-    AnswerData: Cardinal;
+    // Runtime dialog payload, like TDialogOverride.AnswerData (not a file field).
+    AnswerData: PtrUInt;
     ReplaceGreeting: Boolean;
     Gap19: array[0..2] of Byte;
     ActionCode: WideString;
