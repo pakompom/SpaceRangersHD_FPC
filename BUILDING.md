@@ -36,6 +36,26 @@ LTO takes longer to link. Android currently builds without LTO.
 Game resources default to the ignored `game/` directory. `--game-dir` selects
 another location. Build output is stored under `.local/`.
 
+## Windows (32-bit)
+
+Requires Git, FPC 3.2.2 for i386-win32, and 32-bit SDL2 2.26 or newer (only
+`SDL2.dll` is needed). No C compiler: the build reuses the game's own `okgf.dll`.
+
+```bat
+git submodule update --init --recursive
+./tools/build-win32.cmd
+```
+
+The script builds `source/Rangers.dpr` with the installed FPC into
+`.local\win32\Rangers.exe` — not with the pinned fork. Point the `FPC` variable at
+`fpc.exe` if FPC is not in `PATH`.
+
+The executable has to sit next to the game's libraries: copy it into the game
+directory (replacing `Rangers.exe`) and put `SDL2.dll` there as well. Windows
+builds are 32-bit by design — script DLL mods and the original 32-bit `okgf.dll`
+and `MatrixGame.dll` work only that way. Step-by-step instructions and the x86
+specific changes: [docs/build-win32.md](docs/build-win32.md).
+
 ## Formatting
 
 Pascal source uses [pasfmt](https://github.com/integrated-application-development/pasfmt)
