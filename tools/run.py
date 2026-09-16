@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Run the macOS game."""
+"""Run the macOS or Windows game."""
 
 import argparse
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,12 +19,18 @@ def main() -> None:
     )
     args, game_options = parser.parse_known_args()
     configuration = ("release" if args.release else "debug") + ("-lto" if args.lto else "")
-    binary = ROOT / ".local" / configuration / "Space Rangers HD.app/Contents/MacOS/Rangers"
+    if os.name == "nt":
+        binary = ROOT / ".local" / f"windows-{configuration}" / "Rangers/Rangers.exe"
+    else:
+        binary = ROOT / ".local" / configuration / "Space Rangers HD.app/Contents/MacOS/Rangers"
     if not binary.is_file():
         parser.error("Run ./tools/build.py first, with matching --release and --lto options.")
     game_directory = args.game_dir.expanduser().resolve()
     command = [str(binary), f"--game-dir={game_directory}", *game_options]
     try:
+        if os.name == "nt":
+            # Windows execv detaches the child from this console; wait so its output stays here.
+            sys.exit(subprocess.call(command))
         os.execv(binary, command)
     except OSError as error:
         parser.exit(1, f"Cannot start the game: {error}\n")

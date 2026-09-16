@@ -69,6 +69,39 @@ To open a save in the galaxy observer:
 ./tools/run.py --observer-save=/path/to/save.sav --user-dir=/path/to/observer-profile
 ```
 
+## Windows
+
+The Windows x64 build uses FPC's native x86-64 code generator (no LLVM) and
+MSYS2 UCRT64 for the C side.
+
+- Python 3, CMake, and the FPC 3.2.2 installer `fpc-3.2.2.win32.and.win64.exe`,
+  whose `bin/i386-win32/ppcrossx64.exe` bootstraps the vendored compiler.
+  Set `FPC_BOOTSTRAP` to that path, or put the directory on `PATH`.
+- MSYS2 with `mingw-w64-ucrt-x86_64-{gcc,ninja,SDL2,SDL2_mixer,libjpeg-turbo,libpng,zlib}`.
+  `MSYS2_PREFIX` selects a UCRT64 prefix other than `C:/msys64/ucrt64`.
+
+```powershell
+git submodule update --init --recursive
+$env:FPC_BOOTSTRAP = 'C:\FPC\3.2.2\bin\i386-win32\ppcrossx64.exe'
+python tools\build.py --target windows
+python tools\run.py --game-dir="C:\Games\Space Rangers HD A War Apart"
+```
+
+`.local/windows-debug/Rangers/` holds `Rangers.exe` with `okgf.dll`, `gamenative.dll`
+and the MSYS2 DLLs they import. A GOG installation already has the `game/` layout below.
+Saves/settings default to `%APPDATA%\SpaceRangersHD`, apart from the original
+game's `Documents\SpaceRangersHD`.
+
+The Windows RTL has real `windows` and `messages` units, which the port's Win32
+shims cannot shadow. The build therefore compiles a copy of the Pascal sources staged
+in `.local/windows-debug/sources/` (or `windows-release`), where
+[tools/windows_sources.py](tools/windows_sources.py) renames the shims to `SRWindows`
+and `SRMessages`. The repository keeps the upstream names. Line numbers are unchanged,
+so compiler messages and backtraces point at the same lines in `source/` and `platform/`.
+
+If FPC reports an internal error, compile the one unit with `-O-` first: if that
+passes, it is the x86 backend, not game code.
+
 ## Android
 
 `./tools/build.py --target android` produces `.local/android/Rangers.apk`.

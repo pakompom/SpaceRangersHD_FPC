@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""Build Space Rangers HD for macOS or Android ARM64."""
+"""Build Space Rangers HD for macOS, Android ARM64 or Windows x64."""
 
 import argparse
 import json
 import os
 import plistlib
 import re
-import resource
 import shlex
 import shutil
 import subprocess
 import zipfile
 from pathlib import Path
 
+if os.name != "nt":
+    # POSIX-only; the Windows build does not raise its descriptor limit.
+    import resource
+
 from compiler import prepare_compiler
+from windows_sources import stage_windows_sources
 
 ROOT = Path(__file__).resolve().parents[1]
 PASCAL_FLAGS = ("-Mdelphi", "-FcUTF8")
@@ -30,7 +34,9 @@ def output(*command: str) -> str:
     return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT).strip()
 
 
-def run_step(work: Path, name: str, command: list[str | Path]) -> None:
+def run_step(
+    work: Path, name: str, command: list[str | Path], env: dict[str, str] | None = None
+) -> None:
     """Keep each build step's output beside its generated files."""
     log = work / f"{name}.log"
     print(f"Building {name}…", flush=True)
@@ -42,6 +48,7 @@ def run_step(work: Path, name: str, command: list[str | Path]) -> None:
                 stdout=stream,
                 stderr=subprocess.STDOUT,
                 check=True,
+                env=env,
             )
         except subprocess.CalledProcessError as error:
             print("\n".join(log.read_text(errors="replace").splitlines()[-30:]))
@@ -54,7 +61,9 @@ def command_signature(command: list[str | Path]) -> str:
     return json.dumps([list(map(str, command)), str(compiler), stat.st_mtime_ns, stat.st_size])
 
 
-def compile_pascal(work: Path, command: list[str | Path], rebuild: bool) -> None:
+def compile_pascal(
+    work: Path, command: list[str | Path], rebuild: bool, env: dict[str, str] | None = None
+) -> None:
     # FPC tracks unit/source dependencies, but not every change to compiler options.
     stamp = work / "pascal-command.json"
     signature = command_signature(command)
@@ -62,11 +71,13 @@ def compile_pascal(work: Path, command: list[str | Path], rebuild: bool) -> None
         command = [command[0], "-B", *command[1:]]
     # A failed build must not leave units compiled with a mixture of settings.
     stamp.write_text("")
-    run_step(work, "pascal", command)
+    run_step(work, "pascal", command, env)
     stamp.write_text(signature)
 
 
-def compile_native(work: Path, command: list[str | Path], rebuild: bool) -> None:
+def compile_native(
+    work: Path, command: list[str | Path], rebuild: bool, env: dict[str, str] | None = None
+) -> None:
     stamp = work / "native-command.json"
     depfile = work / "native.d"
     target = Path(command[command.index("-o") + 1])
@@ -88,17 +99,23 @@ def compile_native(work: Path, command: list[str | Path], rebuild: bool) -> None
             print("Native platform code is up to date.", flush=True)
             return
     stamp.write_text("")
-    run_step(work, "native", command)
+    run_step(work, "native", command, env)
     stamp.write_text(signature)
 
 
-def build_okgf(work: Path, release: bool, *options: str, rebuild: bool = False) -> Path:
+def build_okgf(
+    work: Path,
+    release: bool,
+    *options: str,
+    env: dict[str, str] | None = None,
+    rebuild: bool = False,
+) -> Path:
     directory = work / "native"
     configuration = "Release" if release else "RelWithDebInfo"
     run_step(work, "configure", [
         "cmake", "-S", ROOT / "native", "-B", directory, f"-DCMAKE_BUILD_TYPE={configuration}",
         *options,
-    ])  # fmt: skip
+    ], env)  # fmt: skip
     run_step(
         work,
         "okgf",
@@ -109,16 +126,17 @@ def build_okgf(work: Path, release: bool, *options: str, rebuild: bool = False) 
             "--parallel",
             *(["--clean-first"] if rebuild else []),
         ],
+        env,
     )
     return directory
 
 
-def pascal_flags(release: bool, *platform_paths: Path) -> list[str]:
+def pascal_flags(release: bool, *platform_paths: Path, root: Path = ROOT) -> list[str]:
     search_paths = [
         *platform_paths,
-        ROOT / "platform",
-        ROOT / "source",
-        *sorted(path for path in (ROOT / "source").rglob("*") if path.is_dir()),
+        root / "platform",
+        root / "source",
+        *sorted(path for path in (root / "source").rglob("*") if path.is_dir()),
     ]
     return [
         *PASCAL_FLAGS,
@@ -339,9 +357,71 @@ def sign_android_apk(work: Path, unsigned: Path, sdk_tools: Path, java: Path) ->
     return apk
 
 
+def msys2_prefix() -> Path:
+    """MSYS2 UCRT64 supplies GCC, Ninja, SDL2, SDL2_mixer, libjpeg-turbo, libpng and zlib."""
+    prefix = Path(os.environ.get("MSYS2_PREFIX", "C:/msys64/ucrt64"))
+    if not (prefix / "bin/gcc.exe").is_file():
+        raise FileNotFoundError(f"MSYS2 UCRT64 toolchain not found in {prefix}; set MSYS2_PREFIX")
+    return prefix
+
+
+def copy_runtime_dlls(directory: Path, prefix: Path) -> None:
+    """Copy the MSYS2 DLL closure of the built binaries; system DLLs are not in its bin."""
+    objdump = prefix / "bin/objdump.exe"
+    pending = [*directory.glob("*.exe"), *directory.glob("*.dll")]
+    seen = {path.name.lower() for path in pending}
+    while pending:
+        for name in re.findall(r"DLL Name: (\S+)", output(str(objdump), "-p", str(pending.pop()))):
+            name = name if name.lower().endswith(".dll") else f"{name}.dll"
+            source = prefix / "bin" / name
+            if name.lower() in seen or not source.is_file():
+                continue
+            seen.add(name.lower())
+            shutil.copy2(source, directory / name)
+            pending.append(directory / name)
+
+
+def build_windows(release: bool, rebuild: bool = False) -> Path:
+    prefix = msys2_prefix()
+    compiler, compiler_flags = prepare_compiler("windows", run_step)
+    work = ROOT / ".local" / ("windows-release" if release else "windows-debug")
+    game, units = work / "Rangers", work / "units"
+    for directory in (game, units):
+        directory.mkdir(parents=True, exist_ok=True)
+    # GCC's helper programs and Ninja load their DLLs from UCRT64's bin.
+    env = {**os.environ, "PATH": str(prefix / "bin") + os.pathsep + os.environ["PATH"]}
+    gcc = prefix / "bin/gcc.exe"
+    # CMake reads backslashes in cache values as escapes.
+    native = build_okgf(
+        work, release, "-G", "Ninja",
+        f"-DCMAKE_C_COMPILER={gcc.as_posix()}", f"-DCMAKE_PREFIX_PATH={prefix.as_posix()}",
+        env=env, rebuild=rebuild,
+    )  # fmt: skip
+    shutil.copy2(native / "okgf.dll", game)
+    compile_native(work, [
+        gcc, "-shared", "-O3" if release else "-O2", "-g0" if release else "-g",
+        "-Wall", "-Wextra", "-DSDL_MAIN_HANDLED", f"-I{prefix}/include",
+        ROOT / "platform/game_native.c", ROOT / "platform/windows_native.c",
+        f"-L{prefix}/lib", "-lSDL2_mixer", "-lSDL2", "-ljpeg", "-o", game / "gamenative.dll",
+    ], rebuild, env)  # fmt: skip
+    # The Windows RTL owns the `windows` and `messages` unit names; compile a staged
+    # copy with the shims renamed instead of renaming them in the repository.
+    sources = stage_windows_sources(work / "sources")
+    compile_pascal(work, [
+        compiler, *compiler_flags, *pascal_flags(release, root=sources), "-Twin64",
+        f"-FU{units}", f"-FE{game}", sources / "source/Rangers.dpr",
+    ], rebuild)  # fmt: skip
+    copy_runtime_dlls(game, prefix)
+    return game / "Rangers.exe"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", choices=("macos", "android"), default="macos")
+    parser.add_argument(
+        "--target",
+        choices=("macos", "android", "windows"),
+        default="windows" if os.name == "nt" else "macos",
+    )
     parser.add_argument("--release", action="store_true", help="Build an optimized release.")
     parser.add_argument("--lto", action="store_true", help="Enable LTO in a separate macOS build.")
     parser.add_argument(
@@ -351,11 +431,14 @@ def main() -> None:
     if args.lto and args.target != "macos":
         parser.error("--lto is currently supported only for macOS builds.")
     try:
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
-        resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, desired), hard))
+        if os.name != "nt":
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
+            resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, desired), hard))
         if args.target == "android":
             artifact = build_android(args.release, args.rebuild)
+        elif args.target == "windows":
+            artifact = build_windows(args.release, args.rebuild)
         else:
             artifact = build_macos(args.release, args.rebuild, lto=args.lto)
     except subprocess.CalledProcessError as error:

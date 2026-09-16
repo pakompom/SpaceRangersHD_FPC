@@ -1,4 +1,8 @@
-"""Bootstrap the FPC submodule's LLVM compiler and platform runtimes."""
+"""Bootstrap the FPC submodule's compiler and platform runtimes.
+
+macOS and Android build through its LLVM backend; Windows x64 uses the native
+x86-64 code generator.
+"""
 
 import hashlib
 import os
@@ -30,6 +34,55 @@ def matches(path: Path, revision: str) -> bool:
     return path.is_file() and path.read_text() == revision
 
 
+def package_flags(units: Path, process_platform: str) -> list[str]:
+    packages = VENDOR / "packages"
+    paths = [
+        units,
+        packages / "rtl-objpas/src/inc",
+        packages / "fcl-base/src",
+        packages / "pthreads/src",
+        packages / "fcl-process/src",
+    ]
+    return [
+        *(f"-Fu{path}" for path in paths),
+        f"-Fi{packages}/fcl-process/src/{process_platform}",
+    ]  # fmt: skip
+
+
+def windows_bootstrap() -> Path:
+    """FPC 3.2.2's win32+win64 installer ships ppcrossx64 beside the make its Makefiles use."""
+    path = shutil.which(os.environ.get("FPC_BOOTSTRAP", "ppcrossx64"))
+    if path is None:
+        raise FileNotFoundError(
+            "Install FPC 3.2.2 (fpc-3.2.2.win32.and.win64.exe) and set FPC_BOOTSTRAP "
+            "to its bin/i386-win32/ppcrossx64.exe."
+        )
+    return Path(path).resolve()
+
+
+def prepare_windows_compiler(revision: str, run_step) -> Path:
+    """Build a native x86-64 compiler; Windows uses FPC's own code generator, not LLVM."""
+    compiler = SOURCE / "compiler/ppcx64.exe"
+    stamp = WORK / "compiler.stamp"
+    if not compiler.is_file() or not matches(stamp, revision):
+        bootstrap = windows_bootstrap()
+        stamp.unlink(missing_ok=True)
+        if SOURCE.exists():
+            shutil.rmtree(SOURCE)
+        shutil.copytree(VENDOR, SOURCE, ignore=shutil.ignore_patterns(".git"))
+        # The Makefiles expect FPC's bundled GNU utilities ahead of MSYS2 or Git tools.
+        env = {**os.environ, "PATH": str(bootstrap.parent) + os.pathsep + os.environ["PATH"]}
+        # ppcrossx64 runs as i386; declaring an x86-64 host skips the cross cycle, which
+        # would first need an i386 RTL. Its first stage is already a native compiler.
+        run_step(WORK, "compiler", [
+            bootstrap.parent / "make.exe", "-C", SOURCE, "compiler_cycle", "NOWPOCYCLE=1",
+            f"PP={bootstrap}", "CPU_SOURCE=x86_64", "OS_SOURCE=win64",
+            "CPU_TARGET=x86_64", "OS_TARGET=win64", "OPT=-O2",
+        ], env=env)  # fmt: skip
+        stamp.write_text(revision)
+    return compiler
+
+
 def prepare_compiler(
     target: str, run_step, toolchain: Path | None = None, *, lto: bool = False
 ) -> tuple[Path, list[str]]:
@@ -42,6 +95,9 @@ def prepare_compiler(
         )
     revision = source_revision()
     WORK.mkdir(parents=True, exist_ok=True)
+    if target == "windows":
+        compiler = prepare_windows_compiler(revision, run_step)
+        return compiler, ["-n", *package_flags(SOURCE / "rtl/units/x86_64-win64", "win")]
     compiler = SOURCE / "compiler/ppca64"
     stamp = WORK / "compiler.stamp"
     if not compiler.is_file() or not matches(stamp, revision):
@@ -108,15 +164,6 @@ def prepare_compiler(
         ])  # fmt: skip
         stamp.write_text(runtime_revision)
 
-    packages = VENDOR / "packages"
-    paths = [
-        units,
-        packages / "rtl-objpas/src/inc",
-        packages / "fcl-base/src",
-        packages / "pthreads/src",
-        packages / "fcl-process/src",
-    ]
     return compiler, [
-        "-n", *LLVM_FLAGS, *(["-Clflto"] if lto else []), *(f"-Fu{path}" for path in paths),
-        f"-Fi{packages}/fcl-process/src/unix",
+        "-n", *LLVM_FLAGS, *(["-Clflto"] if lto else []), *package_flags(units, "unix"),
     ]  # fmt: skip
