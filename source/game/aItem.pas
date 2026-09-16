@@ -1882,6 +1882,11 @@ var
   I, SpecialBonus: Integer;
   Entry: PExtraSpecial;
 begin
+  // CHANGE: PERFORMANCE - Equipment without any bonus sources contributes zero.
+  if (MicroModuleIndex = 0)
+      and (SpecialModuleIndex = 0)
+      and ((ExtraSpecials = nil) or (ExtraSpecials.Count = 0)) then
+    Exit(0);
   if (BonusKind in [bonSkill1..bonSkill6, bonStimCapacity]) and (MicroModuleIndex <> 0) then
     Result := MicroModuleTemplates[MicroModuleIndex - 1].StatBonuses[Ord(BonusKind)]
   else

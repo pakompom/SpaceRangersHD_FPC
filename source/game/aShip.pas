@@ -888,59 +888,23 @@ uses
   aTranclucator,
   aTransport,
   aWarrior;
-type
-  TTechnologyClassEntry = record
-    ShipClass: TClass;
-    Traits: Byte;
-  end;
-threadvar
-  TechnologyClasses: array[0..63] of TTechnologyClassEntry;
-type
-  PStatQueryScope = ^TStatQueryScope;
-  TStatQueryScope = record
-    Previous: PStatQueryScope;
-    Ship: TShip;
-    Valid: set of Byte;
-    Values: array[Byte] of Integer;
-    // A bounded stack buffer; unusual larger loadouts use the uncached scan.
-    Items: array[0..63] of TEquipment;
-    ItemCount: Integer;
-  end;
-threadvar
-  ActiveStatQueryScope: PStatQueryScope;
-// These scopes may ONLY cover calculations that cannot change stat inputs or
-// invoke script callbacks. They never span equip/unequip, turns or UI events.
-// CHANGE: PERFORMANCE - Reuse equipment queries only within a read-only calculation scope.
-procedure BeginStatQueryScope(var Scope: TStatQueryScope; Ship: TShip); inline;
-begin
-  Scope.Previous := ActiveStatQueryScope;
-  Scope.Ship := Ship;
-  Scope.Valid := [];
-  Scope.ItemCount := -1;
-  ActiveStatQueryScope := @Scope;
-end;
-procedure EndStatQueryScope(var Scope: TStatQueryScope); inline;
-begin
-  ActiveStatQueryScope := Scope.Previous;
-end;
+// CHANGE: PERFORMANCE - Classify technology permissions with one ancestry walk.
 function ShipTechnologyTraits(Ship: TShip): Byte; inline;
 var
   ShipClass: TClass;
-  Slot: PtrUInt;
 begin
   if Ship = nil then
     Exit(0);
   ShipClass := Ship.ClassType;
-  Slot := (PtrUInt(ShipClass) shr 4) and 63;
-  if TechnologyClasses[Slot].ShipClass <> ShipClass then
+  while ShipClass <> nil do
   begin
-    // Only static Pascal class ancestry is cached. Owner, technology knowledge,
-    // item condition, race restrictions and all bonuses remain live queries.
-    TechnologyClasses[Slot].Traits := Ord(Ship is TTranclucator) or (Ord(Ship is TKling) shl 1);
-    TechnologyClasses[Slot].ShipClass := ShipClass;
+    if ShipClass = TTranclucator then
+      Exit(1);
+    if ShipClass = TKling then
+      Exit(2);
+    ShipClass := ShipClass.ClassParent;
   end;
-  Result := TechnologyClasses[Slot].Traits;
-
+  Result := 0;
 end;
 
 // Source helper: preserve the native radar-before-clamp evaluation and local order.
@@ -3016,32 +2980,26 @@ end;
 function TShip.CalculateAttackStrength: Double;
 var
   I: Integer;
-  StatScope: TStatQueryScope;
 begin
-  BeginStatQueryScope(StatScope, Self);
-  try
-    Result := 0.0000001;
-    for I := 1 to WeaponCount do
-      if IsEquipmentUsable(Weapons[I]) then
-        Result :=
-            Result
-                + RemapClamped(
-                        Integer(GetEffectiveSkillLevel(psAccuracy)) and $7F,
-                        0,
-                        6,
-                        (GetWeaponMaxDamage(Weapons[I]) + GetWeaponMinDamage(Weapons[I])) div 2,
-                        GetWeaponMaxDamage(Weapons[I]))
-                    * Weapons[I].GetAttackCount;
-    if Self is TKling then
-      case (Self as TKling).KlingType of
-        ktBoss: Result := Result * 1.5;
-        ktBertor: Result := Result + 400;
-        ktKlig: Result := Result * 0.33;
-      end;
-    Result := Max(0.0000001, Result * (UsableWeaponCount + 7) * GetAttackMultiplier);
-  finally
-    EndStatQueryScope(StatScope);
-  end;
+  Result := 0.0000001;
+  for I := 1 to WeaponCount do
+    if IsEquipmentUsable(Weapons[I]) then
+      Result :=
+          Result
+              + RemapClamped(
+                      Integer(GetEffectiveSkillLevel(psAccuracy)) and $7F,
+                      0,
+                      6,
+                      (GetWeaponMaxDamage(Weapons[I]) + GetWeaponMinDamage(Weapons[I])) div 2,
+                      GetWeaponMaxDamage(Weapons[I]))
+                  * Weapons[I].GetAttackCount;
+  if Self is TKling then
+    case (Self as TKling).KlingType of
+      ktBoss: Result := Result * 1.5;
+      ktBertor: Result := Result + 400;
+      ktKlig: Result := Result * 0.33;
+    end;
+  Result := Max(0.0000001, Result * (UsableWeaponCount + 7) * GetAttackMultiplier);
 end;
 
 function TShip.CalculateDefenseStrength: Double;
@@ -7788,20 +7746,74 @@ begin
     Result := Item.GetStatBonus(TEquipmentBonusKind(BonusKind));
 end;
 
-// Host fast path. All callees are read-only: the counted lists cannot change
-// during this traversal. Preserve element order, integer additions and rounding.
+// CHANGE: PERFORMANCE - Resolve shared technology permission once per read-only item scan.
+type
+  TEquipmentTechQuery = record
+    Ship: TShip;
+    Ready, Unrestricted: Boolean;
+  end;
+
+function CanUseEquipmentInQuery(var Query: TEquipmentTechQuery; Item: TEquipment): Boolean; inline;
+var
+  Traits: Byte;
+  Level: Integer;
+begin
+  if not Query.Ready then
+  begin
+    Query.Unrestricted := (Galaxy = nil) or Galaxy.IsEquipmentKnowledgeUnrestricted;
+    if not Query.Unrestricted then
+      while True do
+      begin
+        Traits := ShipTechnologyTraits(Query.Ship);
+        if (Traits and 1 <> 0) and (TTranclucator(Query.Ship).OwnerShip <> nil) then
+          Query.Ship := TTranclucator(Query.Ship).OwnerShip
+        else
+        begin
+          Query.Unrestricted := Traits and 2 <> 0;
+          Break;
+        end;
+      end;
+    Query.Ready := True;
+  end;
+  if Query.Unrestricted or (Item.OwnerId <> Byte(oiDominator)) then
+    Exit(True);
+  if Item is TWeapon then
+    Level := TWeapon(Item).GetWeaponInfo.TechLevel
+  else
+    Level := Item.GetLevel;
+  Result := Query.Ship.TechKnowledge >= Level - 4;
+end;
+
+function IsEquipmentUsableInQuery(
+    var Query: TEquipmentTechQuery;
+    Item: TEquipment
+): Boolean; inline;
+begin
+  Result :=
+      (Item <> nil)
+          and (not (Byte(Item.ItemType)
+                  in [Ord(t_FuelTanks)..Ord(t_CustomWeapon), Ord(t_Satellite)])
+              or (Item.BrokenFlag = 0))
+          and CanUseEquipmentInQuery(Query, Item);
+end;
+
+// CHANGE: PERFORMANCE - Reuse permission only within this read-only sum.
+// Keep list order, integer additions and rounding; no state survives the call.
 function FastShipTotalStatBonus(Ship: TShip; BonusKind: Byte): Integer;
 var
+  Query: TEquipmentTechQuery;
   Items: PPointerList;
   Item: TEquipment;
   I, Strength: Integer;
 begin
+  Query.Ship := Ship;
+  Query.Ready := False;
   Result := Ship.GetOwnStatBonus(BonusKind);
   Items := Ship.Inventory.List;
   for I := 0 to Ship.Inventory.Count - 1 do
   begin
     Item := TEquipment(Items^[I]);
-    if ((I = 0) or (Item.EquippedFlag <> 0)) and Ship.IsEquipmentUsable(Item) then
+    if ((I = 0) or (Item.EquippedFlag <> 0)) and IsEquipmentUsableInQuery(Query, Item) then
       Inc(Result, Ship.GetEquipmentStatBonus(BonusKind, Item));
   end;
   if Ship.Artefacts <> nil then
@@ -7822,87 +7834,9 @@ begin
       4: Dec(Result, Strength * 100);
     end;
 end;
-// CHANGE: PERFORMANCE - Cache eligible items within the active scope; mutations happen outside it.
-procedure CollectStatQueryItems(var Scope: TStatQueryScope);
-var
-  Ship: TShip;
-  Items: PPointerList;
-  Item: TEquipment;
-  I: Integer;
-begin
-  Ship := Scope.Ship;
-  Scope.ItemCount := -2;
-  if Ship.Inventory.Count > Length(Scope.Items) then
-    Exit;
-  if (Ship.Artefacts <> nil)
-      and (Ship.Artefacts.Count > Length(Scope.Items) - Ship.Inventory.Count) then
-    Exit;
-  Scope.ItemCount := 0;
-  Items := Ship.Inventory.List;
-  for I := 0 to Ship.Inventory.Count - 1 do
-  begin
-    Item := TEquipment(Items^[I]);
-    if ((I = 0) or (Item.EquippedFlag <> 0))
-        and Ship.IsEquipmentUsable(Item)
-        and ((Item.SpecialModuleIndex = 0)
-            or not Ship.IsMicroModuleRaciallyRestricted(Item.SpecialModuleIndex - 1)) then
-    begin
-      Scope.Items[Scope.ItemCount] := Item;
-      Inc(Scope.ItemCount);
-    end;
-  end;
-  if Ship.Artefacts <> nil then
-  begin
-    Items := Ship.Artefacts.List;
-    for I := 0 to Ship.Artefacts.Count - 1 do
-    begin
-      Item := TEquipment(Items^[I]);
-      if (Item.EquippedFlag <> 0)
-          and (Item.BrokenFlag = 0)
-          and ((Item.SpecialModuleIndex = 0)
-              or not Ship.IsMicroModuleRaciallyRestricted(Item.SpecialModuleIndex - 1)) then
-      begin
-        Scope.Items[Scope.ItemCount] := Item;
-        Inc(Scope.ItemCount);
-      end;
-    end;
-  end;
-end;
-function ScopedShipTotalStatBonus(Ship: TShip; BonusKind: Byte): Integer;
-var
-  Scope: PStatQueryScope;
-  I, Strength: Integer;
-begin
-  Scope := ActiveStatQueryScope;
-  if (Scope = nil) or (Scope^.Ship <> Ship) then
-    Exit(FastShipTotalStatBonus(Ship, BonusKind));
-  if BonusKind in Scope^.Valid then
-  begin
-    Exit(Scope^.Values[BonusKind]);
-  end;
-  if Scope^.ItemCount = -1 then
-    CollectStatQueryItems(Scope^);
-  if Scope^.ItemCount < 0 then
-    Result := FastShipTotalStatBonus(Ship, BonusKind)
-  else
-  begin
-    Result := Ship.GetOwnStatBonus(BonusKind);
-    for I := 0 to Scope^.ItemCount - 1 do
-      Inc(Result, Scope^.Items[I].GetStatBonus(TEquipmentBonusKind(BonusKind)));
-    Strength := Round(Ship.GetCombatStatusStrength(cseMagnetic));
-    if Strength >= 1 then
-      case BonusKind of
-        5, 8: Dec(Result, Strength);
-        12: Dec(Result, Strength * 10);
-        4: Dec(Result, Strength * 100);
-      end;
-  end;
-  Scope^.Values[BonusKind] := Result;
-  Include(Scope^.Valid, BonusKind);
-end;
 function TShip.GetTotalStatBonus(BonusKind: Byte): Integer;
 begin
-  Result := ScopedShipTotalStatBonus(Self, BonusKind);
+  Result := FastShipTotalStatBonus(Self, BonusKind);
 end;
 
 function TShip.GetRadarRange: Integer;
@@ -8905,7 +8839,6 @@ var
   DamageBonusKind: Byte;
   SavedChaoticRandom: Boolean;
   SavedWeapons: array[1..5] of TWeapon;
-  StatScope: TStatQueryScope;
 begin
   Result := 0;
   if (CurrentPlanet = nil)
@@ -8959,120 +8892,113 @@ begin
   end;
   SavedChaoticRandom := Galaxy.CustomRules.ChaoticRandom;
   Galaxy.CustomRules.ChaoticRandom := False;
-  // Scripts may run while unequipping/re-equipping, outside this scope.
-  BeginStatQueryScope(StatScope, Self);
-  try
-    if Byte(Equipment.ItemType) in [Ord(t_Hull)..Ord(t_DefGenerator)] then
-    begin
-      case Equipment.ItemType of
-        t_Hull:
-        begin
-          CandidateHull := THull(Equipment);
-          Result := EvaluateStatBonus(bonHull, CalculateHullArmor(CandidateHull));
-          if GetHull <> CandidateHull then
-            Result :=
-                Result
-                    + EvaluateStatBonus(
-                        bonSlotRadar,
-                        CandidateHull.GetSlotCount(sskRadar) - GetHull.GetSlotCount(sskRadar))
-                    + EvaluateStatBonus(
-                        bonSlotScaner,
-                        CandidateHull.GetSlotCount(sskScanner) - GetHull.GetSlotCount(sskScanner))
-                    + EvaluateStatBonus(
-                        bonSlotDroid,
-                        CandidateHull.GetSlotCount(sskRepairRobot)
-                            - GetHull.GetSlotCount(sskRepairRobot))
-                    + EvaluateStatBonus(
-                        bonSlotHook,
-                        CandidateHull.GetSlotCount(sskCargoHook)
-                            - GetHull.GetSlotCount(sskCargoHook))
-                    + EvaluateStatBonus(
-                        bonSlotDef,
-                        CandidateHull.GetSlotCount(sskDefGenerator)
-                            - GetHull.GetSlotCount(sskDefGenerator))
-                    + EvaluateStatBonus(
-                        bonSlotWeapon,
-                        CandidateHull.GetSlotCount(sskWeapon) - GetHull.GetSlotCount(sskWeapon))
-                    + EvaluateStatBonus(
-                        bonSlotArt,
-                        CandidateHull.GetSlotCount(sskArtefact) - GetHull.GetSlotCount(sskArtefact))
-                    + EvaluateStatBonus(
-                        bonSlotForsage,
-                        CandidateHull.GetSlotCount(sskAfterburner)
-                            - GetHull.GetSlotCount(sskAfterburner))
-                    + Round(
-                        EvaluateStatBonus(bonMass, CalculateEquippedMass(nil))
-                            - EvaluateStatBonus(
-                                bonMass,
-                                CalculateEquippedMass(nil)
-                                    + CandidateHull.CalculateMass
-                                    - GetHull.CalculateMass));
-        end;
-        t_FuelTanks: Result := EvaluateStatBonus(bonFuel, GetItemFuelTankCapacity(Equipment));
-        t_Engine:
-          Result :=
-              EvaluateStatBonus(
-                      bonSpeed,
-                      CalculateEngineSpeed(
-                          TEngine(Equipment),
-                          InNormalSpace or not CanRepairEquipmentTech(Equipment)
-                      ))
-                  + EvaluateStatBonus(bonJump, CalculateEngineJumpRange(TEngine(Equipment)));
-        t_Radar: Result := EvaluateStatBonus(bonRadar, CalculateRadarRange(TRadar(Equipment)));
-        t_Scaner:
-          if GetRadar <> nil then
-            Result := EvaluateStatBonus(bonScan, CalculateScannerPower(TScaner(Equipment)));
-        t_RepairRobot:
-          Result := EvaluateStatBonus(bonDroid, CalculateRepairPoints(TRepairRobot(Equipment)));
-        t_CargoHook:
-          Result := EvaluateStatBonus(bonHook, CalculateCargoHookPower(TCargoHook(Equipment)));
-        t_DefGenerator:
-          Result :=
-              EvaluateStatBonus(
-                  bonDef,
-                  Round(100 - CalculateDefGeneratorFactor(TDefGenerator(Equipment)) * 100)
-              );
-      end;
-    end
-    else if Byte(Equipment.ItemType) in [Ord(t_Weapon1)..Ord(t_CustomWeapon)] then
-    begin
-      Weapon := TWeapon(Equipment);
-      WeaponRange := GetWeaponRange(Weapon);
-      Damage := EstimateWeaponDamageAgainstTypicalDefense(Weapon);
-      Damage := EvaluateWeaponDamage(Weapon, True, Damage);
-      MinRange := WeaponRange;
-      for WeaponIndex := 1 to WeaponCount do
+  if Byte(Equipment.ItemType) in [Ord(t_Hull)..Ord(t_DefGenerator)] then
+  begin
+    case Equipment.ItemType of
+      t_Hull:
       begin
-        OtherRange := GetWeaponRange(Weapons[WeaponIndex]);
-        if OtherRange < MinRange then
-          MinRange := OtherRange;
+        CandidateHull := THull(Equipment);
+        Result := EvaluateStatBonus(bonHull, CalculateHullArmor(CandidateHull));
+        if GetHull <> CandidateHull then
+          Result :=
+              Result
+                  + EvaluateStatBonus(
+                      bonSlotRadar,
+                      CandidateHull.GetSlotCount(sskRadar) - GetHull.GetSlotCount(sskRadar))
+                  + EvaluateStatBonus(
+                      bonSlotScaner,
+                      CandidateHull.GetSlotCount(sskScanner) - GetHull.GetSlotCount(sskScanner))
+                  + EvaluateStatBonus(
+                      bonSlotDroid,
+                      CandidateHull.GetSlotCount(sskRepairRobot)
+                          - GetHull.GetSlotCount(sskRepairRobot))
+                  + EvaluateStatBonus(
+                      bonSlotHook,
+                      CandidateHull.GetSlotCount(sskCargoHook) - GetHull.GetSlotCount(sskCargoHook))
+                  + EvaluateStatBonus(
+                      bonSlotDef,
+                      CandidateHull.GetSlotCount(sskDefGenerator)
+                          - GetHull.GetSlotCount(sskDefGenerator))
+                  + EvaluateStatBonus(
+                      bonSlotWeapon,
+                      CandidateHull.GetSlotCount(sskWeapon) - GetHull.GetSlotCount(sskWeapon))
+                  + EvaluateStatBonus(
+                      bonSlotArt,
+                      CandidateHull.GetSlotCount(sskArtefact) - GetHull.GetSlotCount(sskArtefact))
+                  + EvaluateStatBonus(
+                      bonSlotForsage,
+                      CandidateHull.GetSlotCount(sskAfterburner)
+                          - GetHull.GetSlotCount(sskAfterburner))
+                  + Round(
+                      EvaluateStatBonus(bonMass, CalculateEquippedMass(nil))
+                          - EvaluateStatBonus(
+                              bonMass,
+                              CalculateEquippedMass(nil)
+                                  + CandidateHull.CalculateMass
+                                  - GetHull.CalculateMass));
       end;
-      DamageBonusKind :=
-          WeaponDamageClasses[
-                  Integer(ClassifyWeaponDamageFlags(Weapon.GetWeaponInfo.DamageFlags)) and $7F]
-              .BonusKind;
-      DamageValue := EvaluateStatBonus(TEquipmentBonusKind(DamageBonusKind), Round(Damage));
-      Result :=
-          Result + DamageValue * (1 + EvaluateStatBonus(bonWRadius, Round(WeaponRange)) * 0.002);
-      Result := Result + EvaluateStatBonus(bonWRadius, Round((WeaponRange + MinRange) * 0.5)) * 0.5;
-      if ((CurrentPlanet <> nil) or (DockedTo <> nil))
-          and (Byte(Weapon.GetWeaponInfo.ShotType) in [Ord(wstTorpedo)..Ord(wstRocket)]) then
+      t_FuelTanks: Result := EvaluateStatBonus(bonFuel, GetItemFuelTankCapacity(Equipment));
+      t_Engine:
         Result :=
-            Result
-                * (RemapClamped(Weapon.AmmoCapacity, 30, 100, 0, 0.5)
-                    + RemapClamped(Weapon.AmmoCapacity, 0, 30, 0, 0.5));
-    end
-    else
-    begin
-      Result := 1;
-      Galaxy.CustomRules.ChaoticRandom := SavedChaoticRandom;
-      Exit;
+            EvaluateStatBonus(
+                    bonSpeed,
+                    CalculateEngineSpeed(
+                        TEngine(Equipment),
+                        InNormalSpace or not CanRepairEquipmentTech(Equipment)
+                    ))
+                + EvaluateStatBonus(bonJump, CalculateEngineJumpRange(TEngine(Equipment)));
+      t_Radar: Result := EvaluateStatBonus(bonRadar, CalculateRadarRange(TRadar(Equipment)));
+      t_Scaner:
+        if GetRadar <> nil then
+          Result := EvaluateStatBonus(bonScan, CalculateScannerPower(TScaner(Equipment)));
+      t_RepairRobot:
+        Result := EvaluateStatBonus(bonDroid, CalculateRepairPoints(TRepairRobot(Equipment)));
+      t_CargoHook:
+        Result := EvaluateStatBonus(bonHook, CalculateCargoHookPower(TCargoHook(Equipment)));
+      t_DefGenerator:
+        Result :=
+            EvaluateStatBonus(
+                bonDef,
+                Round(100 - CalculateDefGeneratorFactor(TDefGenerator(Equipment)) * 100)
+            );
     end;
-
-    Result := Result + GetEquipmentEvaluationSynergyBonus(Equipment);
-  finally
-    EndStatQueryScope(StatScope);
+  end
+  else if Byte(Equipment.ItemType) in [Ord(t_Weapon1)..Ord(t_CustomWeapon)] then
+  begin
+    Weapon := TWeapon(Equipment);
+    WeaponRange := GetWeaponRange(Weapon);
+    Damage := EstimateWeaponDamageAgainstTypicalDefense(Weapon);
+    Damage := EvaluateWeaponDamage(Weapon, True, Damage);
+    MinRange := WeaponRange;
+    for WeaponIndex := 1 to WeaponCount do
+    begin
+      OtherRange := GetWeaponRange(Weapons[WeaponIndex]);
+      if OtherRange < MinRange then
+        MinRange := OtherRange;
+    end;
+    DamageBonusKind :=
+        WeaponDamageClasses[
+                Integer(ClassifyWeaponDamageFlags(Weapon.GetWeaponInfo.DamageFlags)) and $7F]
+            .BonusKind;
+    DamageValue := EvaluateStatBonus(TEquipmentBonusKind(DamageBonusKind), Round(Damage));
+    Result :=
+        Result + DamageValue * (1 + EvaluateStatBonus(bonWRadius, Round(WeaponRange)) * 0.002);
+    Result := Result + EvaluateStatBonus(bonWRadius, Round((WeaponRange + MinRange) * 0.5)) * 0.5;
+    if ((CurrentPlanet <> nil) or (DockedTo <> nil))
+        and (Byte(Weapon.GetWeaponInfo.ShotType) in [Ord(wstTorpedo)..Ord(wstRocket)]) then
+      Result :=
+          Result
+              * (RemapClamped(Weapon.AmmoCapacity, 30, 100, 0, 0.5)
+                  + RemapClamped(Weapon.AmmoCapacity, 0, 30, 0, 0.5));
+  end
+  else
+  begin
+    Result := 1;
+    Galaxy.CustomRules.ChaoticRandom := SavedChaoticRandom;
+    Exit;
   end;
+
+  Result := Result + GetEquipmentEvaluationSynergyBonus(Equipment);
   Galaxy.CustomRules.ChaoticRandom := SavedChaoticRandom;
   if ((Equipment.ScriptItem <> nil) and (TScriptItem(Equipment.ScriptItem).Name <> ''))
       or (Equipment.NoDropFlag > 0) then
