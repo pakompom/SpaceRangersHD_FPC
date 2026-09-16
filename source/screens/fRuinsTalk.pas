@@ -9050,7 +9050,9 @@ begin
     if not (I in Offers)
         and (SeededRandomUnitFloat(Seed) <= CaptainHealthDefinitions[I].InfectionChance) then
     begin
-      Include(Offers, I);
+      // CHANGE: PORTABILITY - FPC x86 Include on this register set (base 8) raises
+      // internal error 200306031; the set union compiles to the same result.
+      Offers := Offers + [I];
       Inc(OfferCount);
       if OfferCount > Max(2, (Rank shr 1) + 1) then
         Break;
