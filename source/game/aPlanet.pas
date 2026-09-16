@@ -5720,6 +5720,49 @@ begin
   Result := Selected;
 end;
 
+// Preserve the original shop-selection bug without an out-of-bounds read.
+// This helper is new; the addresses below belong to the original x86
+// TPlanet.RefreshEquipmentShopInventory in Rangers.exe (image base $400000):
+//   October 2025: routine $77E050, quota comparison $77E213,
+//                 planet table $87D0C4, following station table $87D178.
+//   August 2026:  routine $79354C, quota comparison $79370F,
+//                 planet table $87DBE4, following station table $87DC98.
+// Both originals compare the item count against the Integer at
+//   PlanetTable + 4 * (9 * Race + ItemType - 42).
+// The caller draws ItemType in 42..52, but each of the five race rows has
+// only nine entries: eight equipment categories and one shared weapon quota.
+// Types 51/52 therefore read columns 9/10, beyond their race's row:
+//   Races 0..3: the NEXT race's hull/fuel-tank quotas.
+//   Race 4: the first station row's hull/fuel-tank quotas (4 and 2).
+// In the latter case these are offsets 180/184 from a 180-byte planet table.
+// The first station row has Pascal index 6, hence Low(...), not index 0.
+//
+// Exact historical behavior, in Maloc/Peleng/Human/Feyan/Gaal race order:
+//   Type 50 counts ALL weapons (50..68), using quotas 6/5/5/4/4.
+//   Type 51 counts only shrapnel guns (Осколочное орудие), using 4/4/3/3/4.
+//   Type 52 counts only lezka weapons (Лезка), using 2/2/2/2/2.
+// The comparison is strictly count < quota. An accepted 51/52 still calls
+// the same GenerateWeaponOffer as 50, so it can produce any eligible weapon,
+// not necessarily the subtype whose count passed. Attempts 1..30 check the
+// quota; attempt 31 accepts its draw unconditionally in the caller.
+//
+// Keep the 42..52 draw and subtype counting unchanged for compatibility.
+// Mapping 51/52 to the shared weapon bucket would change shop assortment
+// and subsequent RNG consumption. These valid accesses reproduce the
+// original adjacent-table values without depending on linker/LTO layout.
+function LegacyPlanetShopQuota(Race, ItemType: Byte): Integer;
+begin
+  if ItemType <= Ord(t_Weapon1) then
+    Result := aConst.PlanetEquipmentOfferQuotas[Race][ItemType - Ord(t_Hull)]
+  else if Race < High(TPlanetEquipmentOfferQuotaTable) then
+    Result := aConst.PlanetEquipmentOfferQuotas[Race + 1][ItemType - Ord(t_Weapon1) - 1]
+  else if ItemType = Ord(t_Weapon1) + 1 then
+    Result := aConst.StationEquipmentOfferQuotas[Low(aConst.TStationEquipmentOfferQuotaTable)].Hulls
+  else
+    Result :=
+        aConst.StationEquipmentOfferQuotas[Low(aConst.TStationEquipmentOfferQuotaTable)].FuelTanks;
+end;
+
 procedure TPlanet.RefreshEquipmentShopInventory;
 var
   Index, Attempts: Integer;
@@ -5766,8 +5809,7 @@ begin
                 aGalaxy.Galaxy.CurrentTurn * GenerationSeed * 175 + Attempts
             );
       until (Attempts > 30)
-          or (CountEquipmentShopItemsInBucket(ItemType)
-              < aConst.PlanetEquipmentOfferQuotas[RaceId][ItemType - Ord(t_Hull)]);
+          or (CountEquipmentShopItemsInBucket(ItemType) < LegacyPlanetShopQuota(RaceId, ItemType));
       Item := GenerateEquipmentOffer(GetPlayer, ItemType);
       if Item <> nil then
       begin
@@ -6283,10 +6325,13 @@ begin
     if Item is TGoods then
       Score := Score + Item.Cost * aConst.GoodsMarket[Ord(Item.ItemType)].AveragePrice * 0.000001
     else if Byte(Item.ItemType) in [Ord(t_Weapon1)..Ord(t_CustomWeapon)] then
+      // Original x86 IMUL keeps only the signed low 32 bits before FILD:
+      // October 2025 $77F9B0, August 2026 $794EAC. Force the same truncation
+      // on 64-bit targets, especially for the pointer-valued custom-weapon
+      // result from GetAverageItemSize; widening changes the treasure hint.
       Score :=
           Score
-              + Item.Cost
-                  * GetAverageItemSize(Byte(Item.ItemType))
+              + LongInt(Item.Cost * GetAverageItemSize(Byte(Item.ItemType)))
                   / Math.Max(Item.Weight, 1)
                   * TEquipment(Item).GetLevel
                   * TWeapon(Item).GetWeaponInfo^.TechLevel

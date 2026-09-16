@@ -2597,8 +2597,30 @@ begin
     Ord(t_RepairRobot): Result := RepairRobotBaseSize;
     Ord(t_CargoHook): Result := CargoHookBaseSize;
     Ord(t_DefGenerator): Result := DefGeneratorBaseSize;
+    Ord(t_CustomWeapon):
+    begin
+      // Preserve the original x86 lookup's adjacent-field behavior explicitly.
+      // GetAverageItemSize: October 2025 $7DDFA4 (load at $7DE24A),
+      //                     August 2026 $82EC68 (load at $82EF0E).
+      // WeaponInfos has 18 records of $78 bytes, but type 68 reads a nineteenth
+      // record's AverageSize at offset $18: $88A9E8 / $88BDD0 respectively.
+      // This is 24 bytes beyond the table: four hull/wear integers, followed
+      // by GoodsMarketBase[Food].InternalName, DisplayName, then TradeName.
+      // The value read is therefore the TradeName WideString POINTER, not a
+      // weapon size or a character from the string. InitializeGameplayConfig
+      // copies this cached goods table once, after localizing the goods names.
+      // Before that copy (or with an empty trade name), the pointer is zero.
+      //
+      // Retain its signed 32-bit interpretation, taking the low 32 pointer
+      // bits on wider targets. The original result is address-dependent;
+      // there is no fixed numeric value shared by different processes.
+      // BuildNonCivilTreasureHintText also retains its original wrapping
+      // 32-bit cost multiplication. Using the custom weapon's actual size
+      // here would change that historical treasure-hint behavior.
+      Result := LongInt(Cardinal(PtrUInt(Pointer(GoodsMarketBase[Ord(t_Food)].TradeName))));
+    end;
   else
-    if ItemType in [Ord(t_Weapon1)..Ord(t_CustomWeapon)] then
+    if ItemType in [Ord(t_Weapon1)..Ord(t_Weapon18)] then
       Result := WeaponInfos[ItemType].AverageSize
     else
     begin
