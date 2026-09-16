@@ -18869,6 +18869,17 @@ begin
           ));
 end;
 
+{$IFDEF MSWINDOWS}
+// CHANGE: PORTABILITY - Windows has no libc DLL; gamenative forwards to UCRT.
+function UtilitySnprintf(
+    Buffer: PAnsiChar;
+    Size: SizeUInt;
+    Format: PAnsiChar
+): LongInt; cdecl; varargs; external 'gamenative' name 'sr_snprintf';
+
+// Only the first, standard lconv member (char *decimal_point) is needed.
+function UtilityLocaleConv: PPAnsiChar; cdecl; external 'gamenative' name 'sr_localeconv';
+{$ELSE}
 function UtilitySnprintf(
     Buffer: PAnsiChar;
     Size: SizeUInt;
@@ -18877,6 +18888,7 @@ function UtilitySnprintf(
 
 // Only the first, standard lconv member (char *decimal_point) is needed.
 function UtilityLocaleConv: PPAnsiChar; cdecl; external 'c' name 'localeconv';
+{$ENDIF}
 
 procedure SF_UFP_FloatToString(av: array of TVarEC; code: TCodeEC);
 var

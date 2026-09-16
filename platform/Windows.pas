@@ -372,14 +372,59 @@ function DeleteFile(Name: PAnsiChar): BOOL;
 implementation
 uses
   DateUtils,
+  {$IFDEF UNIX}
   BaseUnix,
   Unix,
+  {$ENDIF}
   SyncObjs,
   Classes,
   GameNative,
   Math;
 const
-  EventBase = $100000;
+  // CHANGE: PORTABILITY - Win64 kernel handles reach $4000000 (2^24 handles x 4); keep
+  // shim event handles above them, not just above small POSIX descriptors.
+  EventBase = {$IFDEF MSWINDOWS}$40000000{$ELSE}$100000{$ENDIF};
+{$IFDEF MSWINDOWS}
+// CHANGE: PORTABILITY - Files go straight to kernel32, keeping the original Win32 semantics.
+// Declared here rather than through the RTL Windows unit, which this shim's name shadows.
+function Win32CreateFileW(
+    Name: PWideChar;
+    Access, Share: DWORD;
+    Security: Pointer;
+    Creation, Attrs: DWORD;
+    Template: System.THandle
+): System.THandle; stdcall; external 'kernel32' name 'CreateFileW';
+function Win32ReadFile(
+    Handle: System.THandle;
+    var Buffer;
+    Count: DWORD;
+    var Done: DWORD;
+    Overlapped: Pointer
+): BOOL; stdcall; external 'kernel32' name 'ReadFile';
+function Win32WriteFile(
+    Handle: System.THandle;
+    const Buffer;
+    Count: DWORD;
+    var Done: DWORD;
+    Overlapped: Pointer
+): BOOL; stdcall; external 'kernel32' name 'WriteFile';
+function Win32CloseHandle(Handle: System.THandle): BOOL; stdcall; external 'kernel32' name 'CloseHandle';
+function Win32SetFilePointer(
+    Handle: System.THandle;
+    Distance: LongInt;
+    High: Pointer;
+    Origin: DWORD
+): DWORD; stdcall; external 'kernel32' name 'SetFilePointer';
+function Win32GetFileSize(Handle: System.THandle; High: Pointer): DWORD; stdcall; external 'kernel32' name 'GetFileSize';
+function Win32GetLastError: DWORD; stdcall; external 'kernel32' name 'GetLastError';
+function Win32MoveFileExW(
+    ExistingName, NewName: PWideChar;
+    Flags: DWORD
+): BOOL; stdcall; external 'kernel32' name 'MoveFileExW';
+const
+  Win32MoveFileReplaceExisting = $1;
+  Win32MoveFileWriteThrough = $8;
+{$ENDIF}
 var
   Events: array of TEvent;
   EventLock: TCriticalSection;
@@ -509,6 +554,15 @@ function CreateFileA(
     Creation, Attrs: DWORD;
     Template: THandle
 ): THandle;
+{$IFDEF MSWINDOWS}
+var
+  WideName: UnicodeString;
+begin
+  WideName := UTF8Decode(NativePath(Name));
+  // Handles are 32-bit significant on Win64, so the shim's Cardinal handle is lossless.
+  Result := THandle(Win32CreateFileW(PWideChar(WideName), Access, Share, Security, Creation, Attrs, 0))
+end;
+{$ELSE}
 var
   F: Integer;
 begin
@@ -522,6 +576,7 @@ begin
   end;
   Result := THandle(fpOpen(NativePath(Name), F, &644))
 end;
+{$ENDIF}
 function CreateFileW(
     Name: PWideChar;
     Access, Share: DWORD;
@@ -548,6 +603,11 @@ function ReadFile(
     var Done: DWORD;
     Overlapped: Pointer
 ): BOOL;
+{$IFDEF MSWINDOWS}
+begin
+  Result := Win32ReadFile(System.THandle(Handle), Buffer, Count, Done, Overlapped)
+end;
+{$ELSE}
 var
   N: Int64;
 begin
@@ -558,6 +618,7 @@ begin
   else
     Done := 0
 end;
+{$ENDIF}
 function WriteFile(
     Handle: THandle;
     const Buffer;
@@ -565,6 +626,11 @@ function WriteFile(
     var Done: DWORD;
     Overlapped: Pointer
 ): BOOL;
+{$IFDEF MSWINDOWS}
+begin
+  Result := Win32WriteFile(System.THandle(Handle), Buffer, Count, Done, Overlapped)
+end;
+{$ELSE}
 var
   N: Int64;
 begin
@@ -575,6 +641,7 @@ begin
   else
     Done := 0
 end;
+{$ENDIF}
 function CloseHandle(Handle: THandle): BOOL;
 begin
   Result := False;
@@ -596,8 +663,26 @@ begin
     end;
   end
   else
+{$IFDEF MSWINDOWS}
+    Result := Win32CloseHandle(System.THandle(Handle));
+{$ELSE}
     Result := fpClose(Integer(Handle)) = 0;
+{$ENDIF}
 end;
+{$IFDEF MSWINDOWS}
+function SetFilePointer(Handle: THandle; Distance: LongInt; High: Pointer; Origin: DWORD): DWORD;
+begin
+  Result := Win32SetFilePointer(System.THandle(Handle), Distance, High, Origin)
+end;
+function GetFileSize(Handle: THandle; High: Pointer): DWORD;
+begin
+  Result := Win32GetFileSize(System.THandle(Handle), High)
+end;
+function GetLastError: DWORD;
+begin
+  Result := Win32GetLastError
+end;
+{$ELSE}
 function SetFilePointer(Handle: THandle; Distance: LongInt; High: Pointer; Origin: DWORD): DWORD;
 begin
   Result := fpLseek(Integer(Handle), Distance, Origin)
@@ -615,6 +700,7 @@ function GetLastError: DWORD;
 begin
   Result := fpGetErrNo
 end;
+{$ENDIF}
 procedure Sleep(Ms: Cardinal);
 begin
   SysUtils.Sleep(Ms)
@@ -1089,6 +1175,22 @@ begin
   Result := SysUtils.DeleteFile(NativePath(AnsiString(Name)))
 end;
 function MoveFileW(OldName, NewName: PWideChar): BOOL;
+{$IFDEF MSWINDOWS}
+var
+  WideOld, WideNew: UnicodeString;
+begin
+  // CHANGE: PORTABILITY - Save commits rely on POSIX rename replacing the destination;
+  // plain Win32 MoveFile refuses an existing target, so every save overwrite failed.
+  WideOld := UTF8Decode(NativePath(UTF8Encode(WideString(OldName))));
+  WideNew := UTF8Decode(NativePath(UTF8Encode(WideString(NewName))));
+  Result :=
+      Win32MoveFileExW(
+          PWideChar(WideOld),
+          PWideChar(WideNew),
+          Win32MoveFileReplaceExisting or Win32MoveFileWriteThrough
+      )
+end;
+{$ELSE}
 begin
   Result :=
       SysUtils.RenameFile(
@@ -1096,6 +1198,7 @@ begin
           NativePath(UTF8Encode(WideString(NewName)))
       )
 end;
+{$ENDIF}
 procedure WideFindData(const A: TWin32FindDataA; out W: TWin32FindDataW);
 begin
   FillChar(W, SizeOf(W), 0);

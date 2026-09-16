@@ -14,7 +14,11 @@ uses
   fGameSettings2,
   CrashSymbols,
   WorkerErrors,
+  {$IFDEF UNIX}
   BaseUnix,
+  {$ELSE}
+  Process,
+  {$ENDIF}
   GameNative,
   Windows,
   SysUtils,
@@ -121,8 +125,14 @@ begin
     end;
     Candidate := ExcludeTrailingPathDelimiter(ExtractFileDir(Candidate));
   end;
+{$IFDEF MSWINDOWS}
+  // CHANGE: PORTABILITY - Use a Windows profile apart from the original game's Documents folder.
+  UserDirectory :=
+      UTF8Encode(SysUtils.GetEnvironmentVariable(UnicodeString('APPDATA'))) + '\SpaceRangersHD';
+{$ELSE}
   UserDirectory :=
       SysUtils.GetEnvironmentVariable('HOME') + '/Library/Application Support/SpaceRangersHD';
+{$ENDIF}
   SelectedLanguage := 'russian';
   for I := 1 to ParamCount do
   begin
@@ -415,6 +425,9 @@ var
   ErrorText: AnsiString;
   RestartText: array[0..4] of AnsiString;
   RestartArgs: array[0..5] of PAnsiChar;
+{$IFDEF MSWINDOWS}
+  Restarter: TProcess;
+{$ENDIF}
   I: Integer;
 begin
   StartupStage := 'options and user directory';
@@ -511,11 +524,24 @@ begin
       RestartText[4] := '--renderer=sdl'
     else
       RestartText[4] := '--renderer=software';
+{$IFDEF MSWINDOWS}
+    // CHANGE: PORTABILITY - Windows has no exec; start a fresh process and let this one exit.
+    Restarter := TProcess.Create(nil);
+    try
+      Restarter.Executable := ExecutablePath;
+      for I := 1 to 4 do
+        Restarter.Parameters.Add(RestartText[I]);
+      Restarter.Execute;
+    finally
+      Restarter.Free
+    end;
+{$ELSE}
     for I := 0 to 4 do
       RestartArgs[I] := PAnsiChar(RestartText[I]);
     RestartArgs[5] := nil;
     fpExecV(PAnsiChar(ExecutablePath), @RestartArgs[0]);
     raise Exception.Create('Cannot restart game: ' + SysErrorMessage(fpGetErrNo));
+{$ENDIF}
 {$ENDIF}
 
   end;

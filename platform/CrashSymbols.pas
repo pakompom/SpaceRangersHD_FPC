@@ -9,10 +9,12 @@ function DescribeCodeAddress(Address: Pointer): AnsiString;
 implementation
 
 uses
-  SysUtils,
+  {$IFDEF DARWIN}
   Classes,
   Process,
-  DL;
+  DL,
+  {$ENDIF}
+  SysUtils;
 
 var
   RuntimeBackTrace: TBackTraceStrFunc;
@@ -22,10 +24,13 @@ threadvar
 
 function DescribeCodeAddress(Address: Pointer): AnsiString;
 var
+  Raw: AnsiString;
+  {$IFDEF DARWIN}
   Info: dl_info;
   Symbolizer: TProcess;
   Output: TStringList;
-  Raw, Resolved: AnsiString;
+  Resolved: AnsiString;
+  {$ENDIF}
 begin
   Raw := '$' + IntToHex(PtrUInt(Address), SizeOf(Pointer) * 2);
   Result := Raw;
@@ -35,6 +40,7 @@ begin
   try
     try
       Result := RuntimeBackTrace(Address);
+      {$IFDEF DARWIN}
       // CHANGE: BUGFIX - Fall back when FPC cannot read the Mach-O/DWARF symbols.
       if Trim(Result) <> Raw then
         Exit;
@@ -70,6 +76,10 @@ begin
       finally
         Symbolizer.Free;
       end;
+      {$ELSE}
+      // CHANGE: PORTABILITY - Windows has no dladdr or atos; the RTL reads the
+      // PE/DWARF line info itself, so the backtrace function is the whole story.
+      {$ENDIF}
     except
       // Reporting must never replace the original exception.
       Result := Raw;

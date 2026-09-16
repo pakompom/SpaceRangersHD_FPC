@@ -6,10 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#ifndef _WIN32
 #include <sys/resource.h>
+#endif
 #ifdef __APPLE__
 #include <mach/mach.h>
-#else
+#elif !defined(_WIN32)
 #include <sys/sysinfo.h>
 #include <unistd.h>
 #endif
@@ -810,6 +812,8 @@ double sr_music_remaining(void *p) {
 #include <sys/sysctl.h>
 #include <mach/mach.h>
 #endif
+/* Windows reads memory in windows_native.c, keeping <windows.h> out of this unit. */
+#ifndef _WIN32
 void sr_memory(uint64_t *total, uint64_t *available) {
 #ifdef __APPLE__
     size_t size = sizeof(*total);
@@ -833,6 +837,7 @@ void sr_memory(uint64_t *total, uint64_t *available) {
     }
 #endif
 }
+#endif
 
 #include <stdio.h>
 #include <setjmp.h>

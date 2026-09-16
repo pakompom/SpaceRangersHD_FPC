@@ -19,25 +19,31 @@ implementation
 uses
   SysUtils;
 
+// CHANGE: PORTABILITY - zlib's uLong is C long: 32-bit on Windows (LLP64), in zlib1.dll.
+type
+  ZULong = {$IFDEF MSWINDOWS}Cardinal{$ELSE}QWord{$ENDIF};
+const
+  ZLibName = {$IFDEF MSWINDOWS}'zlib1'{$ELSE}'z'{$ENDIF};
+
 function uncompress(
     Dest: Pointer;
-    var DestSize: QWord;
+    var DestSize: ZULong;
     Source: Pointer;
-    SourceSize: QWord
-): Integer; cdecl; external 'z';
+    SourceSize: ZULong
+): Integer; cdecl; external ZLibName;
 function compress2(
     Dest: Pointer;
-    var DestSize: QWord;
+    var DestSize: ZULong;
     Source: Pointer;
-    SourceSize: QWord;
+    SourceSize: ZULong;
     Level: Integer
-): Integer; cdecl; external 'z';
-function compressBound(Size: QWord): QWord; cdecl; external 'z';
+): Integer; cdecl; external ZLibName;
+function compressBound(Size: ZULong): ZULong; cdecl; external ZLibName;
 
 function OKGF_ZLib_Compress(Dest, Source: Pointer; SourceSize, Mode: Integer): Integer; stdcall;
 
 var
-  N: QWord;
+  N: ZULong;
   Temp: Pointer;
   Level: Integer;
 
@@ -75,7 +81,7 @@ function OKGF_ZLib_UnCompress(
 ): Integer; stdcall;
 
 var
-  N: QWord;
+  N: ZULong;
   Expected: Cardinal;
   Magic: Cardinal;
 

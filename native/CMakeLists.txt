@@ -20,10 +20,21 @@ else()
       CACHE STRING "OKGF arithmetic backend" FORCE)
 endif()
 add_subdirectory("${OKGF_ROOT}" okgf)
-set_target_properties(okgf PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+# Windows DLLs are runtime artifacts, not library ones.
+set_target_properties(okgf PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+                                      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 if(APPLE)
   set_target_properties(okgf PROPERTIES BUILD_WITH_INSTALL_NAME_DIR YES INSTALL_NAME_DIR "@rpath")
 endif()
 if(ANDROID)
   target_link_options(okgf PRIVATE "-Wl,-z,max-page-size=16384")
+endif()
+# MinGW GCC flags SoftFloat's x86-64 __int128 path under -Wpedantic; keep warnings visible
+# but not fatal. Appended after OKGF's own -Werror, so it takes precedence.
+if(MINGW)
+  foreach(target okgf okgf_softfloat)
+    if(TARGET ${target})
+      target_compile_options(${target} PRIVATE -Wno-error)
+    endif()
+  endforeach()
 endif()
