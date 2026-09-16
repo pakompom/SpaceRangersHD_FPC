@@ -131,11 +131,12 @@ def pascal_flags(release: bool, *platform_paths: Path) -> list[str]:
     ]
 
 
-def build_macos(release: bool, rebuild: bool = False) -> Path:
-    compiler, compiler_flags = prepare_compiler("macos", run_step)
+def build_macos(release: bool, rebuild: bool = False, *, lto: bool = False) -> Path:
+    compiler, compiler_flags = prepare_compiler("macos", run_step, lto=lto)
     clang = require_tool("clang")
     sdk = output("xcrun", "--show-sdk-path")
-    work = ROOT / ".local" / ("release" if release else "debug")
+    configuration = ("release" if release else "debug") + ("-lto" if lto else "")
+    work = ROOT / ".local" / configuration
     app = work / "Space Rangers HD.app"
     libraries = app / "Contents/MacOS"
     units = work / "units"
@@ -168,6 +169,8 @@ def build_macos(release: bool, rebuild: bool = False) -> Path:
         compiler, *compiler_flags, *pascal_flags(release), "-Aclang-llvm-darwin",
         f"-FU{units}", f"-FE{libraries}", f"-Fl{libraries}",
         "-k-lgamenative", "-k-lokgf", "-k-lz", "-k-rpath", "-k@executable_path", f"-XR{sdk}",
+        # Retain the linker's generated object so dsymutil can read LTO DWARF.
+        *(["-k-object_path_lto", f"-k{work / 'lto.o'}"] if lto else []),
         ROOT / "source/Rangers.dpr",
     ], rebuild)  # fmt: skip
     for name in ("Rangers", "libgamenative.dylib", "libokgf.dylib"):
@@ -340,16 +343,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=("macos", "android"), default="macos")
     parser.add_argument("--release", action="store_true", help="Build an optimized release.")
+    parser.add_argument("--lto", action="store_true", help="Enable LTO in a separate macOS build.")
     parser.add_argument(
         "--rebuild", action="store_true", help="Rebuild all game units and native code."
     )
     args = parser.parse_args()
+    if args.lto and args.target != "macos":
+        parser.error("--lto is currently supported only for macOS builds.")
     try:
-        build = build_android if args.target == "android" else build_macos
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
         resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, desired), hard))
-        artifact = build(args.release, args.rebuild)
+        if args.target == "android":
+            artifact = build_android(args.release, args.rebuild)
+        else:
+            artifact = build_macos(args.release, args.rebuild, lto=args.lto)
     except subprocess.CalledProcessError as error:
         parser.exit(1, error.output or str(error))
     except (OSError, RuntimeError) as error:

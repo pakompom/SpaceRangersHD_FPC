@@ -31,9 +31,11 @@ def matches(path: Path, revision: str) -> bool:
 
 
 def prepare_compiler(
-    target: str, run_step, toolchain: Path | None = None
+    target: str, run_step, toolchain: Path | None = None, *, lto: bool = False
 ) -> tuple[Path, list[str]]:
-    """Use one host compiler with a separate runtime for each target."""
+    """Use one host compiler with separate native and LTO runtimes."""
+    if lto and target != "macos":
+        raise ValueError("LTO is currently supported only for macOS builds.")
     if not (VENDOR / "compiler/pp.pas").is_file():
         raise FileNotFoundError(
             "Initialize dependencies with: git submodule update --init --recursive"
@@ -58,29 +60,53 @@ def prepare_compiler(
         stamp.write_text(revision)
 
     system = "android" if target == "android" else "darwin"
-    units = SOURCE / "rtl/units" / f"aarch64-{system}"
+    sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
+    runtime = WORK / "runtime" / (f"aarch64-{system}" + ("-lto" if lto else ""))
+    runtime_source = runtime / "src"
+    units = runtime_source / "rtl/units" / f"aarch64-{system}"
+    options = ["-O2", *LLVM_FLAGS, "-dCLASSESINLINE"]
     if target == "android":
         if toolchain is None:
             raise RuntimeError("Android runtime compilation requires the NDK.")
-        stamp = WORK / "android.stamp"
-        runtime_revision = revision + str(toolchain)
-        if not (units / "system.ppu").is_file() or not matches(stamp, runtime_revision):
-            stamp.unlink(missing_ok=True)
-            if units.exists():
-                shutil.rmtree(units)
-            units.mkdir(parents=True)
+        options += ["-Cg", "-Aclang-llvm", "-XP"]
+        target_flags = [
+            "CPU_TARGET=aarch64",
+            "OS_TARGET=android",
+            "BINUTILSPREFIX=",
+            f"CROSSBINDIR={toolchain}",
+        ]
+    else:
+        options += ["-Aclang-llvm-darwin", f"-XR{sdk}"]
+        target_flags = []
+    if lto:
+        options.append("-Clflto")
+    stamp = runtime / "runtime.stamp"
+    runtime_revision = revision + repr((options, target_flags))
+    if not (units / "classes.ppu").is_file() or not matches(stamp, runtime_revision):
+        runtime.mkdir(parents=True, exist_ok=True)
+        stamp.unlink(missing_ok=True)
+        if runtime_source.exists():
+            shutil.rmtree(runtime_source)
+        # Do not alter the native RTL used to bootstrap the compiler. Each
+        # runtime profile starts from source and gets its own PPUs/objects.
+        shutil.copytree(
+            SOURCE / "rtl", runtime_source / "rtl", ignore=shutil.ignore_patterns("units")
+        )
+        for name in ("compiler", "packages"):
+            (runtime_source / name).symlink_to(SOURCE / name, target_is_directory=True)
+        units.mkdir(parents=True, exist_ok=True)
+        if target == "android":
             for loader in ("prt0", "dllprt0"):
-                run_step(WORK, loader, [
+                run_step(runtime, loader, [
                     toolchain / "clang", "--target=aarch64-linux-android26", "-c",
                     "-x", "assembler", "-Wa,-defsym,CPU64=1",
-                    SOURCE / f"rtl/android/{loader}.as", "-o", units / f"{loader}.o",
+                    runtime_source / f"rtl/android/{loader}.as", "-o", units / f"{loader}.o",
                 ])  # fmt: skip
-            run_step(WORK, "android-runtime", [
-                "gmake", "-C", SOURCE, "rtl_all", "CPU_TARGET=aarch64", "OS_TARGET=android",
-                f"FPC={compiler}", "BINUTILSPREFIX=", f"CROSSBINDIR={toolchain}",
-                "OPT=-O2 -Cg -Clv17.0 -Aclang-llvm -XP",
-            ])  # fmt: skip
-            stamp.write_text(runtime_revision)
+        run_step(runtime, "runtime", [
+            "gmake", "-C", runtime_source / "rtl", "all", *target_flags,
+            f"FPC={compiler}", "OPT=" + " ".join(options),
+        ])  # fmt: skip
+        stamp.write_text(runtime_revision)
 
     packages = VENDOR / "packages"
     paths = [
@@ -91,6 +117,6 @@ def prepare_compiler(
         packages / "fcl-process/src",
     ]
     return compiler, [
-        "-n", *LLVM_FLAGS, *(f"-Fu{path}" for path in paths),
+        "-n", *LLVM_FLAGS, *(["-Clflto"] if lto else []), *(f"-Fu{path}" for path in paths),
         f"-Fi{packages}/fcl-process/src/unix",
     ]  # fmt: skip

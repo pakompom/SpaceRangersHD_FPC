@@ -17,6 +17,9 @@
 
 ## Performance
 
+- Inline RTL list operations in normal builds, with `noreturn` on the list error
+  routine. Offer macOS LTO separately through `--lto`, using isolated build and
+  runtime caches. [Build options](BUILDING.md).
 - Reuse equipment queries during read-only calculations. [BeginStatQueryScope](source/game/aShip.pas#L914).
 - Cache sequential compressed-package reads. [TPackFileEC.ReadEntrySlot](source/resources/EC_HsFile.pas#L540).
 - Cache star-hover thumbnails within a turn. [TfStarMap.LoadStarThumbnail](source/screens/fStarMap.pas#L385).

@@ -11,6 +11,20 @@ bootstrap compiler. The same generated compiler serves macOS and Android, with
 a runtime compiled for each target. Pascal compiles through LLVM IR and Clang;
 C code also uses Clang.
 
+All builds use an RTL compiled with `CLASSESINLINE`; the pinned FPC also marks
+the list error routine `noreturn`, allowing safe list accesses to optimize better.
+macOS link-time optimization is a separate opt-in. Pass `--lto` to both scripts:
+
+```sh
+./tools/build.py --release --lto
+./tools/run.py --release --lto
+```
+
+Normal builds keep their existing output paths. LTO builds use `.local/release-lto/`
+or `.local/debug-lto/`, with separate RTL and game-unit caches. Switching between
+them does not rebuild the compiler or overwrite the other configuration.
+LTO takes longer to link. Android currently builds without LTO.
+
 ```sh
 git submodule update --init --recursive
 ./tools/build.py
