@@ -382,12 +382,19 @@ begin
   Result := (Round(Value) div 100) * 100;
 end;
 
+// FPC rejects an explicit Single or Double to Extended cast on x86 targets; an
+// implicit widening assignment performs the same promotion.
+function Widen(Value: Double): Extended; inline;
+begin
+  Result := Value;
+end;
+
 function PointFromRadiusAngle(Radius, Angle: Single): TPointF;
 var
   Sine, Cosine: Extended;
 begin
   // FSINCOS kept both values at extended precision until the final Single stores.
-  SinCos(Extended(Angle), Sine, Cosine);
+  SinCos(Widen(Angle), Sine, Cosine);
   Result.X := Radius * Cosine;
   Result.Y := Radius * Sine;
 end;
@@ -396,7 +403,7 @@ function OffsetPointByRadiusAngle(Origin: TPointF; Radius, Angle: Single): TPoin
 var
   Sine, Cosine: Extended;
 begin
-  SinCos(Extended(Angle), Sine, Cosine);
+  SinCos(Widen(Angle), Sine, Cosine);
   Result.X := Radius * Cosine + Origin.X;
   Result.Y := Radius * Sine + Origin.Y;
 end;
@@ -405,7 +412,7 @@ function RotateAndTranslatePoint(Point, Translation: TPointF; Angle: Single): TP
 var
   Sine, Cosine: Extended;
 begin
-  SinCos(Extended(Angle), Sine, Cosine);
+  SinCos(Widen(Angle), Sine, Cosine);
   Result.X := Point.X * Cosine - Point.Y * Sine + Translation.X;
   Result.Y := Point.Y * Cosine + Point.X * Sine + Translation.Y;
 end;
@@ -414,7 +421,7 @@ function PolarToPoint(Polar: TPolarPoint): TPointF;
 var
   Sine, Cosine: Extended;
 begin
-  SinCos(Extended(Polar.AngleDegrees) * PolarDegreesToRadians, Sine, Cosine);
+  SinCos(Widen(Polar.AngleDegrees) * PolarDegreesToRadians, Sine, Cosine);
   Result.Y := -(Polar.Radius * Cosine);
   Result.X := Polar.Radius * Sine;
 end;

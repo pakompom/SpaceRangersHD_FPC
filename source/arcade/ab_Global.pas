@@ -853,6 +853,13 @@ begin
         Result[I, J] := Left[K, J] * Right[I, K] + Result[I, J];
 end;
 
+// FPC rejects an explicit Double to Extended cast on x86 targets; an implicit
+// widening assignment performs the same promotion and keeps x87 precision.
+function Widen(Value: Double): Extended; inline;
+begin
+  Result := Value;
+end;
+
 function ProjectPointByMatrix(const Matrix: TMatrix4D; const Source: TVector3D): TVector3D;
 var
   InverseW: Extended;
@@ -860,27 +867,27 @@ begin
   // Preserve the x87 addition order and its single division followed by multiplies.
   InverseW :=
       1
-          / (Extended(Matrix[0, 3]) * Source.X
-              + Extended(Matrix[1, 3]) * Source.Y
-              + Extended(Matrix[2, 3]) * Source.Z
+          / (Widen(Matrix[0, 3]) * Source.X
+              + Widen(Matrix[1, 3]) * Source.Y
+              + Widen(Matrix[2, 3]) * Source.Z
               + Matrix[3, 3]);
   Result.X :=
-      (Extended(Matrix[0, 0]) * Source.X
-              + Extended(Matrix[1, 0]) * Source.Y
-              + Extended(Matrix[2, 0]) * Source.Z
+      (Widen(Matrix[0, 0]) * Source.X
+              + Widen(Matrix[1, 0]) * Source.Y
+              + Widen(Matrix[2, 0]) * Source.Z
               + Matrix[3, 0])
           * InverseW;
   Result.Y :=
-      (Extended(Matrix[0, 1]) * Source.X
-              + Extended(Matrix[1, 1]) * Source.Y
-              + Extended(Matrix[2, 1]) * Source.Z
+      (Widen(Matrix[0, 1]) * Source.X
+              + Widen(Matrix[1, 1]) * Source.Y
+              + Widen(Matrix[2, 1]) * Source.Z
               + Matrix[3, 1])
           * InverseW;
   // Z unwinds the remaining x87 stack in a different order from X and Y.
   Result.Z :=
-      (Extended(Matrix[1, 2]) * Source.Y
-              + (Extended(Matrix[0, 2]) * Source.X
-                  + (Extended(Matrix[2, 2]) * Source.Z + Matrix[3, 2])))
+      (Widen(Matrix[1, 2]) * Source.Y
+              + (Widen(Matrix[0, 2]) * Source.X
+                  + (Widen(Matrix[2, 2]) * Source.Z + Matrix[3, 2])))
           * InverseW;
 end;
 

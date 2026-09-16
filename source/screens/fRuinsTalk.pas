@@ -9094,7 +9094,9 @@ var
   I, OfferCount, Cost, Duration, MaxStimulants, LawStimulants: Integer;
   Seed: Cardinal;
   Text, StimulantText, Key: WideString;
-  Offers: set of 8..39;
+  // Zero-based set: the x86 code generator fails with an internal error on
+  // "in"/"Include" for a set whose base is not zero (set of 8..39).
+  Offers: set of 0..39;
   Rank: Byte;
   Bonus: Integer;
 begin

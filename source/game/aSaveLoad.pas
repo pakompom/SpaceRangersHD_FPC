@@ -64,6 +64,7 @@ uses
   aMyFunction,
   aGalaxyStruct,
   aKling,
+  GameEvents,
   Types,
   SysUtils,
   EC_File,
