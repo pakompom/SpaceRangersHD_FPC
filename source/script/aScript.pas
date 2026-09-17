@@ -755,6 +755,7 @@ uses
   GI_MessageLoop,
   GI_MessageBox,
   GI_XviD,
+  GameEvents,
   GameSystem,
   Robot,
   fPanelMain,

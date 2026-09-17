@@ -52,6 +52,70 @@ uses
   SysUtils,
   Math;
 
+{$IFDEF MSWINDOWS}
+// The game ships libvorbisfile.dll — the upstream library name, and the one the
+// engine itself loads. FPC's oggvorbis package binds 'vorbisfile.dll' instead,
+// so the four entry points used here are declared against the game's library.
+const
+  VorbisFileLibrary = 'libvorbisfile.dll';
+
+function VorbisClear(var Vf: OggVorbis_File): cint; cdecl;
+  external VorbisFileLibrary name 'ov_clear';
+function VorbisInfo(var Vf: OggVorbis_File; Link: cint): pvorbis_info; cdecl;
+  external VorbisFileLibrary name 'ov_info';
+function VorbisOpenCallbacks(
+    Datasource: Pointer;
+    var Vf: OggVorbis_File;
+    Initial: Pointer;
+    InitialBytes: clong;
+    Callbacks: ov_callbacks
+): cint; cdecl; external VorbisFileLibrary name 'ov_open_callbacks';
+function VorbisRead(
+    var Vf: OggVorbis_File;
+    Buffer: Pointer;
+    Length: cint;
+    BigEndian: cbool;
+    WordSize: cint;
+    Signed: cbool;
+    Bitstream: pcint
+): clong; cdecl; external VorbisFileLibrary name 'ov_read';
+{$ELSE}
+// Other targets link libvorbisfile through the package's own declarations.
+function VorbisClear(var Vf: OggVorbis_File): cint; cdecl;
+begin
+  Result := ov_clear(Vf);
+end;
+
+function VorbisInfo(var Vf: OggVorbis_File; Link: cint): pvorbis_info; cdecl;
+begin
+  Result := ov_info(Vf, Link);
+end;
+
+function VorbisOpenCallbacks(
+    Datasource: Pointer;
+    var Vf: OggVorbis_File;
+    Initial: Pointer;
+    InitialBytes: clong;
+    Callbacks: ov_callbacks
+): cint; cdecl;
+begin
+  Result := ov_open_callbacks(Datasource, Vf, Initial, InitialBytes, Callbacks);
+end;
+
+function VorbisRead(
+    var Vf: OggVorbis_File;
+    Buffer: Pointer;
+    Length: cint;
+    BigEndian: cbool;
+    WordSize: cint;
+    Signed: cbool;
+    Bitstream: pcint
+): clong; cdecl;
+begin
+  Result := ov_read(Vf, Buffer, Length, BigEndian, WordSize, Signed, Bitstream);
+end;
+{$ENDIF}
+
 function ReadVorbisSource(Buffer: Pointer; Size, Count: csize_t; Source: Pointer): csize_t; cdecl;
 begin
   Result := 0;
@@ -89,7 +153,7 @@ begin
   Lock^.Enter;
   try
     if Opened then
-      ov_clear(VorbisState);
+      VorbisClear(VorbisState);
     Opened := False;
     Source := nil;
   finally
@@ -113,7 +177,7 @@ begin
   try
     Decoder.Source := Stream;
     Decoder.ReadFailure := '';
-    Result := ov_open_callbacks(Decoder, Decoder.VorbisState, nil, 0, Callbacks);
+    Result := VorbisOpenCallbacks(Decoder, Decoder.VorbisState, nil, 0, Callbacks);
     Decoder.Opened := Result = 0;
     if Decoder.ReadFailure <> '' then
       raise Exception.Create(Decoder.ReadFailure);
@@ -121,7 +185,7 @@ begin
       raise Exception.Create('Error open audiofile: ' + IntToStr(Result));
     Decoder.Opened := True;
     Decoder.Bitstream := 0;
-    Info := ov_info(Decoder.VorbisState, -1);
+    Info := VorbisInfo(Decoder.VorbisState, -1);
     if (Info = nil) or not (Info.channels in [1, 2]) or (Info.rate <= 0) then
       raise Exception.Create('Unsupported Vorbis audio format');
     Format := Default(TSoundWaveFormat);
@@ -155,7 +219,7 @@ begin
       // Decode directly into the bounded destination. The original passed the
       // full remaining length for a fixed 4096-byte scratch buffer.
       Count :=
-          ov_read(
+          VorbisRead(
               Decoder.VorbisState,
               PByte(Buffer) + Total,
               Remaining,

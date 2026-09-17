@@ -91,6 +91,7 @@ implementation
 uses
   SysUtils,
   Math,
+  GameEvents,
   GameInput,
   fFilmFile,
   Globals,

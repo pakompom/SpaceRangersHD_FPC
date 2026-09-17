@@ -2343,11 +2343,17 @@ uses
   aMyFunction,
   MessageText,
   GlobalsV,
-  Math,
-  GameWindow,
 {$IFDEF MSWINDOWS}
+  // Math last on Windows: the Windows unit declares min/max for LongInt (windef
+  // macros), which would otherwise hide the Math overloads used with
+  // floating-point arguments here.
+  GameWindow,
   Windows,
   Registry,
+  Math,
+{$ELSE}
+  Math,
+  GameWindow,
 {$ENDIF}
   SysUtils;
 
@@ -2554,7 +2560,7 @@ end;
 constructor TCCInterface.Create;
 begin
   inherited Create;
-  Lock := TCriticalSection.Create;
+  Lock := SyncObjs.TCriticalSection.Create;
   Randomize;
   Buffer := TBufEC.Create;
   CommitSnapshot(CreateEmptySnapshot);
@@ -6987,7 +6993,7 @@ end;
 procedure AppendLogLineThreadSafe(const Text: AnsiString);
 begin
   if SessionLogLock = nil then
-    SessionLogLock := TCriticalSection.Create;
+    SessionLogLock := SyncObjs.TCriticalSection.Create;
   SessionLogLock.Enter;
   Append(SessionLog);
   Writeln(SessionLog, Text);
@@ -6998,7 +7004,7 @@ end;
 procedure AppendLogTextThreadSafe(const Text: AnsiString);
 begin
   if SessionLogLock = nil then
-    SessionLogLock := TCriticalSection.Create;
+    SessionLogLock := SyncObjs.TCriticalSection.Create;
   SessionLogLock.Enter;
   Append(SessionLog);
   Write(SessionLog, Text);
@@ -7011,7 +7017,7 @@ var
   Log: TextFile;
 begin
   if SessionLogLock = nil then
-    SessionLogLock := TCriticalSection.Create;
+    SessionLogLock := SyncObjs.TCriticalSection.Create;
   SessionLogLock.Enter;
   AssignFile(Log, '#####add.log');
   if not FileExists('#####add.log') then
@@ -7030,7 +7036,7 @@ begin
   if FileExists('#####add.log') then
   begin
     if SessionLogLock = nil then
-      SessionLogLock := TCriticalSection.Create;
+      SessionLogLock := SyncObjs.TCriticalSection.Create;
     SessionLogLock.Enter;
     AssignFile(Log, '#####add.log');
     Append(Log);
@@ -7045,7 +7051,7 @@ var
   F: TextFile;
 begin
   if SessionLogLock = nil then
-    SessionLogLock := TCriticalSection.Create;
+    SessionLogLock := SyncObjs.TCriticalSection.Create;
   SessionLogLock.Enter;
   AssignFile(F, NativeGamePath(FileName));
   Rewrite(F);

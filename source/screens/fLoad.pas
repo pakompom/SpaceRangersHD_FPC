@@ -78,6 +78,7 @@ implementation
 
 uses
   EC_CacheGAI,
+  GameEvents,
   GameInput,
   SysUtils,
   Math,
