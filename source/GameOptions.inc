@@ -11,3 +11,4 @@
 // Preserve Delphi arithmetic boundaries and evaluation order.
 {$LEGACYPC24 ON}
 {$DELPHIORDER ON}
+{$DELPHIINTEGER32 ON}
