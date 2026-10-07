@@ -2,11 +2,11 @@
 
 ## Requirements
 
-Build natively on Linux x86_64 or macOS ARM64. Linux ARM64 is recognized but unvalidated.
-Requires Python 3.10+, FPC 3.2.2, GNU Make, CMake 3.20+, pkg-config, and development
+Desktop builds use the host architecture on Linux and macOS: x86_64 or AArch64.
+Requires Python 3.10+, FPC 3.2.2, GNU Make, CMake 3.20+, pkg-config, Clang 14+, and development
 libraries for SDL2 2.26+ (or SDL2-compat), libogg, libvorbis, libjpeg, and libpng.
 
-- Linux: C11 compiler and binutils. LLVM builds also require `clang` and `ld.lld` (validated with 22.1.3).
+- Linux: binutils and `ld.lld` in addition to Clang.
 - macOS: Xcode command-line tools and Homebrew.
 
 AVI playback needs Xvid: `libxvidcore.so.4` on Linux, `xvidcore` on macOS.
@@ -24,13 +24,12 @@ The scripts detect the host OS; `--target=linux` or `--target=macos` selects it
 explicitly. Resources default to `game/` when `--game-dir` is omitted.
 
 - `--release`: `-O4` instead of the default `-O2`.
-- `--llvm`: LLVM backend on Linux; macOS uses LLVM by default.
-- `--lto`: Pascal link-time optimization, implying LLVM; unavailable on Android.
+- `--lto`: enable LLVM link-time optimization on Linux or macOS.
 - `--rebuild`: rebuild all game units and native code (build script only).
 
-Use matching `--release`, `--llvm`, and `--lto` options for build and run.
-Profiles are `debug` or `release`, followed by `-llvm` for Linux LLVM builds
-and `-lto` when enabled. Compiler/RTL caches live in `.local/fpc/`.
+Use matching `--target`, `--release` and `--lto` options for build and run.
+Desktop configurations are `debug` and `release`, with a `-lto` suffix when
+enabled; compiler and runtime caches live in `.local/fpc/<cpu>-<system>/`.
 
 | Platform | Output |
 | --- | --- |

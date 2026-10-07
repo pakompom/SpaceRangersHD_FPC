@@ -1,5 +1,5 @@
 /.local/
-/game/
+/game
 /build/
 .DS_Store
 ._*

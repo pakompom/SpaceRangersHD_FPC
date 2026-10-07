@@ -79,10 +79,10 @@ procedure FinalizePathNodePool;
 implementation
 
 uses
+  aBezierPC24,
   aMyFunction,
   EC_Mem,
   GR_Main,
-  Math,
   SysUtils;
 
 var
@@ -448,13 +448,13 @@ end;
 
 procedure TSPath.ResampleBezierRange(FirstNode, LastNode: PSPathNode; SampleCount: Integer);
 var
-  Coefficients: array of Double;
+  Coefficients: array of TBezierPC24Wide;
+  TPower, InvRemaining, RemainingPower, Weight, TWide: TBezierPC24Wide;
+  T, Step, Heading: Single;
+  X, Y, Angle: Double;
   Count: Integer;
-  Node, NewNode, AfterNode, EndNode: PSPathNode;
+  Node, NewNode, AfterNode: PSPathNode;
   Index, Sample: Integer;
-  Heading, Weight, X, Y, Angle, T, U: Double;
-  TPower, InvRemaining, RemainingPower: Extended;
-  Reverse: Boolean;
 begin
   Count := CountNodeRangeInclusive(FirstNode, LastNode);
   if Count < 2 then
@@ -463,11 +463,13 @@ begin
     Exit;
   AfterNode := LastNode.Next;
   SetLength(Coefficients, Count);
-  Coefficients[0] := 1;
-  Coefficients[Count - 1] := 1;
+  Coefficients[0] := BezierWide(1);
+  Coefficients[Count - 1] := BezierWide(1);
   for Index := 1 to (Count - 1) div 2 do
   begin
-    Coefficients[Index] := (Count - Index) * Coefficients[Index - 1] / Index;
+    Coefficients[Index] := BezierDiv(
+      BezierMul(BezierWide(Count - Index), Coefficients[Index - 1]),
+      BezierWide(Index));
     Coefficients[Count - 1 - Index] := Coefficients[Index];
   end;
   Heading := FirstNode.Heading;
@@ -488,59 +490,40 @@ begin
   Heading := Heading + LastNode.Heading;
   LastNode.Heading := Heading;
   T := 0;
+  Step := 1 / (SampleCount - 1);
   for Sample := 0 to SampleCount - 1 do
   begin
     X := 0;
     Y := 0;
     Angle := 0;
-    // CHANGE: PORTABILITY - $4DC030 stores powers in 80-bit x87 slots;
-    // the game's 24-bit precision mode still retains their wider exponent range.
-    // With Double-sized Extended, (1-T)^198 can underflow to zero for the
-    // 199 controls accepted by ship movement, losing all but the last weight.
-    // B_i,n(T) = B_n-i,n(1-T): reverse the controls and unwrapped headings
-    // after halfway so the initial power is at least 0.5^198 for those paths.
-    // Retain the original evaluation order where Extended has wider range.
-    Reverse := (SizeOf(Extended) = SizeOf(Double)) and (T > 0.5);
-    if Reverse then
-    begin
-      // Repeated T increments can put the final sample slightly above one.
-      U := Max(0.0, 1 - T);
-      Node := LastNode;
-      EndNode := FirstNode;
-    end
-    else
-    begin
-      U := T;
-      Node := FirstNode;
-      EndNode := LastNode;
-    end;
+    { Preserve the original forward accumulation. The normalized factors
+      retain the x87 exponent range even when the initial tail is < 2^-1074. }
+    Node := FirstNode;
     Index := 0;
-    TPower := 1;
-    InvRemaining := 1 / (1 - U);
-    RemainingPower := Power(1 - U, Count - 1);
-    while Node <> EndNode do
+    TPower := BezierWide(1);
+    InvRemaining := BezierDiv(BezierWide(1), BezierWide(1 - T));
+    RemainingPower := BezierPower(BezierWide(1 - T), Count - 1);
+    TWide := BezierWide(T);
+    while Node <> LastNode do
     begin
-      Weight := TPower * Coefficients[Index] * RemainingPower;
-      X := X + Weight * Node.Position.X;
-      Y := Y + Weight * Node.Position.Y;
-      Angle := Angle + Weight * Node.Heading;
+      Weight := BezierMul(BezierMul(TPower, Coefficients[Index]), RemainingPower);
+      X := BezierAddProduct(X, Weight, Node.Position.X);
+      Y := BezierAddProduct(Y, Weight, Node.Position.Y);
+      Angle := BezierAddProduct(Angle, Weight, Node.Heading);
       Inc(Index);
-      TPower := TPower * U;
-      RemainingPower := RemainingPower * InvRemaining;
-      if Reverse then
-        Node := Node.Prev
-      else
-        Node := Node.Next;
+      TPower := BezierMul(TPower, TWide);
+      RemainingPower := BezierMul(RemainingPower, InvRemaining);
+      Node := Node.Next;
     end;
-    Weight := TPower * Coefficients[Index];
-    X := X + Weight * Node.Position.X;
-    Y := Y + Weight * Node.Position.Y;
-    Angle := Angle + Weight * Node.Heading;
+    Weight := BezierMul(TPower, Coefficients[Index]);
+    X := BezierAddProduct(X, Weight, Node.Position.X);
+    Y := BezierAddProduct(Y, Weight, Node.Position.Y);
+    Angle := BezierAddProduct(Angle, Weight, Node.Heading);
     NewNode := InsertNodeBefore(AfterNode);
     NewNode.Position.X := X;
     NewNode.Position.Y := Y;
     NewNode.Heading := WrapHeadingDegrees(Angle);
-    T := T + 1 / (SampleCount - 1);
+    T := T + Step;
   end;
   if AfterNode = nil then
     NewNode := ActiveTail

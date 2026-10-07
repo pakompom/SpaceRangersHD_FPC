@@ -209,33 +209,28 @@ def build_macos(release: bool, rebuild: bool = False, *, lto: bool = False) -> P
     return app
 
 
-def build_linux(
-    release: bool, rebuild: bool = False, *, llvm: bool = False, lto: bool = False
-) -> Path:
-    llvm = llvm or lto
-    work = desktop_directory(ROOT, "linux", release, lto, llvm=llvm)
+def build_linux(release: bool, rebuild: bool = False, *, lto: bool = False) -> Path:
+    work = desktop_directory(ROOT, "linux", release, lto)
     libraries, units = (work / name for name in ("bin", "units"))
     for directory in (libraries, units):
         directory.mkdir(parents=True, exist_ok=True)
     # Check system dependencies before the more expensive compiler bootstrap.
     require_tool("cmake")
     require_tool("pkg-config")
-    if llvm:
-        require_tool("clang")
-        require_tool("ld.lld")
+    require_tool("clang")
+    require_tool("ld.lld")
     subprocess.run(
         ["pkg-config", "--print-errors", "--exists", "sdl2 >= 2.26", "vorbisfile", "ogg"],
         check=True,
     )
     native = build_okgf(work, release, rebuild=rebuild)
     shutil.copy2(native / "libokgf.so", libraries)
-    compiler, compiler_flags = prepare_compiler("linux", run_step, llvm=llvm, lto=lto)
-    if llvm:
-        # FPC's LLVM exception runtime uses libgcc; -n disables system fpc.cfg.
-        libgcc = Path(output("clang", "-print-libgcc-file-name"))
-        if not libgcc.is_file():
-            raise FileNotFoundError("Clang cannot locate libgcc; install the GCC runtime.")
-        compiler_flags += [f"-Fl{libgcc.parent}"]
+    compiler, compiler_flags = prepare_compiler("linux", run_step, lto=lto)
+    # FPC's LLVM exception runtime uses libgcc; -n disables system fpc.cfg.
+    libgcc = Path(output("clang", "-print-libgcc-file-name"))
+    if not libgcc.is_file():
+        raise FileNotFoundError("Clang cannot locate libgcc; install the GCC runtime.")
+    compiler_flags += [f"-Fl{libgcc.parent}"]
     paszlib = build_paszlib(work, compiler, compiler_flags, rebuild)
     # CMake finds C libraries; FPC needs the corresponding native search paths.
     library_flags = shlex.split(output("pkg-config", "--libs-only-L", "sdl2", "vorbisfile"))
@@ -399,7 +394,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=("linux", "macos", "android"), default=desktop_target())
     parser.add_argument("--release", action="store_true", help="Build an optimized release.")
-    parser.add_argument("--llvm", action="store_true", help="Use the LLVM backend on Linux.")
     parser.add_argument("--lto", action="store_true", help="Enable LLVM LTO (Linux or macOS).")
     parser.add_argument(
         "--rebuild", action="store_true", help="Rebuild all game units and native code."
@@ -407,8 +401,6 @@ def main() -> None:
     args = parser.parse_args()
     if args.lto and args.target == "android":
         parser.error("--lto is currently supported only for Linux and macOS builds.")
-    if args.llvm and args.target != "linux":
-        parser.error("--llvm selects the optional Linux backend; other targets already use LLVM.")
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
@@ -416,7 +408,7 @@ def main() -> None:
         if args.target == "android":
             artifact = build_android(args.release, args.rebuild)
         elif args.target == "linux":
-            artifact = build_linux(args.release, args.rebuild, llvm=args.llvm, lto=args.lto)
+            artifact = build_linux(args.release, args.rebuild, lto=args.lto)
         else:
             artifact = build_macos(args.release, args.rebuild, lto=args.lto)
     except subprocess.CalledProcessError as error:
