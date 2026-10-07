@@ -132,6 +132,7 @@ def pascal_flags(release: bool, *platform_paths: Path) -> list[str]:
     return [
         *PASCAL_FLAGS,
         "-O4" if release else "-O2",
+        *(["-OoAUTOINLINE"] if release else []),
         # -O4 enables field reordering and fast math; override it afterward.
         "-OoNOORDERFIELDS",
         "-OoNOFASTMATH",
