@@ -6,6 +6,9 @@ unit GR_Main;
 interface
 
 uses
+{$IFDEF MSWINDOWS}
+  Windows,
+{$ENDIF}
   GameSystem,
   GR_Music,
   DirectSound,
@@ -2338,7 +2341,7 @@ uses
   SDL2,
   GI_Main,
   DirectXRenderException,
-{$IFDEF MSWINDOWS}
+{$IF Defined(MSWINDOWS) and not Defined(FPC)}
   TlHelp32,
 {$ENDIF}
   aPacket,
@@ -2354,7 +2357,6 @@ uses
   Math,
   GameWindow,
 {$IFDEF MSWINDOWS}
-  Windows,
   Registry,
 {$ENDIF}
   SysUtils;
@@ -2379,7 +2381,11 @@ var
   Found: Boolean;
   DllSuffix: WideString;
   SteamClientPath: AnsiString;
+{$IFDEF FPC}
+  Entry: Windows.MODULEENTRY32;
+{$ELSE}
   Entry: TModuleEntry32;
+{$ENDIF}
 
   function MatchesModuleDirectoryPrefix(
       Prefix,
