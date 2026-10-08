@@ -14,6 +14,7 @@ function CreateGameSound(
     Outer: IInterface
 ): LongInt; stdcall;
 function EnumerateGameSound(Callback: TDSEnumCallback; Context: Pointer): LongInt; stdcall;
+procedure CheckGameSoundFailure(const Sound: IDirectSound);
 
 implementation
 
@@ -22,12 +23,18 @@ uses
   SysUtils,
   Math,
   SDL2,
-  GameEvents;
+  GameEvents,
+  EC_Thread;
 
 const
   MixerFrames = 1024;
 
 type
+  IGameSoundDiagnostics = interface(IInterface)
+    ['{6D04174B-C3F8-4212-BA71-6EDE1563A460}']
+    procedure CheckFailure;
+  end;
+
   TGameSound = class;
   TGameAudioMixer = class;
   TGameSoundBuffer = class(TInterfacedObject, IDirectSoundBuffer, IDirectSoundNotify)
@@ -83,12 +90,13 @@ type
         Positions: PDSPositionNotify
     ): LongInt; stdcall;
   end;
-  TGameSound = class(TInterfacedObject, IDirectSound)
+  TGameSound = class(TInterfacedObject, IDirectSound, IGameSoundDiagnostics)
     Device: Cardinal;
     Buffers: TFPList;
     MixerLock: TRTLCriticalSection;
     MixerLockReady: Boolean;
     Mixer: TGameAudioMixer;
+    procedure CheckFailure;
     procedure Lock;
     procedure Unlock;
     procedure Mix(Samples: PSingle; Frames: Integer);
@@ -111,7 +119,7 @@ type
     function Initialize(Guid: Pointer): LongInt; stdcall;
   end;
 
-  TGameAudioMixer = class(TThread)
+  TGameAudioMixer = class(TThreadEC)
     Owner: TGameSound;
     constructor Create(AOwner: TGameSound);
     procedure Execute; override;
@@ -131,7 +139,7 @@ end;
 
 constructor TGameAudioMixer.Create(AOwner: TGameSound);
 begin
-  inherited Create(True);
+  inherited Create;
   Owner := AOwner;
 end;
 
@@ -139,7 +147,7 @@ procedure TGameAudioMixer.Execute;
 var
   PCM: array[0..MixerFrames * 2 - 1] of Single;
 begin
-  while not Terminated do
+  while not IsStopRequested do
   begin
     if SDL_GetQueuedAudioSize(Owner.Device) > SizeOf(PCM) then
     begin
@@ -157,6 +165,20 @@ begin
     if SDL_QueueAudio(Owner.Device, @PCM[0], SizeOf(PCM)) < 0 then
       raise Exception.Create('Cannot queue audio: ' + string(SDL_GetError));
   end;
+end;
+
+procedure TGameSound.CheckFailure;
+begin
+  if Mixer <> nil then
+    Mixer.CheckFailure;
+end;
+
+procedure CheckGameSoundFailure(const Sound: IDirectSound);
+var
+  Diagnostics: IGameSoundDiagnostics;
+begin
+  if Supports(Sound, IGameSoundDiagnostics, Diagnostics) then
+    Diagnostics.CheckFailure;
 end;
 
 procedure TGameSound.Lock;
@@ -196,12 +218,8 @@ end;
 
 destructor TGameSound.Destroy;
 begin
-  if Mixer <> nil then
-  begin
-    Mixer.Terminate;
-    Mixer.WaitFor;
-    Mixer.Free;
-  end;
+  // Join before closing the SDL device, even after a reported mixer failure.
+  FreeAndNil(Mixer);
   if Device <> 0 then
     SDL_CloseAudioDevice(Device);
   if MixerLockReady then

@@ -5726,6 +5726,8 @@ begin
     while True do
     begin
       CheckGalaxyWorkerFailures;
+      if SoundManager <> nil then
+        CheckGameSoundFailure(SoundManager.DirectSound);
       if ExitScreenLoop then
       begin
         Result := 0;
