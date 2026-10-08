@@ -5778,8 +5778,12 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      raise Exception.Create(
-          'Error in procedure GR_WinMessage, label = ' + SysUtils.IntToStr(Stage));
+      E.Message :=
+          'Error in procedure GR_WinMessage, label = '
+              + SysUtils.IntToStr(Stage)
+              + ': '
+              + E.Message;
+      raise;
     end;
   end;
 end;

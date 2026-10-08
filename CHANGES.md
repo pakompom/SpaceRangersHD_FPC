@@ -4,6 +4,8 @@ This changelog records game-source changes for Free Pascal compatibility.
 
 - Honor requested windowed mode at desktop-sized and larger resolutions. Set
   explicit back-buffer dimensions and use SDL centering for oversized windows.
+- Preserve the original exception and raise address in `GR_WinMessage`, adding
+  the message-processing stage to its message.
 - Use each language's code as its settings label when its install file or
   `LangName` is missing, or the name is blank. Release the temporary language
   configuration if loading raises an exception.
