@@ -2115,7 +2115,6 @@ end;
 
 procedure TMessageLoopGI.Present;
 begin
-  StartupIntegrityMarker := 0;
   if ContinuousLoop then
   begin
     FullFrameRedrawRequested := True;

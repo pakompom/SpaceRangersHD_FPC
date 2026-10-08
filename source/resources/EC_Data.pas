@@ -324,7 +324,7 @@ const
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
-      (NameCrc: $DCE02C6E; FileCrc: $C4B43DA9; EncodedName: 'olerjj031goo'), // 'libogg-0.dll'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
@@ -947,7 +947,7 @@ const
           EncodedName: 'gdwd_txhvw_jhu_sulvrqbjhu1tpp'
       ), // 'data\quest\ger\prison_ger.qmm'
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
-      (NameCrc: $0C0B5D61; FileCrc: $14C8806D; EncodedName: 'oleyruelv031goo'), // 'libvorbis-0.dll'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (
@@ -1106,7 +1106,7 @@ const
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
-      (NameCrc: $DFE7B5A4; FileCrc: $85B082F4; EncodedName: 'rnji1goo'), // 'okgf.dll'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
@@ -1217,7 +1217,7 @@ const
           EncodedName: 'gdwd_txhvw_hqj_glyhubhqj1tpp'
       ), // 'data\quest\eng\diver_eng.qmm'
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
-      (NameCrc: $86FFADDB; FileCrc: $3659B625; EncodedName: '{ylgfruh1goo'), // 'xvidcore.dll'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (
           NameCrc: $C5D2CDDD;
@@ -1740,7 +1740,7 @@ const
           FileCrc: $622A027E;
           EncodedName: 'gdwd_txhvw_hqj_ihlsv|fkrbhqj1tpp'
       ), // 'data\quest\eng\feipsycho_eng.qmm'
-      (NameCrc: $BC228EDE; FileCrc: $49C72061; EncodedName: 'vwhdpbdsl1goo'), // 'steam_api.dll'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (
@@ -1770,12 +1770,12 @@ const
           FileCrc: $9956B9B4;
           EncodedName: 'gdwd_txhvw_jhu_edggd|bjhu1tpp'
       ), // 'data\quest\ger\badday_ger.qmm'
-      (NameCrc: $2866DAEC; FileCrc: $75C69DB4; EncodedName: 'vwhdpbdfk1goo'), // 'steam_ach.dll'
       (
           NameCrc: $D7E63EEC;
           FileCrc: $791BB1E4;
           EncodedName: 'gdwd_txhvw_vsd_vleroxvrywbvsd1tpp'
       ), // 'data\quest\spa\sibolusovt_spa.qmm'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
@@ -1853,7 +1853,7 @@ const
           EncodedName: 'gdwd_txhvw_jhu_vwhdowkbjhu1tpp'
       ), // 'data\quest\ger\stealth_ger.qmm'
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
-      (NameCrc: $EC871B0F; FileCrc: $5A79C590; EncodedName: 'pdwul{jdph1goo'), // 'matrixgame.dll'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (
           NameCrc: $09E0AF10;
           FileCrc: $E81CC99D;
@@ -1997,11 +1997,7 @@ const
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
-      (
-          NameCrc: $DDC9E75F;
-          FileCrc: $B1E8C689;
-          EncodedName: 'oleyruelviloh1goo'
-      ), // 'libvorbisfile.dll'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (
           NameCrc: $C9A50B61;
@@ -2086,12 +2082,12 @@ const
       ), // 'data\quest\rus\evidence.qmm'
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
-      (NameCrc: $C68E8F88; FileCrc: $1EB0C429; EncodedName: '}ole1goo'), // 'zlib.dll'
       (
           NameCrc: $8A17AF88;
           FileCrc: $518832B6;
           EncodedName: 'gdwd_txhvw_hqj_vsdfholqhvbhqj1tpp'
       ), // 'data\quest\eng\spacelines_eng.qmm'
+      (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (NameCrc: $00000000; FileCrc: $00000000; EncodedName: ''),
       (

@@ -118,8 +118,11 @@ This changelog records game-source changes for Free Pascal compatibility.
 - Replace timestamp-counter CPU probes with OS queries and the original fallback;
   use native memory queries for physical memory and FPC heap usage on Unix.
 - Keep legacy script DLL calls and the original Steam/MatrixGame wrappers limited
-  to 32-bit Windows. Their interfaces and original DLL integrity checks describe
-  that distribution, not the native libraries used by other targets.
+  to 32-bit Windows.
+- Remove obsolete process-module inspection and original-DLL checksum checks,
+  including the Toolhelp import, whitelist, registry helper and unused integrity
+  markers. Preserve resource-file CRC checks, their snapshot refresh and the
+  daily shared RNG draw.
 - Make Delphi's coordinate-list float bit casts and signed seed arithmetic
   explicit. Disambiguate the game's point type from FPC's `Types.TPointF`.
 - Advance the text-wrapping scan explicitly instead of relying on Delphi's

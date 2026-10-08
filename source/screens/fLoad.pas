@@ -350,7 +350,6 @@ begin
     IntroConfig := MainDataConfig.GetBlock('Intro');
     StartIntroItem(1);
   end;
-  CheckPlatformModules;
 end;
 
 procedure TfLoad.OnClose;

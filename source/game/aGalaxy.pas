@@ -2908,8 +2908,8 @@ begin
         Dec(WarDeltaWin[0]);
       end;
       Stage := 1;
-      if Random(50) = 0 then
-        CheckPlatformModules;
+      // Preserve the original daily advancement of the shared random stream.
+      Random(50);
       Stage := 13;
       if ((((CurrentTurn + Integer(GenerationSeed)) mod GetTurnsBetweenLiberationGroups) = 0)
               and (CurrentTurn >= GalaxyWarmupTurns))

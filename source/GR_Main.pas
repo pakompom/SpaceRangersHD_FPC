@@ -1115,8 +1115,6 @@ var
 
   EditableSaveFileName: WideString = '';
 
-  PlatformCheckAnchor: Integer = -35753766;
-
   ModShipNameConfig: TBlockParEC = nil;
 
   ModRuinNameConfig: TBlockParEC = nil;
@@ -1155,11 +1153,7 @@ var
 
   LastRecordingFrameTick: Cardinal = 0;
 
-  StartupIntegrityMarker: Integer = 0;
-
   LastMouseMessageTick: Cardinal = 0;
-
-  StartupChecksumAnchor: Integer = 0;
 
   RobotBattleActive: Boolean = False;
 
@@ -1266,21 +1260,7 @@ var
 
   ExtraScreenHeight: Integer;
 
-  EncodedPlatformModuleNames: array[0..8] of AnsiString = (
-      'loinbaosgaga-10a',
-      'loinbavrokrablius-->0',
-      'loinbaveohrablissufainlae', // 'libogg-0', 'libvorbis-0', 'libvorbisfile'
-      'mhastorhinxagrakmae',
-      'ookogifa',
-      'sotoenalm^_^aucah',
-      'sotoenalm^_^aupki', // 'matrixgame', 'okgf', 'steam_ach', 'steam_api'
-      'xavriadeccomrie',
-      'zoloimba'
-  );
-
   CachedGameUserDirectory: WideString = '';
-
-procedure CheckPlatformModules;
 
 procedure LogMemoryUsage;
 
@@ -2295,12 +2275,6 @@ function ReadRegistryText(
     DefaultValue: WideString
 ): WideString;
 
-function ReadRegistryInteger(
-    Root: PtrUInt;
-    KeyPath: WideString;
-    ValueName: WideString;
-    DefaultValue: Integer
-): Integer;
 {$ENDIF}
 
 procedure RaiseWideMessage(const Message: WideString);
@@ -2344,9 +2318,6 @@ uses
   SDL2,
   GI_Main,
   DirectXRenderException,
-{$IF Defined(MSWINDOWS) and not Defined(FPC)}
-  TlHelp32,
-{$ENDIF}
   aPacket,
   DateUtils,
   Robot,
@@ -2373,172 +2344,6 @@ var
   MessageIdle: Boolean;
 
 {$I-}
-
-procedure CheckPlatformModules;
-{$IFDEF MSWINDOWS}
-var
-  GameDirectory, ModulePath: AnsiString;
-  Snapshot: THandle;
-  SteamProcessId: Cardinal;
-  Index, FailureOffset: Integer;
-  Found: Boolean;
-  DllSuffix: WideString;
-  SteamClientPath: AnsiString;
-  {$IFDEF FPC}
-  Entry: Windows.MODULEENTRY32;
-  {$ELSE}
-  Entry: TModuleEntry32;
-  {$ENDIF}
-
-  function MatchesModuleDirectoryPrefix(
-      Prefix,
-      Path: AnsiString
-  ): Boolean; { Nested helper. Requires Prefix no longer than Path, but compares only characters 1 through Length(Prefix)-1. }
-  var
-    CharacterIndex, CharacterCount: Integer;
-  begin
-    Result := False;
-    if Length(Prefix) > Length(Path) then
-      Exit;
-    CharacterIndex := 1;
-    CharacterCount := Min(Length(Prefix), Length(Path));
-    while CharacterIndex < CharacterCount do
-    begin
-      if Prefix[CharacterIndex] <> Path[CharacterIndex] then
-        Exit;
-      Inc(CharacterIndex);
-    end;
-    Result := True;
-  end;
-
-begin
-  // This build disables the checks, but Delphi O- retained their native bytes.
-  Exit;
-  DllSuffix := 'll';
-  DllSuffix := '.d' + DllSuffix;
-  Snapshot := CreateToolhelp32Snapshot(8, GetCurrentProcessId);
-  if Snapshot <> INVALID_HANDLE_VALUE then
-  begin
-    GameDirectory := AnsiLowerCase(ExtractFilePath(ParamStr(0)));
-    Entry.dwSize := SizeOf(Entry);
-    if Module32First(Snapshot, Entry) then
-    begin
-      repeat
-        if MatchesModuleDirectoryPrefix(
-            GameDirectory,
-            AnsiLowerCase(ExtractFilePath(AnsiString(Entry.szExePath)))) then
-        begin
-          Found := False;
-          ModulePath := AnsiLowerCase(AnsiString(Entry.szModule));
-          for Index := 0 to 8 do
-          begin
-            // 'libogg-0.dll', 'libvorbis-0.dll', 'libvorbisfile.dll',
-            // 'matrixgame.dll', 'okgf.dll', 'steam_ach.dll', 'steam_api.dll',
-            // 'xvidcore.dll', 'zlib.dll'.
-            if WideString(ModulePath)
-                = DecodeTextW(WideString(EncodedPlatformModuleNames[Index])) + DllSuffix then
-            begin
-              Found := True;
-              Break;
-            end;
-          end;
-          if not Found then
-          begin
-            FailureOffset := 4;
-            PInteger(PAnsiChar(@PlatformCheckAnchor) + FailureOffset)^ :=
-                RandomIntRange(1000000000, 2000000000);
-            CloseHandle(Snapshot);
-            Exit;
-          end;
-        end;
-      until not Module32Next(Snapshot, Entry);
-    end;
-    CloseHandle(Snapshot);
-  end;
-  SteamClientPath :=
-      AnsiLowerCase(
-          AnsiString(
-              ReadRegistryText(
-                  HKEY_CURRENT_USER,
-                  DecodeTextW(
-                      'Sdonf6t4wdabrden\7Vga4l-v7ef\3Sdt6e8a,mu\gAcczt1i2v3e2Pvrnohcyetsrs'
-                  ), // 'Software\Valve\Steam\ActiveProcess'
-                  DecodeTextW('S4tgefadm.ClliitevnvteDtlfls'),
-                  ''
-              )
-          )
-      ); // 'SteamClientDll'
-  SteamProcessId :=
-      ReadRegistryInteger(
-          HKEY_CURRENT_USER,
-          DecodeTextW('Sdonf6t4wdabrden\7Vga4l-v7ef\3Sdt6e8a,mu\gAcczt1i2v3e2Pvrnohcyetsrs'),
-          'pid',
-          0
-      ); // 'Software\Valve\Steam\ActiveProcess'
-  Snapshot := CreateToolhelp32Snapshot(8, GetCurrentProcessId);
-  if Snapshot <> INVALID_HANDLE_VALUE then
-  begin
-    Entry.dwSize := SizeOf(Entry);
-    if Module32First(Snapshot, Entry) then
-    begin
-      Found := False;
-      // Native deliberately advances before inspecting the first path here.
-      while Module32Next(Snapshot, Entry) do
-      begin
-        ModulePath := AnsiLowerCase(AnsiString(Entry.szExePath));
-        if ModulePath = SteamClientPath then
-        begin
-          Found := True;
-          Break;
-        end;
-      end;
-      if not Found then
-      begin
-        FailureOffset := 4;
-        PInteger(PAnsiChar(@PlatformCheckAnchor) + FailureOffset)^ :=
-            RandomIntRange(1000000000, 2000000000);
-        CloseHandle(Snapshot);
-        Exit;
-      end;
-    end;
-    CloseHandle(Snapshot);
-  end;
-  Found := False;
-  Snapshot := CreateToolhelp32Snapshot(8, SteamProcessId);
-  if Snapshot <> INVALID_HANDLE_VALUE then
-  begin
-    Entry.dwSize := SizeOf(Entry);
-    if Module32First(Snapshot, Entry) then
-      if AnsiLowerCase(AnsiString(Entry.szExePath))
-          = AnsiLowerCase(
-              AnsiString(
-                  WideString(ExtractFilePath(SteamClientPath)) + DecodeTextW('s1t2eda5mg.he7xie')
-              )) then // 'steam.exe'
-      begin
-        while Module32Next(Snapshot, Entry) do
-        begin
-          ModulePath := AnsiLowerCase(AnsiString(Entry.szExePath));
-          if ModulePath = SteamClientPath then
-          begin
-            Found := True;
-            Break;
-          end;
-        end;
-      end;
-    CloseHandle(Snapshot);
-  end;
-  if not Found then
-  begin
-    FailureOffset := 4;
-    PInteger(PAnsiChar(@PlatformCheckAnchor) + FailureOffset)^ :=
-        RandomIntRange(1000000000, 2000000000);
-  end;
-end;
-{$ELSE}
-begin
-  // The original module check is disabled on Windows as well.
-end;
-{$ENDIF}
 
 procedure LogMemoryUsage;
 var
@@ -4759,32 +4564,15 @@ end;
 
 procedure InitializeRuntimeAndSettings;
 var
-  ModuleName, Text, ExtraText: WideString;
+  DetailText, Text, ExtraText: WideString;
   Block: TBlockParEC;
   Index, Count, BufferSize: Integer;
   Frame: Pointer;
   Cursor: TCursorUnit;
-  SavedChecksumFailed: Boolean;
 {$IFDEF MSWINDOWS}
   Reg: TRegistry;
 {$ENDIF}
   MemoryStatus: TMemoryStatusEx;
-
-  procedure VerifyStartupModuleChecksum; { Nested startup helper; checks the module path at parent-frame -4 and writes the signed integrity marker. }
-  var
-    MarkerOffset: Integer;
-  begin
-    CCInterface.SetResourceChecksumFailed(False);
-    VerifyResourceFileChecksum(ModuleName);
-    MarkerOffset := 8;
-    if CCInterface.GetResourceChecksumFailed then
-      PInteger(PAnsiChar(@StartupChecksumAnchor) - MarkerOffset)^ :=
-          RandomIntRange(1000000000, 2000000000)
-    else if PInteger(PAnsiChar(@StartupChecksumAnchor) - MarkerOffset)^ <= 0 then
-      PInteger(PAnsiChar(@StartupChecksumAnchor) - MarkerOffset)^ :=
-          RandomIntRange(-2000000000, -1000000000);
-    CCInterface.SetResourceChecksumFailed(False);
-  end;
 
 begin
   StartupState := 0;
@@ -4803,7 +4591,7 @@ begin
     ExtraText := ' [x64] build '
   else
     ExtraText := ' [x86] build ';
-  ModuleName :=
+  DetailText :=
       TrimWideString(
           ReadRegistryText(
               HKEY_LOCAL_MACHINE,
@@ -4812,14 +4600,14 @@ begin
               ''
           )
       );
-  if ExtractDigitsToIntW(ModuleName) >= 22000 then
+  if ExtractDigitsToIntW(DetailText) >= 22000 then
     Text := ReplaceAllWideString(Text, 'Windows 10', 'Windows 11');
   if RunningUnderWine then
     AppendLogLineThreadSafe(
-        AnsiString('Wine compatibility mode is set to ''' + Text + ExtraText + ModuleName + '''')
+        AnsiString('Wine compatibility mode is set to ''' + Text + ExtraText + DetailText + '''')
     )
   else
-    AppendLogLineThreadSafe(AnsiString('Operating System=' + Text + ExtraText + ModuleName));
+    AppendLogLineThreadSafe(AnsiString('Operating System=' + Text + ExtraText + DetailText));
   Index := 0;
   Count := 0;
   while True do
@@ -4861,11 +4649,11 @@ begin
   ExtraText := {$I %FPCTARGETCPU%};
 {$ENDIF}
   if Count <= 1 then
-    ModuleName := ' (1 core)'
+    DetailText := ' (1 core)'
   else
-    ModuleName := WideString(' (' + IntToStr(Count) + ' cores)');
+    DetailText := WideString(' (' + IntToStr(Count) + ' cores)');
   ProcessorCoreCount := Max(Count, 1);
-  AppendLogLineThreadSafe(AnsiString('Processor=' + ExtraText + ModuleName));
+  AppendLogLineThreadSafe(AnsiString('Processor=' + ExtraText + DetailText));
   AppendLogLineThreadSafe(
       'CPU Clock='
           + IntToStr(Round(Min(Min(MeasureCpuClockMHz, MeasureCpuClockMHz), MeasureCpuClockMHz)))
@@ -5184,34 +4972,8 @@ begin
     AppendLogLineThreadSafe('Build version mismatch with CacheData.dat!');
     BuildVersionMismatch := True;
   end;
-  SavedChecksumFailed := CCInterface.GetResourceChecksumFailed;
-{$IF Defined(MSWINDOWS) and Defined(CPU386)}
-  Text := 'll';
-  Text := '.d' + Text;
-  ModuleName := DecodeTextW('sotoenalm^_^aucah') + Text; // 'steam_ach'
-  if GetModuleHandleW(PWideChar(ModuleName)) <> 0 then
-    VerifyStartupModuleChecksum;
-  ModuleName := DecodeTextW('sotoenalm^_^aupki') + Text; // 'steam_api'
-  if GetModuleHandleW(PWideChar(ModuleName)) <> 0 then
-    VerifyStartupModuleChecksum;
-  ModuleName := DecodeTextW('zoloimba') + Text; // 'zlib'
-  VerifyStartupModuleChecksum;
-  ModuleName := DecodeTextW('MhastorhinxaGrakmae') + Text; // 'MatrixGame'
-  VerifyStartupModuleChecksum;
-  ModuleName := DecodeTextW('ookogifa') + Text; // 'okgf'
-  VerifyStartupModuleChecksum;
-  ModuleName := DecodeTextW('xavriadeccomrie') + Text; // 'xvidcore'
-  VerifyStartupModuleChecksum;
-  ExtraText := 'ib';
-  ExtraText := 'l' + ExtraText;
-  ModuleName := ExtraText + DecodeTextW('osgaga-10a') + Text; // 'ogg-0'
-  VerifyStartupModuleChecksum;
-  ModuleName := ExtraText + DecodeTextW('vrokrablius-->0') + Text; // 'vorbis-0'
-  VerifyStartupModuleChecksum;
-  ModuleName := ExtraText + DecodeTextW('veohrablissufainlae') + Text; // 'vorbisfile'
-  VerifyStartupModuleChecksum;
-{$ENDIF}
-  CCInterface.SetResourceChecksumFailed(SavedChecksumFailed);
+  // Refreshing this snapshot also advances the shared random stream.
+  CCInterface.SetResourceChecksumFailed(CCInterface.GetResourceChecksumFailed);
 end;
 
 procedure FinalizeRuntimeAndSettings;
@@ -7176,39 +6938,6 @@ begin
   else
     Result := PAnsiChar(Data);
   FreeEC(Data);
-  RegCloseKey(Key);
-end;
-
-function ReadRegistryInteger(
-    Root: PtrUInt;
-    KeyPath, ValueName: WideString;
-    DefaultValue: Integer
-): Integer;
-var
-  Key: HKey;
-  ValueType: Cardinal;
-  Value: Integer;
-  ByteCount: Cardinal;
-begin
-  if RegOpenKeyExA(Root, PAnsiChar(AnsiString(KeyPath)), 0, KEY_READ, Key) <> ERROR_SUCCESS then
-  begin
-    Result := DefaultValue;
-    Exit;
-  end;
-
-  ByteCount := 4;
-  if RegQueryValueExA(Key, PAnsiChar(AnsiString(ValueName)), nil, @ValueType, @Value, @ByteCount)
-      <> ERROR_SUCCESS then
-  begin
-    Result := DefaultValue;
-    RegCloseKey(Key);
-    Exit;
-  end;
-
-  if ValueType <> REG_DWORD then
-    Result := DefaultValue
-  else
-    Result := Value;
   RegCloseKey(Key);
 end;
 
