@@ -6,3 +6,5 @@
 __pycache__/
 *.pyc
 .ruff_cache/
+# Keep tracked documentation; ignore untracked Markdown notes.
+*.[mM][dD]
