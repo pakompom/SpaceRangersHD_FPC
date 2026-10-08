@@ -78,6 +78,8 @@ type
     DecompressedBlockBuffer: Pointer;
     UsesChainedBlocks: Boolean;
     CurrentBlockIndex: Integer;
+    NextChainedBlockIndex: Cardinal;
+    NextChainedBlockOffset: Cardinal;
   end;
 
   TPackOpenSlotArray = array[0..15] of TPackOpenSlotEC;
@@ -201,6 +203,10 @@ uses
   ,
   BaseUnix
 {$ENDIF}
+{$IFDEF WASI}
+  ,
+  wasiapi
+{$ENDIF}
       ;
 
 const
@@ -255,6 +261,9 @@ begin
 {$ENDIF}
 {$IFDEF UNIX}
   Result := fpClose(Handle) = 0;
+{$ENDIF}
+{$IFDEF WASI}
+  Result := __wasi_fd_close(Handle) = __WASI_ERRNO_SUCCESS;
 {$ENDIF}
 end;
 
@@ -354,6 +363,9 @@ begin
   end;
 
   PackageHandle := FileOpen(NativeGamePath(PackagePath), fmOpenReadWrite or fmShareDenyNone);
+  // Installed packages can be read-only, including browser HTTP assets.
+  if PackageHandle = THandle(-1) then
+    PackageHandle := FileOpen(NativeGamePath(PackagePath), fmOpenRead or fmShareDenyNone);
   if PackageHandle = THandle(-1) then
   begin
     raise Exception.Create('Error openning package file [READ]:' + PackagePath);
@@ -496,6 +508,8 @@ begin
   OpenSlots[Slot].IsAvailable := False;
   OpenSlots[Slot].UsesChainedBlocks := Entry.Kind = 2;
   OpenSlots[Slot].CurrentBlockIndex := -1;
+  OpenSlots[Slot].NextChainedBlockIndex := 0;
+  OpenSlots[Slot].NextChainedBlockOffset := OpenSlots[Slot].DataStartOffset;
   if OpenSlots[Slot].UsesChainedBlocks then
   begin
     OpenSlots[Slot].CompressedBlockBuffer := AllocMem(PackCompressedBufferSize);
@@ -636,8 +650,31 @@ begin
         ChunkSize := PackCompressionBlockSize - BlockOffset;
       if OpenSlots[SlotIndex].CurrentBlockIndex <> Integer(BlockIndex) then
       begin
-        StoredSize :=
-            GetChainedBlockStoredSizeAtIndex(OpenSlots[SlotIndex].DataStartOffset, BlockIndex);
+        Result := False;
+        // Sequential reads need only the next header. Always seek explicitly:
+        // other open entries share the package handle and may have moved it.
+        if BlockIndex = OpenSlots[SlotIndex].NextChainedBlockIndex then
+        begin
+          FileSeek(
+              PackageHandle,
+              Int64(OpenSlots[SlotIndex].NextChainedBlockOffset),
+              fsFromBeginning
+          );
+          if not ReadPackageFile(PackageHandle, StoredSize, SizeOf(StoredSize), BytesRead)
+              or (BytesRead <> SizeOf(StoredSize)) then
+            Exit;
+          Inc(OpenSlots[SlotIndex].NextChainedBlockOffset, StoredSize + SizeOf(StoredSize));
+        end
+        else
+        begin
+          StoredSize :=
+              GetChainedBlockStoredSizeAtIndex(OpenSlots[SlotIndex].DataStartOffset, BlockIndex);
+          OpenSlots[SlotIndex].NextChainedBlockOffset :=
+              FileSeek(PackageHandle, Int64(0), fsFromCurrent) + StoredSize;
+        end;
+        OpenSlots[SlotIndex].NextChainedBlockIndex := BlockIndex + 1;
+        if StoredSize > PackCompressedBufferSize then
+          Exit;
         Result :=
             ReadPackageFile(
                 PackageHandle,
@@ -645,8 +682,11 @@ begin
                 StoredSize,
                 BytesRead
             );
-        if not Result then
+        if not Result or (BytesRead <> StoredSize) then
+        begin
+          Result := False;
           Exit;
+        end;
         OKGF_ZLib_UnCompress2(
             OpenSlots[SlotIndex].DecompressedBlockBuffer,
             PackCompressionBlockSize,

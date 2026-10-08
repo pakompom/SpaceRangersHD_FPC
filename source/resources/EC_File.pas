@@ -242,8 +242,11 @@ begin
             + FileName
             + ' kolbyte='
             + SysUtils.IntToStr(ByteCount)
+{$IFNDEF WASI}
             + ' GetLastError='
-            + SysUtils.IntToStr(GetLastOSError));
+            + SysUtils.IntToStr(GetLastOSError)
+{$ENDIF}
+    );
 end;
 
 procedure TFileEC.WriteBuffer(Source: Pointer; ByteCount: Cardinal);

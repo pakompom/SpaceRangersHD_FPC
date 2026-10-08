@@ -70,7 +70,12 @@ This changelog records game-source changes for Free Pascal compatibility.
   retain bulk destruction; their handles follow the host pointer width.
 - Use FPC file I/O for packages and loose files, converting path separators at
   the filesystem boundary. Keep package directory entries at 158 bytes on disk
-  while allowing native-sized pointers in memory.
+  while allowing native-sized pointers in memory. Allow read-only packages when
+  write access is unavailable; use WASI's descriptor-close API on that target.
+  Remember each compressed entry's next block offset to avoid rescanning earlier
+  headers during sequential reads. Interleaved entries still seek explicitly;
+  random reads retain the chain lookup. This transient cache does not change
+  package contents or saved-game formats.
 - Decode ZL02 package blocks through FPC's Pascal zlib implementation, retaining
   the original DLL's header and decoded-length checks.
 - Encode and decode ZL01 buffers through Pascal zlib, retaining the original
