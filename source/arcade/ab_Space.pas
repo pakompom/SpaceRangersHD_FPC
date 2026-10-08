@@ -842,6 +842,7 @@ end;
 
 procedure ab_Space_Clear;
 begin
+  HoveredArcadeSpace := nil;
   ab_SpaceLink_Clear;
   while not (FirstArcadeSpace = nil) do
     ab_Space_Delete(LastArcadeSpace);
@@ -870,6 +871,8 @@ procedure ab_Space_Delete(Space: TabSpace);
 var
   Link, Removing: PabSpaceLink;
 begin
+  if HoveredArcadeSpace = Space then
+    HoveredArcadeSpace := nil;
   if Space.Prev <> nil then
     Space.Prev.Next := Space.Next;
   if Space.Next <> nil then
