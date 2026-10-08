@@ -42,7 +42,8 @@ var
 
   MemorySnapshotXorSeed: Integer;
 
-  MemorySnapshotGalaxyToken: Cardinal;
+  // Private in-memory object token, not a serialized save field.
+  MemorySnapshotGalaxyToken: PtrUInt;
 
 function SaveGameToFile(FileName: WideString; Description: WideString): Boolean;
 
@@ -584,7 +585,7 @@ begin
   MemorySnapshotBuffer.ApplyDatXorCipher(MemorySnapshotXorSeed);
   GetPlayer.SetMoney(0);
   Galaxy.ObfuscateProtectedState;
-  MemorySnapshotGalaxyToken := Cardinal(Galaxy) + $17557455;
+  MemorySnapshotGalaxyToken := PtrUInt(Galaxy) + $17557455;
   Galaxy := nil;
   BlazerShip := nil;
   KellerShip := nil;

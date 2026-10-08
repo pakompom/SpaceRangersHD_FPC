@@ -2,6 +2,8 @@
 
 This changelog records game-source changes for Free Pascal compatibility.
 
+- Preserve the full galaxy pointer in the private memory-snapshot token used
+  around planetary battle transitions on 64-bit targets.
 - Keep script DWORD arithmetic at 32 bits, including overflow and the original
   masked shift counts. Preserve full-width storage for object references passed
   through script variables, assignments and comparisons on 64-bit targets.
