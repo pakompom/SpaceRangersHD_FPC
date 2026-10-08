@@ -2,6 +2,9 @@
 
 This changelog records game-source changes for Free Pascal compatibility.
 
+- Guard arcade ship actions after player-ship destruction, including Q/W/E
+  weapon shortcuts and battle entry, while preserving pause, exit, and the
+  victory-panel Tab shortcut.
 - Preserve the full galaxy pointer in the private memory-snapshot token used
   around planetary battle transitions on 64-bit targets.
 - Keep script DWORD arithmetic at 32 bits, including overflow and the original

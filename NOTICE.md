@@ -18,6 +18,9 @@ It is not affiliated with the game's developers or publisher.
 - AVI video decoding: [Xvid](https://www.xvid.com/), under the GNU GPL.
 - Compiler and runtime: [Free Pascal](https://www.freepascal.org/), with
   [source and license details](vendor/fpc/PORT.md).
+- Selected fixes adapted from
+  [giantplaceholder/spacerangershd-fpc-fixes](https://github.com/giantplaceholder/spacerangershd-fpc-fixes),
+  under its [MIT license](licenses/spacerangershd-fpc-fixes.txt).
 
 The recovered game and third-party sources retain their original terms; they
 are not covered by this project’s MIT license. Third-party source retains its

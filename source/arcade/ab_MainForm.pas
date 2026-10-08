@@ -924,11 +924,16 @@ var
   Obj: TObject;
   EnemyCount: Integer;
 begin
+  // Ship destruction precedes the defeat panel. Guard actions by ship lifetime.
   CancelCargoPickup;
   if ((VirtualKey = VK_ESCAPE) or (VirtualKey = VK_SPACE))
       and (VictoryPanel.Active or DefeatPanel.Active) then
   begin
-    if (GetPlayer <> nil) and (GetPlayer.GetHull.HullPoints > 0) and VictoryPanel.Active then
+    if (GetPlayer <> nil)
+        and (GetPlayer.GetHull <> nil)
+        and (GetPlayer.GetHull.HullPoints > 0)
+        and (PlayerArcadeShip <> nil)
+        and VictoryPanel.Active then
     begin
       if ShowMessageBoxGI(
               Self,
@@ -986,8 +991,9 @@ begin
   end
   else if (VirtualKey = VK_RETURN)
       and (ArcadeViewMode = 2)
+      and (PlayerArcadeShip <> nil)
+      and (CurrentArcadeSpace <> nil)
       and (NextArcadeSpace = nil)
-      and (CurrentArcadeSpace <> EndArcadeSpace)
       and (CurrentArcadeSpace <> EndArcadeSpace) then
   begin
     EnemyCount := 0;
@@ -1002,7 +1008,7 @@ begin
   end
   else if (VirtualKey = Ord('C')) and (ArcadeViewMode = 2) and (NextArcadeSpace = nil) then
     ArcadeMapViewPosition := TruncatePointF(PlayerMapPosition)
-  else if (VirtualKey = Ord('Q')) and (GetPlayer = nil) then
+  else if (VirtualKey = Ord('Q')) and (GetPlayer = nil) and (PlayerArcadeShip <> nil) then
   begin
     ab_Weapon_Initialize(@PlayerArcadeShip.Weapons[0], 50);
     PlayerArcadeShip.Weapons[0].SlotData := 0;
@@ -1017,7 +1023,7 @@ begin
     NormalizeWeaponSelection;
     UpdateWeaponPanel;
   end
-  else if (VirtualKey = Ord('W')) and (GetPlayer = nil) then
+  else if (VirtualKey = Ord('W')) and (GetPlayer = nil) and (PlayerArcadeShip <> nil) then
   begin
     ab_Weapon_Initialize(@PlayerArcadeShip.Weapons[0], 55);
     PlayerArcadeShip.Weapons[0].SlotData := 0;
@@ -1032,7 +1038,7 @@ begin
     NormalizeWeaponSelection;
     UpdateWeaponPanel;
   end
-  else if (VirtualKey = Ord('E')) and (GetPlayer = nil) then
+  else if (VirtualKey = Ord('E')) and (GetPlayer = nil) and (PlayerArcadeShip <> nil) then
   begin
     ab_Weapon_Initialize(@PlayerArcadeShip.Weapons[0], 60);
     PlayerArcadeShip.Weapons[0].SlotData := 0;
@@ -1049,6 +1055,8 @@ begin
   end
   else if (VirtualKey = VK_SPACE)
       and (ArcadeViewMode = 2)
+      and (PlayerArcadeShip <> nil)
+      and (CurrentArcadeSpace <> nil)
       and (CurrentArcadeSpace = NextArcadeSpace) then
   begin
     EnemyCount := 0;
