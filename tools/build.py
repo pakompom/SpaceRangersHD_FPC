@@ -307,6 +307,7 @@ def build_okgf(work: Path, release: bool, *options: str, rebuild: bool = False) 
     configuration = "Release" if release else "RelWithDebInfo"
     compiler_changed = configure_native(work, directory, [
         "cmake", "-S", ROOT / "native", "-B", directory, f"-DCMAKE_BUILD_TYPE={configuration}",
+        "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG",
         *options,
     ])  # fmt: skip
     run_step(
@@ -378,7 +379,7 @@ def build_macos(release: bool, rebuild: bool = False, *, lto: bool = False) -> P
         release,
         "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
         f"-DCMAKE_C_COMPILER={clang}",
-        "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g",
+        "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG -g",
         rebuild=rebuild,
     )
     # Signing changes the bundled copy. Compare the original library's state,
