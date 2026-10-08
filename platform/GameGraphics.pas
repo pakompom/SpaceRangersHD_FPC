@@ -527,10 +527,14 @@ begin
   Move(Parameters, Params, SizeOf(Params));
   // Direct3D accepts zero back-buffer dimensions in windowed mode and takes
   // the client size. The game sets that size before creating/resetting the device.
+  // A browser canvas follows CSS independently of the requested game size.
   if Params.Windowed and ((Params.BackBufferWidth = 0) or (Params.BackBufferHeight = 0)) then
   begin
     Require(GameSDLWindow <> nil, 'window for automatic back-buffer size');
-    SDL_GetWindowSize(GameSDLWindow, WindowWidth, WindowHeight);
+    if GameWindowUsesCanvas then
+      GetGameWindowLogicalSize(WindowWidth, WindowHeight)
+    else
+      SDL_GetWindowSize(GameSDLWindow, WindowWidth, WindowHeight);
     if Params.BackBufferWidth = 0 then
       Params.BackBufferWidth := WindowWidth;
     if Params.BackBufferHeight = 0 then
@@ -707,6 +711,7 @@ begin
   Result := 0
 end;
 {$IFDEF FPC_WASM_EMSCRIPTEN}
+procedure BrowserWaitFrame; cdecl; external name 'fpc_browser_wait_frame';
 procedure BrowserFramePresented; cdecl; external name 'fpc_browser_presented';
 {$ENDIF}
 
@@ -720,6 +725,8 @@ var
   Texture: PSDL_Texture;
   Index: SizeInt;
   Color: Cardinal;
+  OutputWidth, OutputHeight, Filter: Integer;
+  Scale: Double;
 begin
   TestCooperativeLevel;
   Screen := ImageOf(ScreenSurface);
@@ -759,8 +766,24 @@ begin
   Check(SDL_SetRenderDrawColor(GameSDLRenderer, 0, 0, 0, 255));
   Check(SDL_RenderClear(GameSDLRenderer));
   Check(SDL_SetTextureBlendMode(Texture, SDL_BLENDMODE_NONE));
+  // Sampling the final image is independent of the game's sprite filters.
+  // Preserve exact pixel multiples; interpolate fractional scaling (including
+  // downscaling) so adjacent source pixels do not acquire unequal screen sizes.
+  Check(SDL_GetRendererOutputSize(GameSDLRenderer, OutputWidth, OutputHeight));
+  Scale := Min(OutputWidth / Screen.Desc.Width, OutputHeight / Screen.Desc.Height);
+  Filter := SDL_ScaleModeLinear;
+  if (Scale >= 1) and (Scale = Trunc(Scale)) then
+    Filter := SDL_ScaleModeNearest;
+  Check(SDL_SetTextureScaleMode(Texture, Filter));
   Check(SDL_RenderCopy(GameSDLRenderer, Texture, nil, nil));
+{$IFDEF FPC_WASM_EMSCRIPTEN}
+  // Submit drawing before waiting; the browser presents the completed buffer
+  // at its own refresh cadence, which need not be 60 Hz.
+  Check(SDL_RenderFlush(GameSDLRenderer));
+  BrowserWaitFrame;
+{$ENDIF}
   SDL_RenderPresent(GameSDLRenderer);
+  Inc(GamePresentedFrames);
 {$IFDEF FPC_WASM_EMSCRIPTEN}
   BrowserFramePresented;
 {$ENDIF}
@@ -1075,6 +1098,11 @@ end;
 
 type
   TSDLGraphics = class(TInterfacedObject, IDirect3D9)
+  private
+    CanvasModes: array of TSDL_DisplayMode;
+    procedure BuildCanvasModes;
+    function DesktopMode(out Value: TSDL_DisplayMode): Integer;
+  public
     function RegisterSoftwareDevice(InitializeFunction: Pointer): LongInt; stdcall;
     function GetAdapterCount: Cardinal; stdcall;
     function GetAdapterIdentifier(
@@ -1160,8 +1188,135 @@ begin
   StrPCopy(PAnsiChar(@Identifier.Driver), 'SDL2');
   Result := 0;
 end;
+function TSDLGraphics.DesktopMode(out Value: TSDL_DisplayMode): Integer;
+var
+  Bounds: TSDL_Rect;
+  Caps: TD3DCaps9;
+  MaxWidth, MaxHeight: Integer;
+  Scale: Double;
+begin
+  Result := SDL_GetCurrentDisplayMode(0, Value);
+  if not GameWindowUsesCanvas then
+    Exit;
+  // Browser display modes describe the whole screen in CSS pixels. Auto must
+  // fit the actual viewport; multiplying it by Retina density shrinks the UI.
+  if SDL_GetDisplayUsableBounds(0, Bounds) = 0 then
+    if (Bounds.W > 0) and (Bounds.H > 0) then
+    begin
+      Value := Default(TSDL_DisplayMode);
+      GetDeviceCaps(0, D3DDEVTYPE_HAL, Caps);
+      MaxWidth := Min(7680, Caps.MaxTextureWidth);
+      MaxHeight := Min(4320, Caps.MaxTextureHeight);
+      Scale := Max(1.0, Max(1024.0 / Bounds.W, 720.0 / Bounds.H));
+      Scale := Min(Scale, Min(MaxWidth / Bounds.W, MaxHeight / Bounds.H));
+      // Preserve aspect unless an extreme viewport cannot satisfy both the
+      // game's minimum layout size and the renderer's maximum dimensions.
+      Value.W := EnsureRange(Round(Bounds.W * Scale), Min(1024, MaxWidth), MaxWidth);
+      Value.H := EnsureRange(Round(Bounds.H * Scale), Min(720, MaxHeight), MaxHeight);
+      Result := 0;
+    end;
+end;
+
+procedure TSDLGraphics.BuildCanvasModes;
+const
+  Presets: array[0..13] of TPoint = (
+      (X: 1024; Y: 768),
+      (X: 1280; Y: 720),
+      (X: 1280; Y: 800),
+      (X: 1366; Y: 768),
+      (X: 1440; Y: 900),
+      (X: 1600; Y: 900),
+      (X: 1680; Y: 1050),
+      (X: 1920; Y: 1080),
+      (X: 1920; Y: 1200),
+      (X: 2048; Y: 1152),
+      (X: 2560; Y: 1440),
+      (X: 2560; Y: 1600),
+      (X: 2880; Y: 1800),
+      (X: 3840; Y: 2160)
+  );
+var
+  Mode, Swap: TSDL_DisplayMode;
+  Caps: TD3DCaps9;
+  Bounds: TSDL_Rect;
+  DPI: Single;
+  Density: Double;
+  W, H, I, J: Integer;
+
+  procedure Add(Width, Height: Integer);
+  var
+    Index: Integer;
+  begin
+    if (Width < 1024)
+        or (Height < 720)
+        or (Width > 7680)
+        or (Height > 4320)
+        or (Cardinal(Width) > Caps.MaxTextureWidth)
+        or (Cardinal(Height) > Caps.MaxTextureHeight) then
+      Exit;
+    for Index := 0 to High(CanvasModes) do
+      if (CanvasModes[Index].W = Width) and (CanvasModes[Index].H = Height) then
+        Exit;
+    Index := Length(CanvasModes);
+    SetLength(CanvasModes, Index + 1);
+    CanvasModes[Index].W := Width;
+    CanvasModes[Index].H := Height;
+  end;
+
+begin
+  // These are render resolutions, not hardware display-switch requests. SDL's
+  // browser driver exposes only one screen mode, although any canvas size works.
+  CanvasModes := nil;
+  GetDeviceCaps(0, D3DDEVTYPE_HAL, Caps);
+  for I := 0 to High(Presets) do
+    Add(Presets[I].X, Presets[I].Y);
+  if DesktopMode(Mode) = 0 then
+    Add(Mode.W, Mode.H);
+  Density := 1;
+  if SDL_GetDisplayDPI(0, @DPI, nil, nil) = 0 then
+    // The browser SDL driver reports 96 DPI times devicePixelRatio.
+    if (DPI > 0) and not IsNan(DPI) and not IsInfinite(DPI) then
+      Density := DPI / 96.0;
+  if SDL_GetDisplayUsableBounds(0, Bounds) = 0 then
+  begin
+    Add(Bounds.W, Bounds.H);
+    Add(Round(Bounds.W * Density), Round(Bounds.H * Density));
+  end;
+  if SDL_GetCurrentDisplayMode(0, Mode) = 0 then
+  begin
+    Add(Mode.W, Mode.H);
+    Add(Round(Mode.W * Density), Round(Mode.H * Density));
+  end;
+  if GameSDLWindow <> nil then
+  begin
+    // Renderer output size may describe a bound offscreen texture instead.
+    SDL_GetWindowSizeInPixels(GameSDLWindow, W, H);
+    Add(W, H);
+  end;
+  // Keep this snapshot stable while the game enumerates its indexed choices.
+  for I := 1 to High(CanvasModes) do
+  begin
+    J := I;
+    while (J > 0)
+        and ((CanvasModes[J].W < CanvasModes[J - 1].W)
+            or ((CanvasModes[J].W = CanvasModes[J - 1].W)
+                and (CanvasModes[J].H < CanvasModes[J - 1].H))) do
+    begin
+      Swap := CanvasModes[J];
+      CanvasModes[J] := CanvasModes[J - 1];
+      CanvasModes[J - 1] := Swap;
+      Dec(J);
+    end;
+  end;
+end;
+
 function TSDLGraphics.GetAdapterModeCount(Adapter, Format: Cardinal): Cardinal;
 begin
+  if GameWindowUsesCanvas then
+  begin
+    BuildCanvasModes;
+    Exit(Length(CanvasModes));
+  end;
   Result := Max(0, SDL_GetNumDisplayModes(0));
 end;
 function TSDLGraphics.EnumAdapterModes(Adapter, Format, Mode: Cardinal; out DisplayMode): LongInt;
@@ -1169,7 +1324,15 @@ var
   Value: TSDL_DisplayMode;
   Data: array[0..3] of Cardinal;
 begin
-  Result := SDL_GetDisplayMode(0, Mode, Value);
+  if GameWindowUsesCanvas then
+  begin
+    if Mode >= Cardinal(Length(CanvasModes)) then
+      Exit(-1);
+    Value := CanvasModes[Mode];
+    Result := 0;
+  end
+  else
+    Result := SDL_GetDisplayMode(0, Mode, Value);
   if Result = 0 then
   begin
     Data[0] := Value.W;
@@ -1184,7 +1347,7 @@ var
   Value: TSDL_DisplayMode;
   Data: array[0..3] of Cardinal;
 begin
-  Result := SDL_GetCurrentDisplayMode(0, Value);
+  Result := DesktopMode(Value);
   if Result = 0 then
   begin
     Data[0] := Value.W;

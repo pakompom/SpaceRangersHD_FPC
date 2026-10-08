@@ -130,6 +130,12 @@ This changelog records game-source changes for Free Pascal compatibility.
   wrapper returns zero after cleanup. Use the static C import namespace for
   OKGF on Wasm.
 - Share SDL's logical window resolution between presentation and mouse events.
+  Refresh the detected display mode on runtime reinitialization. For the canvas
+  backend, use the existing list-style resolution selector and show Auto's
+  actual dimensions.
+  Let canvas presentation follow browser refresh callbacks instead of applying
+  the legacy 50 FPS fallback limit and an additional loop delay. Calculate the
+  FPS label from submitted frames and elapsed time rather than update iterations.
   Query the desktop cursor for window-leave handling where supported, and refresh
   the game cursor on re-entry instead of retaining a stale position at the edge.
   Refresh native cursor visibility on focus return, applying AppKit's current

@@ -425,7 +425,7 @@ begin
   AddOptionChoice(1, LocalizedText('FormCfgSettings.Yes'), DisableAutoPilot, False);
   AddOptionChoice(0, LocalizedText('FormCfgSettings.No'), not DisableAutoPilot, False);
   BuildGroupIndex := 1;
-  if AltResolutionSwitch then
+  if AltResolutionSwitch or GameWindowUsesCanvas then
   begin
     AddOptionLabel('Resolution', LocalizedText('FormCfgSettings.Resolution'), True);
     I := GameDisplayModeCount - 1;
@@ -435,7 +435,12 @@ begin
         if Width = 0 then
           AddOptionChoice(
               I,
-              LocalizedText('FormCfgSettings.HelpButAuto'),
+              LocalizedText('FormCfgSettings.HelpButAuto')
+                  + ' ('
+                  + IntToStr(DesktopDisplayMode.Width)
+                  + 'x'
+                  + IntToStr(DesktopDisplayMode.Height)
+                  + ')',
               SelectedGameDisplayMode = I,
               False
           )
@@ -745,7 +750,7 @@ begin
   AddOptionChoice(1, LocalizedText('FormCfgSettings.Yes'), MusicInPlanetEnabled, False);
   AddOptionChoice(0, LocalizedText('FormCfgSettings.No'), not MusicInPlanetEnabled, False);
   BuildGroupIndex := 4;
-  if AltResolutionSwitch then
+  if AltResolutionSwitch or GameWindowUsesCanvas then
   begin
     AddOptionLabel('RobotResolution', LocalizedText('FormCfgSettings.Resolution'), True);
     I := RobotDisplayModeCount - 1;

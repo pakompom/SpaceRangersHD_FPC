@@ -1905,9 +1905,8 @@ var
   Point: TPoint;
   FrameTime, ProcessingTime: Cardinal;
   CarryTicks: Cardinal;
-  LastFpsTick: Cardinal;
-  FrameCount: Integer;
-  RecordingTime: Cardinal;
+  LastFpsTick, FpsTick: Cardinal;
+  LastPresentedFrames: QWord;
   Index, Stage: Integer;
 begin
   Stage := 0;
@@ -1944,7 +1943,7 @@ begin
     if ExitCode = 0 then
       DrawFrame;
     LastFpsTick := GameTickCount;
-    FrameCount := 0;
+    LastPresentedFrames := GamePresentedFrames;
     CarryTicks := 0;
     Stage := 12;
     for Index := 0 to SoundGroupList.Count - 1 do
@@ -1973,7 +1972,8 @@ begin
           RootUiObject.UnlinkOwnedChild(PopupController);
         end;
         Stage := 19;
-        SysUtils.Sleep(1);
+        if not GameWindowUsesCanvas then
+          SysUtils.Sleep(1);
         FrameTime := GameTickCount - FrameTime;
         if FrameTime > 200 then
           FrameTime := 200;
@@ -1981,19 +1981,19 @@ begin
         if RecordingFrames then
         begin
           Stage := 21;
-          RecordingTime := GameTickCount;
           CaptureRecordingFrame;
-          RecordingTime := GameTickCount - RecordingTime;
-          Inc(LastFpsTick, RecordingTime);
         end;
         ProcessingTime := GameTickCount;
-        Inc(FrameCount);
-        if GameTickCount - LastFpsTick > 500 then
+        FpsTick := GameTickCount;
+        if FpsTick - LastFpsTick > 500 then
         begin
           Stage := 22;
-          FramesPerSecond := FrameCount * 2;
-          LastFpsTick := GameTickCount;
-          FrameCount := 0;
+          // Drawing/update iterations may be discarded by the presentation
+          // limiter. Count submitted frames over real elapsed time instead.
+          FramesPerSecond :=
+              (GamePresentedFrames - LastPresentedFrames) * 1000 div (FpsTick - LastFpsTick);
+          LastFpsTick := FpsTick;
+          LastPresentedFrames := GamePresentedFrames;
           if ShowFrameRate then
             (GetByName('FPS') as TLabelGI).SetText('FPS: ' + IntToStr(FramesPerSecond));
         end;

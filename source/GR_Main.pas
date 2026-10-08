@@ -5269,8 +5269,9 @@ var
   // Native reserves 16 unused local bytes here; original type is unresolved.
   UnusedLocal: array[0..15] of Byte;
 begin
-  if GameDisplayModeCount = 0 then
-    Direct3D.GetAdapterDisplayMode(D3DADAPTER_DEFAULT, DesktopDisplayMode);
+  // Refresh after display changes or a runtime restart; the previous mode list
+  // does not imply that the desktop or browser viewport still has the same size.
+  Direct3D.GetAdapterDisplayMode(D3DADAPTER_DEFAULT, DesktopDisplayMode);
   FillChar(Mode, SizeOf(Mode), 0);
   GameDisplayModeCount := 0;
   SelectedGameDisplayMode := -1;
@@ -6156,7 +6157,10 @@ begin
     Dec(PresentationDepth);
     if PresentationDepth = 0 then
     begin
-      if PresentWithoutLimit then
+      // The canvas presentation path waits for the browser's refresh callback.
+      // Its display modes have no refresh rate; applying the legacy fallback
+      // here would discard frames at 50 Hz before that wait is reached.
+      if PresentWithoutLimit or GameWindowUsesCanvas then
         PresentScreenBuffer
       else
       begin
