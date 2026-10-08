@@ -9,9 +9,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from targets import desktop_target, host_cpu
+from build_support import BuildStamp, run_step
+from targets import ROOT, TARGETS, desktop_target, host_cpu
 
-ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "vendor/fpc"
 WORK = ROOT / ".local/fpc"
 
@@ -90,40 +90,32 @@ def recipe_revision(source: str, command: list[str | Path], tools: tuple[str | P
     ).hexdigest()
 
 
-def matches(path: Path, revision: str) -> bool:
-    return path.is_file() and path.read_text() == revision
-
-
 def prepare_compiler(
     target: str,
-    run_step,
     toolchain: Path | None = None,
     *,
     lto: bool = False,
 ) -> tuple[Path, list[str]]:
     """Build the LLVM compiler and the game's Delphi-compatible runtime."""
-    if target not in ("linux", "macos", "android", "wasm"):
+    if target not in TARGETS:
         raise ValueError(f"Unsupported target: {target}")
-    if lto and target == "android":
-        raise ValueError("LTO is not supported for Android builds.")
-    if target not in ("android", "wasm") and target != desktop_target():
+    if target != "wasm" and target != desktop_target():
         raise RuntimeError("Desktop builds require a host with the target OS.")
     if not (VENDOR / "compiler/pp.pas").is_file():
         raise FileNotFoundError(
             "Initialize dependencies with: git submodule update --init --recursive"
         )
     native_cpu = host_cpu()
-    cpu = {"android": "aarch64", "wasm": "wasm32"}.get(target, native_cpu)
+    cpu = "wasm32" if target == "wasm" else native_cpu
     system = {
         "linux": "linux",
         "macos": "darwin",
-        "android": "android",
         "wasm": "wasip1threads",
     }[target]
     work = WORK / f"{cpu}-{system}"
     source = work / "source"
-    if target == "android" and toolchain is None:
-        raise RuntimeError("Android runtime compilation requires the NDK.")
+    if target == "wasm" and toolchain is None:
+        raise RuntimeError("WebAssembly compilation requires Emscripten's LLVM tools.")
     # LLVM object emission is independent between units. Bound the worker
     # count so large units do not exhaust memory on hosts with many CPUs.
     jobs = f"-j{min(6, os.cpu_count() or 1)}"
@@ -142,12 +134,11 @@ def prepare_compiler(
     work.mkdir(parents=True, exist_ok=True)
     compiler_name = "ppcx64" if cpu == "x86_64" else "ppca64"
     cross_flags = []
-    if cpu != native_cpu:
-        compiler_name = "ppcrosswasm32" if cpu == "wasm32" else "ppcrossa64"
+    if target == "wasm":
+        compiler_name = "ppcrosswasm32"
         # Build a host executable; compile the target runtime separately.
         cross_flags = [f"CPU_TARGET={cpu}", "CROSSINSTALL=1"]
-        if target == "wasm":
-            cross_flags.append("OS_TARGET=wasip1threads")
+        cross_flags.append("OS_TARGET=wasip1threads")
     compiler = source / "compiler" / compiler_name
     bootstrap = shutil.which(os.environ.get("FPC_BOOTSTRAP", "fpc"))
     if bootstrap is None:
@@ -165,14 +156,13 @@ def prepare_compiler(
         *cross_flags,
     ]
     revision = recipe_revision(source_revision(), compiler_command, (make, bootstrap, "clang"))
-    stamp = work / "compiler.stamp"
-    if not compiler.is_file() or not matches(stamp, revision):
-        stamp.unlink(missing_ok=True)
-        if source.exists():
-            shutil.rmtree(source)
-        shutil.copytree(VENDOR, source, ignore=shutil.ignore_patterns(".git"))
-        run_step(work, "compiler", compiler_command)
-        stamp.write_text(revision)
+    stamp = BuildStamp(work / "compiler.stamp")
+    if not stamp.matches(revision, compiler):
+        with stamp.recording(revision):
+            if source.exists():
+                shutil.rmtree(source)
+            shutil.copytree(VENDOR, source, ignore=shutil.ignore_patterns(".git"))
+            run_step(work, "compiler", compiler_command)
 
     runtime = work / ("runtime-lto" if lto else "runtime")
     runtime_source = runtime / "src"
@@ -187,8 +177,6 @@ def prepare_compiler(
         "-dFPC_USE_PC24_MATH",
     ]
     if target == "wasm":
-        if toolchain is None:
-            raise RuntimeError("WebAssembly compilation requires Emscripten's LLVM tools.")
         options += [
             "-Aclang-llvm",
             "-XP",
@@ -204,14 +192,6 @@ def prepare_compiler(
             "BINUTILSPREFIX=",
             f"CROSSBINDIR={toolchain}",
         ]
-    elif target == "android":
-        options += ["-Cg", "-Aclang-llvm", "-XP"]
-        target_flags = [
-            "CPU_TARGET=aarch64",
-            "OS_TARGET=android",
-            "BINUTILSPREFIX=",
-            f"CROSSBINDIR={toolchain}",
-        ]
     elif target == "macos":
         options += ["-Aclang-llvm-darwin", f"-XR{sdk}"]
         target_flags = []
@@ -219,7 +199,7 @@ def prepare_compiler(
         target_flags = [f"CPU_TARGET={cpu}", "OS_TARGET=linux"]
     if lto:
         options.append("-Clflto")
-    stamp = runtime / "runtime.stamp"
+    stamp = BuildStamp(runtime / "runtime.stamp")
     runtime_command = [
         make,
         "-C",
@@ -234,30 +214,21 @@ def prepare_compiler(
         runtime_command,
         (compiler, toolchain / "clang" if toolchain else "clang"),
     )
-    if not (units / "classes.ppu").is_file() or not matches(stamp, runtime_revision):
-        runtime.mkdir(parents=True, exist_ok=True)
-        stamp.unlink(missing_ok=True)
-        if runtime_source.exists():
-            shutil.rmtree(runtime_source)
-        # Do not alter the native RTL used to bootstrap the compiler. Each
-        # runtime profile starts from source and gets its own PPUs/objects.
-        shutil.copytree(
-            source / "rtl",
-            runtime_source / "rtl",
-            ignore=shutil.ignore_patterns("units"),
-        )
-        for name in ("compiler", "packages"):
-            (runtime_source / name).symlink_to(source / name, target_is_directory=True)
-        units.mkdir(parents=True, exist_ok=True)
-        if target == "android":
-            for loader in ("prt0", "dllprt0"):
-                run_step(runtime, loader, [
-                    toolchain / "clang", "--target=aarch64-linux-android26", "-c",
-                    "-x", "assembler", "-Wa,-defsym,CPU64=1",
-                    runtime_source / f"rtl/android/{loader}.as", "-o", units / f"{loader}.o",
-                ])  # fmt: skip
-        run_step(runtime, "runtime", runtime_command)
-        stamp.write_text(runtime_revision)
+    if not stamp.matches(runtime_revision, units / "classes.ppu"):
+        with stamp.recording(runtime_revision):
+            if runtime_source.exists():
+                shutil.rmtree(runtime_source)
+            # Do not alter the native RTL used to bootstrap the compiler. Each
+            # runtime profile starts from source and gets its own PPUs/objects.
+            shutil.copytree(
+                source / "rtl",
+                runtime_source / "rtl",
+                ignore=shutil.ignore_patterns("units"),
+            )
+            for name in ("compiler", "packages"):
+                (runtime_source / name).symlink_to(source / name, target_is_directory=True)
+            units.mkdir(parents=True, exist_ok=True)
+            run_step(runtime, "runtime", runtime_command)
 
     packages = VENDOR / "packages"
     paths = [

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Format Pascal, C/C++, Java, Python, CMake, and XML source."""
+"""Format project sources with the formatters needed by the files present."""
 
 import argparse
 import shutil
 import subprocess
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRECTORIES = ("source", "platform", "native", "tools")
-FORMATTERS = ("pasfmt", "clang-format", "ruff", "cmake-format", "xmllint")
+from targets import ROOT
+
+SOURCE_DIRECTORIES = ("source", "platform", "native", "tools", "tests")
 
 
 def source_files(*suffixes: str) -> list[str]:
@@ -20,8 +19,8 @@ def source_files(*suffixes: str) -> list[str]:
     )
 
 
-def format_xml(check: bool) -> None:
-    for name in source_files(".xml"):
+def format_xml(files: list[str], check: bool) -> None:
+    for name in files:
         formatted = subprocess.check_output(["xmllint", "--format", name], cwd=ROOT)
         path = ROOT / name
         if check:
@@ -32,32 +31,33 @@ def format_xml(check: bool) -> None:
 
 
 def format_sources(check: bool) -> None:
-    commands = [
-        ["pasfmt", "--mode", "check" if check else "files", *source_files(".pas", ".dpr", ".lpr")],
-        [
-            "clang-format",
-            *(["--dry-run", "--Werror"] if check else ["-i"]),
-            *source_files(".c", ".cpp", ".h", ".java"),
-        ],
-        [
-            "ruff",
-            "format",
-            "--line-length",
-            "100",
-            *(["--check"] if check else []),
-            *source_files(".py"),
-        ],
-        [
-            "cmake-format",
-            "--line-width",
-            "100",
-            "--check" if check else "-i",
-            "native/CMakeLists.txt",
-        ],
+    jobs = [
+        (["pasfmt", "--mode", "check" if check else "files"], source_files(".pas", ".dpr", ".lpr")),
+        (
+            ["clang-format", *(["--dry-run", "--Werror"] if check else ["-i"])],
+            source_files(".c", ".cpp", ".h", ".java"),
+        ),
+        (
+            ["ruff", "format", "--line-length", "100", *(["--check"] if check else [])],
+            source_files(".py"),
+        ),
+        (
+            ["cmake-format", "--line-width", "100", "--check" if check else "-i"],
+            ["native/CMakeLists.txt"],
+        ),
     ]
-    for command in commands:
-        subprocess.run(command, cwd=ROOT, check=True)
-    format_xml(check)
+    xml = source_files(".xml")
+    required = [command[0] for command, files in jobs if files]
+    if xml:
+        required.append("xmllint")
+    missing = [tool for tool in required if shutil.which(tool) is None]
+    if missing:
+        raise RuntimeError("Install these formatters and add them to PATH: " + ", ".join(missing))
+    for command, files in jobs:
+        # Some formatters read stdin when no filenames are supplied.
+        if files:
+            subprocess.run([*command, *files], cwd=ROOT, check=True)
+    format_xml(xml, check)
 
 
 def main() -> None:
@@ -66,9 +66,6 @@ def main() -> None:
         "--check", action="store_true", help="Check formatting without changing files."
     )
     args = parser.parse_args()
-    missing = [tool for tool in FORMATTERS if shutil.which(tool) is None]
-    if missing:
-        parser.error("Install these formatters and add them to PATH: " + ", ".join(missing))
     try:
         format_sources(args.check)
     except subprocess.CalledProcessError as error:
