@@ -570,9 +570,9 @@ function OKGR_Planet2_TemplBuild(
     var ByteCount: Integer
 ): Pointer; cdecl; external OkgfLibraryName name 'OKGR_Planet2_TemplBuild';
 
-function OKGR_Planet2_TemplDel(
+procedure OKGR_Planet2_TemplDel(
     TemplateData: Pointer
-): Integer; cdecl; external OkgfLibraryName name 'OKGR_Planet2_TemplDel';
+); cdecl; external OkgfLibraryName name 'OKGR_Planet2_TemplDel';
 
 procedure OKGR_Planet2_DrawAndLight_32(
     Dest: Pointer;
@@ -3599,7 +3599,8 @@ end;
 function Ex_OKGR_Planet2_TemplDel(TemplateData: Pointer): Integer;
 begin
   try
-    Result := OKGR_Planet2_TemplDel(TemplateData);
+    OKGR_Planet2_TemplDel(TemplateData);
+    Result := 0;
   except
     raise Exception.Create('Error in OKGR_Planet2_TemplDel');
   end;
