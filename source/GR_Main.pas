@@ -4385,8 +4385,8 @@ begin
     end
     else
     begin
-      Bounds.Left := (DesktopDisplayMode.Width - Cardinal(Width)) div 2;
-      Bounds.Top := (DesktopDisplayMode.Height - Cardinal(Height)) div 2;
+      Bounds.Left := SDL_WINDOWPOS_CENTERED;
+      Bounds.Top := SDL_WINDOWPOS_CENTERED;
     end;
     Bounds.Right := Bounds.Left + Width;
     Bounds.Bottom := Bounds.Top + Height;
@@ -5225,7 +5225,7 @@ begin
   with Direct3DPresentParameters do
   begin
     System.FillChar(Pointer(@Direct3DPresentParameters)^, SizeOf(Direct3DPresentParameters), 0);
-    Windowed := WindowedModeRequested and (Cardinal(GameScreenHeight) < DesktopDisplayMode.Height);
+    Windowed := WindowedModeRequested;
     DeviceWindow := MainWindowHandle;
     if DisableTripleBuffer then
       BackBufferCount := 1
@@ -5238,6 +5238,16 @@ begin
       if VSyncEnabled then
         PresentationInterval := D3DPRESENT_INTERVAL_DEFAULT;
       SwapEffect := D3DSWAPEFFECT_DISCARD;
+      if AlternateViewportEnabled then
+      begin
+        BackBufferWidth := PresentationWidth;
+        BackBufferHeight := PresentationHeight;
+      end
+      else
+      begin
+        BackBufferWidth := GameScreenWidth;
+        BackBufferHeight := GameScreenHeight;
+      end;
     end
     else
     begin
