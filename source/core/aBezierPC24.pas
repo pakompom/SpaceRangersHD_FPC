@@ -1,9 +1,10 @@
 unit aBezierPC24;
 
-{$mode delphi}
-{$inline on}
-{$R-}{$Q-}
-{$optimization nofastmath}
+{$MODE delphi}
+{$INLINE on}
+{$R-}
+{$Q-}
+{$OPTIMIZATION nofastmath}
 { This kernel controls its own significand rounding and exponent scaling. }
 {$LEGACYPC24 OFF}
 
@@ -22,8 +23,11 @@ function BezierMul(const A, B: TBezierPC24Wide): TBezierPC24Wide; inline;
 function BezierDiv(const A, B: TBezierPC24Wide): TBezierPC24Wide; inline;
 function BezierPower(Base: TBezierPC24Wide; Exponent: Integer): TBezierPC24Wide;
 function BezierValue(const Value: TBezierPC24Wide): Double; inline;
-function BezierAddProduct(Accumulator: Double; const Weight: TBezierPC24Wide;
-  Coordinate: Single): Double; inline;
+function BezierAddProduct(
+    Accumulator: Double;
+    const Weight: TBezierPC24Wide;
+    Coordinate: Single
+): Double; inline;
 
 implementation
 
@@ -52,8 +56,10 @@ begin
         Inc(Shift);
       end;
       { frexp's [0.5, 1) representation for a subnormal input. }
-      Bits := (Bits and QWord($8000000000000000)) or
-        (QWord(1022) shl 52) or (Fraction and QWord($000FFFFFFFFFFFFF));
+      Bits :=
+          (Bits and QWord($8000000000000000))
+              or (QWord(1022) shl 52)
+              or (Fraction and QWord($000FFFFFFFFFFFFF));
       Result.Mantissa := PDouble(@Bits)^;
       Result.Exponent := -1021 - Shift;
     end
@@ -166,14 +172,17 @@ begin
     Exit(Value);
   Tail := Bits and QWord($1FFFFFFF);
   Bits := Bits and not QWord($1FFFFFFF);
-  if (Tail > QWord($10000000)) or
-    ((Tail = QWord($10000000)) and ((Bits and QWord($20000000)) <> 0)) then
+  if (Tail > QWord($10000000))
+      or ((Tail = QWord($10000000)) and ((Bits and QWord($20000000)) <> 0)) then
     Inc(Bits, QWord($20000000));
   Result := PDouble(@Bits)^;
 end;
 
-function BezierAddProduct(Accumulator: Double; const Weight: TBezierPC24Wide;
-  Coordinate: Single): Double;
+function BezierAddProduct(
+    Accumulator: Double;
+    const Weight: TBezierPC24Wide;
+    Coordinate: Single
+): Double;
 var
   Product: TBezierPC24Wide;
   Bits: QWord;
@@ -181,9 +190,8 @@ var
 begin
   Product := BezierMul(Weight, BezierWide(Coordinate));
   Bits := PQWord(@Accumulator)^ and QWord($7FFFFFFFFFFFFFFF);
-  if ((Product.Mantissa = 0) or
-      ((Product.Exponent >= -126) and (Product.Exponent <= 127))) and
-    ((Bits = 0) or (((Bits shr 52) >= 897) and ((Bits shr 52) <= 1150))) then
+  if ((Product.Mantissa = 0) or ((Product.Exponent >= -126) and (Product.Exponent <= 127)))
+      and ((Bits = 0) or (((Bits shr 52) >= 897) and ((Bits shr 52) <= 1150))) then
   begin
     A := Accumulator;
     P := BezierValue(Product);

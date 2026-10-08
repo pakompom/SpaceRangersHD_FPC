@@ -2384,11 +2384,11 @@ var
   Found: Boolean;
   DllSuffix: WideString;
   SteamClientPath: AnsiString;
-{$IFDEF FPC}
+  {$IFDEF FPC}
   Entry: Windows.MODULEENTRY32;
-{$ELSE}
+  {$ELSE}
   Entry: TModuleEntry32;
-{$ENDIF}
+  {$ENDIF}
 
   function MatchesModuleDirectoryPrefix(
       Prefix,
