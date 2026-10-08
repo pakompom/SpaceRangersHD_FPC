@@ -24,8 +24,12 @@ uses
   SDL2,
   GameEvents;
 
+const
+  MixerFrames = 1024;
+
 type
   TGameSound = class;
+  TGameAudioMixer = class;
   TGameSoundBuffer = class(TInterfacedObject, IDirectSoundBuffer, IDirectSoundNotify)
   private
     Owner: TGameSound;
@@ -82,6 +86,12 @@ type
   TGameSound = class(TInterfacedObject, IDirectSound)
     Device: Cardinal;
     Buffers: TFPList;
+    MixerLock: TRTLCriticalSection;
+    MixerLockReady: Boolean;
+    Mixer: TGameAudioMixer;
+    procedure Lock;
+    procedure Unlock;
+    procedure Mix(Samples: PSingle; Frames: Integer);
     constructor Create;
     destructor Destroy; override;
     function CreateSoundBuffer(
@@ -101,21 +111,62 @@ type
     function Initialize(Guid: Pointer): LongInt; stdcall;
   end;
 
-procedure MixAudio(UserData: Pointer; Stream: PByte; Length: Integer); cdecl;
+  TGameAudioMixer = class(TThread)
+    Owner: TGameSound;
+    constructor Create(AOwner: TGameSound);
+    procedure Execute; override;
+  end;
+
+procedure TGameSound.Mix(Samples: PSingle; Frames: Integer);
 var
-  Sound: TGameSound;
   Index: Integer;
-  Samples: PSingle;
 begin
-  FillChar(Stream^, Length, 0);
-  Sound := TGameSound(UserData);
-  Samples := PSingle(Stream);
-  // SDL holds the device lock during this callback. Buffer edits and destruction
-  // take the same lock; the callback never calls into game objects.
-  for Index := 0 to Sound.Buffers.Count - 1 do
-    TGameSoundBuffer(Sound.Buffers[Index]).Mix(Samples, Length div (2 * SizeOf(Single)));
-  for Index := 0 to Length div SizeOf(Single) - 1 do
+  FillChar(Samples^, Frames * 2 * SizeOf(Single), 0);
+  // Buffer edits, destruction and mixing share the same critical section.
+  for Index := 0 to Buffers.Count - 1 do
+    TGameSoundBuffer(Buffers[Index]).Mix(Samples, Frames);
+  for Index := 0 to Frames * 2 - 1 do
     Samples[Index] := EnsureRange(Samples[Index], -1.0, 1.0);
+end;
+
+constructor TGameAudioMixer.Create(AOwner: TGameSound);
+begin
+  inherited Create(True);
+  Owner := AOwner;
+end;
+
+procedure TGameAudioMixer.Execute;
+var
+  PCM: array[0..MixerFrames * 2 - 1] of Single;
+begin
+  while not Terminated do
+  begin
+    if SDL_GetQueuedAudioSize(Owner.Device) > SizeOf(PCM) then
+    begin
+      Sleep(2);
+      Continue;
+    end;
+    Owner.Lock;
+    try
+      Owner.Mix(@PCM[0], MixerFrames);
+    finally
+      Owner.Unlock;
+    end;
+    // SDL owns the queued copy. Never wait for its audio thread while holding
+    // the game mixer lock or invoking notification handlers.
+    if SDL_QueueAudio(Owner.Device, @PCM[0], SizeOf(PCM)) < 0 then
+      raise Exception.Create('Cannot queue audio: ' + string(SDL_GetError));
+  end;
+end;
+
+procedure TGameSound.Lock;
+begin
+  EnterCriticalSection(MixerLock);
+end;
+
+procedure TGameSound.Unlock;
+begin
+  LeaveCriticalSection(MixerLock);
 end;
 
 constructor TGameSound.Create;
@@ -123,6 +174,8 @@ var
   Desired: TSDL_AudioSpec;
 begin
   inherited Create;
+  InitCriticalSection(MixerLock);
+  MixerLockReady := True;
   Buffers := TFPList.Create;
   if SDL_InitSubSystem(SDL_INIT_AUDIO) < 0 then
     raise Exception.Create(string(SDL_GetError));
@@ -130,19 +183,29 @@ begin
   Desired.Frequency := 44100;
   Desired.Format := AUDIO_F32SYS;
   Desired.Channels := 2;
-  Desired.Samples := 1024;
-  Desired.Callback := MixAudio;
-  Desired.UserData := Self;
+  Desired.Samples := MixerFrames;
+  // A nil callback selects SDL's queue. Keep at most two mixer blocks queued
+  // (about 46 ms at 44.1 kHz), using the same path on every platform.
   Device := SDL_OpenAudioDevice(nil, 0, @Desired, nil, 0);
   if Device = 0 then
     raise Exception.Create(string(SDL_GetError));
+  Mixer := TGameAudioMixer.Create(Self);
+  Mixer.Start;
   SDL_PauseAudioDevice(Device, 0);
 end;
 
 destructor TGameSound.Destroy;
 begin
+  if Mixer <> nil then
+  begin
+    Mixer.Terminate;
+    Mixer.WaitFor;
+    Mixer.Free;
+  end;
   if Device <> 0 then
     SDL_CloseAudioDevice(Device);
+  if MixerLockReady then
+    DoneCriticalSection(MixerLock);
   Buffers.Free;
   SDL_QuitSubSystem(SDL_INIT_AUDIO);
   inherited Destroy;
@@ -161,21 +224,21 @@ begin
     if Length(Data) > 0 then
       FillChar(Data[0], Length(Data), $80);
   UpdateGains;
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Owner.Buffers.Add(Self);
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
 end;
 
 destructor TGameSoundBuffer.Destroy;
 begin
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Owner.Buffers.Remove(Self);
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   inherited Destroy;
 end;
@@ -281,17 +344,17 @@ function TGameSoundBuffer.GetCurrentPosition(
 var
   Position: Cardinal;
 begin
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Position := Trunc(Cursor) * Wave.BlockAlign;
     if PlayCursor <> nil then
       PlayCursor^ := Position;
-    // SDL consumes PCM only inside the locked callback, so there is no separate
-    // hardware write-ahead cursor. Lock/Unlock exclude that callback during refill.
+    // The mixer consumes PCM while holding this lock. Lock/Unlock exclude
+    // mixing during refill; the SDL queue holds already mixed samples.
     if WriteCursor <> nil then
       WriteCursor^ := Position;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
@@ -324,11 +387,11 @@ begin
 end;
 function TGameSoundBuffer.GetStatus(out Status: Cardinal): LongInt;
 begin
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Status := Ord(Playing) * DSBSTATUS_PLAYING;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
@@ -361,7 +424,7 @@ begin
   First := Min(Bytes, Cardinal(Length(Data)) - Offset);
   if (First <> Bytes) and ((Audio2 = nil) or (Bytes2 = nil)) then
     Exit(DSERR_INVALIDPARAM);
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   Audio1^ := @Data[Offset];
   Bytes1^ := First;
   if Audio2 <> nil then
@@ -380,17 +443,17 @@ function TGameSoundBuffer.Unlock(
     Bytes2: Cardinal
 ): LongInt;
 begin
-  SDL_UnlockAudioDevice(Owner.Device);
+  Owner.Unlock;
   Result := DS_OK;
 end;
 function TGameSoundBuffer.Play(Reserved1, Reserved2, Flags: Cardinal): LongInt;
 begin
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Looping := Flags and DSBPLAY_LOOPING <> 0;
     Playing := True;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
@@ -398,11 +461,11 @@ function TGameSoundBuffer.SetCurrentPosition(Position: Cardinal): LongInt;
 begin
   if (Wave.BlockAlign = 0) or (Position >= Cardinal(Length(Data))) then
     Exit(DSERR_INVALIDPARAM);
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Cursor := Position div Wave.BlockAlign;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
@@ -419,33 +482,33 @@ begin
       or (Value.SamplesPerSecond = 0)
       or (Value.BlockAlign <> Value.Channels * (Value.BitsPerSample div 8)) then
     Exit(DSERR_BADFORMAT);
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Wave := Value;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
 function TGameSoundBuffer.SetVolume(Volume: Integer): LongInt;
 begin
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     VolumeDb := EnsureRange(Volume, -10000, 0);
     UpdateGains;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
 function TGameSoundBuffer.SetPan(Pan: Integer): LongInt;
 begin
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     PanDb := EnsureRange(Pan, -10000, 10000);
     UpdateGains;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
@@ -453,21 +516,21 @@ function TGameSoundBuffer.SetFrequency(Frequency: Cardinal): LongInt;
 begin
   if Frequency = 0 then
     Exit(DSERR_INVALIDPARAM);
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Wave.SamplesPerSecond := Frequency;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
 function TGameSoundBuffer.Stop: LongInt;
 begin
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     Playing := False;
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;
@@ -482,13 +545,13 @@ function TGameSoundBuffer.SetNotificationPositions(
 begin
   if (Count <> 0) and (Positions = nil) then
     Exit(DSERR_INVALIDPARAM);
-  SDL_LockAudioDevice(Owner.Device);
+  Owner.Lock;
   try
     SetLength(Notifications, Count);
     if Count <> 0 then
       Move(Positions^, Notifications[0], Count * SizeOf(TDSPositionNotify));
   finally
-    SDL_UnlockAudioDevice(Owner.Device);
+    Owner.Unlock;
   end;
   Result := DS_OK;
 end;

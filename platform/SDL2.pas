@@ -385,8 +385,13 @@ function SDL_OpenAudioDevice(
 ): Cardinal; cdecl; external SDL2Library;
 procedure SDL_CloseAudioDevice(Device: Cardinal); cdecl; external SDL2Library;
 procedure SDL_PauseAudioDevice(Device: Cardinal; Pause: Integer); cdecl; external SDL2Library;
-procedure SDL_LockAudioDevice(Device: Cardinal); cdecl; external SDL2Library;
-procedure SDL_UnlockAudioDevice(Device: Cardinal); cdecl; external SDL2Library;
+
+function SDL_QueueAudio(
+    Device: Cardinal;
+    Data: Pointer;
+    Length: Cardinal
+): Integer; cdecl; external SDL2Library;
+function SDL_GetQueuedAudioSize(Device: Cardinal): Cardinal; cdecl; external SDL2Library;
 
 implementation
 
