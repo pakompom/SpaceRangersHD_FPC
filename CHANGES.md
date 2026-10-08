@@ -4,6 +4,9 @@ This changelog records game-source changes for Free Pascal compatibility.
 
 - Report audio mixer failures through the main-thread worker-error path, retaining
   their backtraces. Join the mixer before closing its device, including on failure.
+- Report pending save-worker failures on the main thread and during normal
+  teardown. Finish queued saves before releasing their resources, always release
+  the save lock, and log secondary save errors without interrupting fatal cleanup.
 - Preserve original exceptions through the selected screen-transition and
   recursive drawing handlers, adding context without replacing their backtraces.
 - Stop mouse edge scrolling outside the focused window in the star map and film

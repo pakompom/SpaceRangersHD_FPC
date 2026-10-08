@@ -1690,6 +1690,7 @@ begin
   // Script requests close/change screens. Finish them before releasing the UI,
   // including when this runtime is rebuilt after a settings/mod change.
   StopScriptRequestThread;
+  FinalizeSaveWriter;
   ArcadeHitSounds := nil;
   ArcadeExplosionSounds := nil;
   ArcadeItemSounds := nil;
@@ -1985,7 +1986,6 @@ begin
         ReleaseSpaceObject(PlanetSpaceTemplates[Index].SpaceObject);
   end;
   PlanetSpaceTemplates := nil;
-  FinalizeSaveWriter;
   if CacheLoader <> nil then
   begin
     CacheLoader.Free;

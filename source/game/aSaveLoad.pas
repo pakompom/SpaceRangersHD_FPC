@@ -57,11 +57,12 @@ procedure RestoreGameFromMemorySnapshot;
 
 procedure InitializeSaveWriter;
 
-procedure FinalizeSaveWriter;
+procedure FinalizeSaveWriter(RaiseOnFailure: Boolean = True);
 
 implementation
 
 uses
+  GameEvents,
   aMyFunction,
   aGalaxyStruct,
   aKling,
@@ -118,101 +119,104 @@ var
       WideString;
 begin
   SaveLoadLock.Enter;
-  AutoName := SaveManagerScreen.GetAutoSavePath;
-  TurnName := SaveManagerScreen.GetTurnSavePath;
-  QuickName := SaveManagerScreen.GetQuickSavePath(1);
-  CreateDir(NativeGamePath(AnsiString(GetGameUserDirectory + 'Save')));
-  F := nil;
   try
-    F := TFileEC.Create;
-    TempName := GetGameUserDirectory + 'Save\save.tmp';
-    if FileExists(NativeGamePath(AnsiString(TempName))) then
-      SysUtils.DeleteFile(NativeGamePath(TempName));
-    F.SetFileName(TempName);
-    F.CreateNew;
-    HeaderBuffer.SaveToFile(F);
-    if PreviewBuffer.DataSize > 0 then
-      PreviewBuffer.CompressZlibPayloadInPlace(False);
-    Size := PreviewBuffer.DataSize;
-    F.WriteBuffer(@Size, SizeOf(Size));
-    if Size > 0 then
-      F.WriteBuffer(PreviewBuffer.Data, Size);
-    if SecondaryPreviewBuffer.DataSize > 0 then
-      SecondaryPreviewBuffer.CompressZlibPayloadInPlace(False);
-    Size := SecondaryPreviewBuffer.DataSize;
-    F.WriteBuffer(@Size, SizeOf(Size));
-    if Size > 0 then
-      F.WriteBuffer(SecondaryPreviewBuffer.Data, Size);
-    GameStateBuffer.CompressZlibPayloadInPlace(False);
-    Size := GameStateBuffer.ComputeCrc32;
-    F.WriteBuffer(@Size, SizeOf(Size));
-    Seed := RandomIntRange(0, 2000000000);
-    GameStateBuffer.ApplyDatXorCipher(Seed);
-    F.WriteBuffer(@Seed, SizeOf(Seed));
-    Size := GameStateBuffer.DataSize;
-    F.WriteBuffer(@Size, SizeOf(Size));
-    if Size > 0 then
-      F.WriteBuffer(GameStateBuffer.Data, Size);
-    FilmBuffer.CompressZlibPayloadInPlace(False);
-    Size := FilmBuffer.DataSize;
-    F.WriteBuffer(FilmBuffer.Data, Size);
-    F.ReleaseHandle;
-    SourceName := TempName;
-    TargetName := FileName;
-    if (FileName = QuickName) and (QuickSaveExtraSlots > 0) then
-    begin
-      Prefix :=
-          TrimWideString(ExtractFileDirW(QuickName))
-              + '\'
-              + TrimWideString(ExtractFileNameNoExtW(QuickName));
-      NewName := Prefix + IntToWideString(QuickSaveExtraSlots + 1) + '.sav';
-      for I := QuickSaveExtraSlots downto 1 do
+    AutoName := SaveManagerScreen.GetAutoSavePath;
+    TurnName := SaveManagerScreen.GetTurnSavePath;
+    QuickName := SaveManagerScreen.GetQuickSavePath(1);
+    CreateDir(NativeGamePath(AnsiString(GetGameUserDirectory + 'Save')));
+    F := nil;
+    try
+      F := TFileEC.Create;
+      TempName := GetGameUserDirectory + 'Save\save.tmp';
+      if FileExists(NativeGamePath(AnsiString(TempName))) then
+        SysUtils.DeleteFile(NativeGamePath(TempName));
+      F.SetFileName(TempName);
+      F.CreateNew;
+      HeaderBuffer.SaveToFile(F);
+      if PreviewBuffer.DataSize > 0 then
+        PreviewBuffer.CompressZlibPayloadInPlace(False);
+      Size := PreviewBuffer.DataSize;
+      F.WriteBuffer(@Size, SizeOf(Size));
+      if Size > 0 then
+        F.WriteBuffer(PreviewBuffer.Data, Size);
+      if SecondaryPreviewBuffer.DataSize > 0 then
+        SecondaryPreviewBuffer.CompressZlibPayloadInPlace(False);
+      Size := SecondaryPreviewBuffer.DataSize;
+      F.WriteBuffer(@Size, SizeOf(Size));
+      if Size > 0 then
+        F.WriteBuffer(SecondaryPreviewBuffer.Data, Size);
+      GameStateBuffer.CompressZlibPayloadInPlace(False);
+      Size := GameStateBuffer.ComputeCrc32;
+      F.WriteBuffer(@Size, SizeOf(Size));
+      Seed := RandomIntRange(0, 2000000000);
+      GameStateBuffer.ApplyDatXorCipher(Seed);
+      F.WriteBuffer(@Seed, SizeOf(Seed));
+      Size := GameStateBuffer.DataSize;
+      F.WriteBuffer(@Size, SizeOf(Size));
+      if Size > 0 then
+        F.WriteBuffer(GameStateBuffer.Data, Size);
+      FilmBuffer.CompressZlibPayloadInPlace(False);
+      Size := FilmBuffer.DataSize;
+      F.WriteBuffer(FilmBuffer.Data, Size);
+      F.ReleaseHandle;
+      SourceName := TempName;
+      TargetName := FileName;
+      if (FileName = QuickName) and (QuickSaveExtraSlots > 0) then
       begin
-        if I > 1 then
-          OldName := Prefix + IntToWideString(I) + '.sav'
-        else
-          OldName := QuickName;
-        if FileExists(NativeGamePath(AnsiString(NewName))) then
-          SysUtils.DeleteFile(NativeGamePath(NewName));
-        RenameFile(NativeGamePath(OldName), NativeGamePath(NewName));
-        NewName := OldName;
+        Prefix :=
+            TrimWideString(ExtractFileDirW(QuickName))
+                + '\'
+                + TrimWideString(ExtractFileNameNoExtW(QuickName));
+        NewName := Prefix + IntToWideString(QuickSaveExtraSlots + 1) + '.sav';
+        for I := QuickSaveExtraSlots downto 1 do
+        begin
+          if I > 1 then
+            OldName := Prefix + IntToWideString(I) + '.sav'
+          else
+            OldName := QuickName;
+          if FileExists(NativeGamePath(AnsiString(NewName))) then
+            SysUtils.DeleteFile(NativeGamePath(NewName));
+          RenameFile(NativeGamePath(OldName), NativeGamePath(NewName));
+          NewName := OldName;
+        end;
+      end;
+      if FileExists(NativeGamePath(AnsiString(TargetName))) then
+        SysUtils.DeleteFile(NativeGamePath(TargetName));
+      RenameFile(NativeGamePath(SourceName), NativeGamePath(TargetName));
+    except
+      on E: Exception do
+      begin
+        AppendLogLineThreadSafe(E.Message);
+        if FileName = AutoName then
+          Galaxy.ShowLocalizedWarning('Warning.AutoSaveFailed');
+        if FileName = TurnName then
+          Galaxy.ShowLocalizedWarning('Warning.TurnSaveFailed');
+        if FileName = QuickName then
+          Galaxy.ShowLocalizedWarning('Warning.QuickSaveFailed');
       end;
     end;
-    if FileExists(NativeGamePath(AnsiString(TargetName))) then
-      SysUtils.DeleteFile(NativeGamePath(TargetName));
-    RenameFile(NativeGamePath(SourceName), NativeGamePath(TargetName));
-  except
-    on E: Exception do
-    begin
-      AppendLogLineThreadSafe(E.Message);
-      if FileName = AutoName then
-        Galaxy.ShowLocalizedWarning('Warning.AutoSaveFailed');
-      if FileName = TurnName then
-        Galaxy.ShowLocalizedWarning('Warning.TurnSaveFailed');
-      if FileName = QuickName then
-        Galaxy.ShowLocalizedWarning('Warning.QuickSaveFailed');
-    end;
+    if F <> nil then
+      F.Free;
+    if FileExists(NativeGamePath(AnsiString(TempName))) then
+      SysUtils.DeleteFile(NativeGamePath(TempName));
+    if HeaderBuffer <> nil then
+      HeaderBuffer.Free;
+    HeaderBuffer := nil;
+    if PreviewBuffer <> nil then
+      PreviewBuffer.Free;
+    PreviewBuffer := nil;
+    if SecondaryPreviewBuffer <> nil then
+      SecondaryPreviewBuffer.Free;
+    SecondaryPreviewBuffer := nil;
+    if GameStateBuffer <> nil then
+      GameStateBuffer.Free;
+    GameStateBuffer := nil;
+    if FilmBuffer <> nil then
+      FilmBuffer.Free;
+    FilmBuffer := nil;
+  finally
+    SaveLoadLock.Leave;
   end;
-  if F <> nil then
-    F.Free;
-  if FileExists(NativeGamePath(AnsiString(TempName))) then
-    SysUtils.DeleteFile(NativeGamePath(TempName));
-  if HeaderBuffer <> nil then
-    HeaderBuffer.Free;
-  HeaderBuffer := nil;
-  if PreviewBuffer <> nil then
-    PreviewBuffer.Free;
-  PreviewBuffer := nil;
-  if SecondaryPreviewBuffer <> nil then
-    SecondaryPreviewBuffer.Free;
-  SecondaryPreviewBuffer := nil;
-  if GameStateBuffer <> nil then
-    GameStateBuffer.Free;
-  GameStateBuffer := nil;
-  if FilmBuffer <> nil then
-    FilmBuffer.Free;
-  FilmBuffer := nil;
-  SaveLoadLock.Leave;
 end;
 
 procedure TSaver.QueueSave(
@@ -787,14 +791,28 @@ begin
   SaveWriter := TSaver.Create;
 end;
 
-procedure FinalizeSaveWriter;
+procedure FinalizeSaveWriter(RaiseOnFailure: Boolean);
 begin
   if SaveWriter <> nil then
   begin
-    if SaveWriter.IsRunning then
-      SaveWriter.WaitForIdle(INFINITE);
-    SaveWriter.Free;
-    SaveWriter := nil;
+    // Finish even a queued save, then retain its diagnostics before destruction.
+    WaitGameEvent(SaveWriter.IdleEvent, INFINITE);
+    try
+      try
+        SaveWriter.CheckFailure;
+      except
+        on E: EWorkerFailure do
+        begin
+          if RaiseOnFailure then
+            raise;
+          // Fatal teardown must keep the primary error and finish cleanup.
+          AppendLogLineThreadSafe('Save writer during cleanup: ' + E.Message);
+          AppendLogLineThreadSafe(E.WorkerBacktrace);
+        end;
+      end;
+    finally
+      FreeAndNil(SaveWriter);
+    end;
   end;
 end;
 

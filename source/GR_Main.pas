@@ -2314,6 +2314,7 @@ implementation
 uses
   GameGraphics,
   GameAudio,
+  aSaveLoad,
   GameInput,
   SDL2,
   GI_Main,
@@ -5726,6 +5727,8 @@ begin
     while True do
     begin
       CheckGalaxyWorkerFailures;
+      if SaveWriter <> nil then
+        SaveWriter.CheckFailure;
       if SoundManager <> nil then
         CheckGameSoundFailure(SoundManager.DirectSound);
       if ExitScreenLoop then

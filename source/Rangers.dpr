@@ -864,6 +864,7 @@ begin
           try
             FreeAndNil(NewGameGenerationThread);
             FreeAndNil(SteamCallbackThread);
+            FinalizeSaveWriter(False);
             if Galaxy <> nil then
             begin
               Galaxy.Free;
