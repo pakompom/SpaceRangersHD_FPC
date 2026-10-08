@@ -2,6 +2,8 @@
 
 This changelog records game-source changes for Free Pascal compatibility.
 
+- Preserve original exceptions through the selected screen-transition and
+  recursive drawing handlers, adding context without replacing their backtraces.
 - Report galaxy-generation and simulation failures on the main thread, retaining
   script errors, stage/seed context and worker backtraces. Cancel dependent work
   before cleanup and exit with an error instead of leaving the introduction

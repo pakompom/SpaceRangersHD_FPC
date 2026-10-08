@@ -1266,10 +1266,11 @@ begin
       if Child <> nil then
       begin
         AppendLogLineThreadSafe('Error in TObjectGI.DrawEx, label = ' + IntToStr(Stage));
-        raise Exception.Create('obj - ' + Child.ControlName + ' ' + Child.ClassName);
+        E.Message := 'obj - ' + Child.ControlName + ' ' + Child.ClassName + ': ' + E.Message;
       end
       else
-        raise Exception.Create('TObjectGI.DrawEx, label = ' + IntToStr(Stage));
+        E.Message := 'TObjectGI.DrawEx, label = ' + IntToStr(Stage) + ': ' + E.Message;
+      raise;
     end;
   end;
 end;

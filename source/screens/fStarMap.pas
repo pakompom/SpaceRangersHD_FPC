@@ -1029,7 +1029,8 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      raise Exception.Create('TfStarMap.AfterRun, label = ' + IntToStr(Stage));
+      E.Message := 'TfStarMap.AfterRun, label = ' + IntToStr(Stage) + ': ' + E.Message;
+      raise;
     end;
   end;
 end;
@@ -2630,7 +2631,8 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      raise Exception.Create('TfStarMap.Draw2, label = ' + IntToStr(Stage));
+      E.Message := 'TfStarMap.Draw2, label = ' + IntToStr(Stage) + ': ' + E.Message;
+      raise;
     end;
   end;
 end;
