@@ -131,6 +131,8 @@ def prepare_compiler(
     llvm_flags = (*llvm_options(toolchain / "clang"), jobs) if toolchain else bootstrap_flags
     if target == "linux":
         llvm_flags += ("-Aclang-llvm",)
+    if cpu == "x86_64":
+        llvm_flags += ("-CpX86-64-V2", "-CfX86-64-V2")
     sdk = None
     if platform.system() == "Darwin":
         sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()

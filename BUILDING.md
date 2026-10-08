@@ -3,6 +3,7 @@
 ## Requirements
 
 Desktop builds use the host architecture on Linux and macOS: x86_64 or AArch64.
+The x86_64 game and runtime require an x86-64-v2 CPU (SSE4.2 and POPCNT).
 Requires Python 3.10+, FPC 3.2.2, GNU Make, CMake 3.20+, pkg-config, Clang 14+, and development
 libraries for SDL2 2.26+ (or SDL2-compat), libogg, libvorbis, libjpeg, and libpng.
 
