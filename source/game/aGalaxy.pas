@@ -3039,7 +3039,9 @@ begin
       on E: Exception do
       begin
         AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-        raise Exception.Create('Error in procedure TGalaxy.NextDay label = ' + IntToStr(Stage));
+        E.Message :=
+            'Error in procedure TGalaxy.NextDay label = ' + IntToStr(Stage) + ': ' + E.Message;
+        raise;
       end;
     end;
 end;

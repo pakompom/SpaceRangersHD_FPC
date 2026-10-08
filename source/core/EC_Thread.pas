@@ -13,7 +13,9 @@ uses
 
 type
 
-  EWorkerFailure = class(Exception);
+  EWorkerFailure = class(Exception)
+    WorkerBacktrace: string;
+  end;
 
   TThreadEC = class;
 
@@ -21,7 +23,7 @@ type
   private
     Worker: TThread;
     Failure: string;
-    procedure CheckFailure;
+    FailureBacktrace: string;
   public
     Lock: TCriticalSection;
     ThreadHandle: TThreadID;
@@ -47,6 +49,7 @@ type
     procedure Start;
     function IsRunning: Boolean;
     function WaitForIdle(TimeoutMs: Cardinal): Boolean;
+    procedure CheckFailure;
   end;
 
 const
@@ -107,22 +110,29 @@ end;
 
 procedure TThreadEC.CheckFailure;
 var
-  Message: string;
+  Message, Backtrace: string;
+  Error: EWorkerFailure;
 begin
   Lock.Enter;
   try
     Message := Failure;
+    Backtrace := FailureBacktrace;
   finally
     Lock.Leave;
   end;
   if Message <> '' then
-    raise EWorkerFailure.Create(ClassName + ': ' + Message);
+  begin
+    Error := EWorkerFailure.Create(ClassName + ': ' + Message);
+    Error.WorkerBacktrace := Backtrace;
+    raise Error;
+  end;
 end;
 
 procedure TThreadEC.ProcessRequests;
 var
   Events: array[0..1] of TGameEventHandle;
   Failed: Boolean;
+  Frame: Integer;
 begin
   Events[0] := ShutdownEvent;
   Events[1] := StartEvent;
@@ -132,16 +142,25 @@ begin
     try
       Execute;
     except
-      on E: Exception do
-      begin
-        Lock.Enter;
-        try
-          Failure := E.ClassName + ': ' + E.Message;
-        finally
-          Lock.Leave;
+      Lock.Enter;
+      try
+        Failure := ExceptObject.ClassName;
+        if ExceptObject is Exception then
+          Failure := Failure + ': ' + Exception(ExceptObject).Message;
+        // Copy diagnostics; generation and the UI may both observe this failure.
+        if ExceptObject is EWorkerFailure then
+          FailureBacktrace := EWorkerFailure(ExceptObject).WorkerBacktrace
+        else if Assigned(BackTraceStrFunc) then
+        begin
+          FailureBacktrace := BackTraceStrFunc(ExceptAddr);
+          for Frame := 0 to ExceptFrameCount - 1 do
+            FailureBacktrace :=
+                FailureBacktrace + LineEnding + BackTraceStrFunc(ExceptFrames[Frame]);
         end;
-        Failed := True;
+      finally
+        Lock.Leave;
       end;
+      Failed := True;
     end;
     Lock.Enter;
     try

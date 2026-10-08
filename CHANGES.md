@@ -2,6 +2,10 @@
 
 This changelog records game-source changes for Free Pascal compatibility.
 
+- Report galaxy-generation and simulation failures on the main thread, retaining
+  script errors, stage/seed context and worker backtraces. Cancel dependent work
+  before cleanup and exit with an error instead of leaving the introduction
+  screen waiting forever or resuming a partially updated galaxy.
 - Honor requested windowed mode at desktop-sized and larger resolutions. Set
   explicit back-buffer dimensions and use SDL centering for oversized windows.
 - Preserve the original exception and raise address in `GR_WinMessage`, adding

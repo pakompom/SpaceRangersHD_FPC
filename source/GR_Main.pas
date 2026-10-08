@@ -5725,6 +5725,7 @@ begin
     ContinueLoop := 1;
     while True do
     begin
+      CheckGalaxyWorkerFailures;
       if ExitScreenLoop then
       begin
         Result := 0;

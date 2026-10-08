@@ -684,6 +684,10 @@ procedure RecreateSpaceProcess(const ConfigName: WideString);
 
 procedure RunMainScreenStateLoop;
 
+procedure CheckGalaxyWorkerFailures;
+
+procedure StopGalaxyWorkers;
+
 procedure SwapTurnFilms;
 
 procedure ClearPersistentPlayerMessages;
@@ -2062,6 +2066,34 @@ begin
     SpaceProcess := nil;
   end;
   SpaceProcess := TProcessSE.Create(ConfigName);
+end;
+
+procedure CheckGalaxyWorkerFailures;
+begin
+  if NewGameGenerationThread <> nil then
+    NewGameGenerationThread.CheckFailure;
+  if TurnCalculationThread <> nil then
+    TurnCalculationThread.CheckFailure;
+  if ScriptRequestThread <> nil then
+    ScriptRequestThread.CheckFailure;
+end;
+
+procedure StopGalaxyWorkers;
+begin
+  if NewGameGenerationThread <> nil then
+    NewGameGenerationThread.RequestStop;
+  if TurnCalculationThread <> nil then
+    TurnCalculationThread.RequestStop;
+  StopScriptRequestThread;
+  // Generation can queue calculation. Join the producer before its dependency,
+  // keeping galaxy, UI and script state alive until both have left Execute.
+  if NewGameGenerationThread <> nil then
+    WaitGameEvent(NewGameGenerationThread.IdleEvent, INFINITE);
+  if TurnCalculationThread <> nil then
+  begin
+    TurnCalculationThread.RequestStop;
+    WaitGameEvent(TurnCalculationThread.IdleEvent, INFINITE);
+  end;
 end;
 
 procedure RunMainScreenStateLoop;

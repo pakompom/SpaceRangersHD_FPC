@@ -1135,7 +1135,8 @@ begin
   if ScriptRequestThread <> nil then
   begin
     ScriptRequestThread.RequestStop;
-    ScriptRequestThread.WaitForIdle(INFINITE);
+    // Teardown must join even when the worker has already reported a failure.
+    WaitGameEvent(ScriptRequestThread.IdleEvent, INFINITE);
   end;
 end;
 
@@ -2576,7 +2577,8 @@ begin
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
       LogScriptCallHistory;
-      raise Exception.Create(AnsiString('Error in turn code of script ' + ScriptFileName));
+      E.Message := AnsiString('Error in turn code of script ' + ScriptFileName) + ': ' + E.Message;
+      raise;
     end;
   end;
 end;

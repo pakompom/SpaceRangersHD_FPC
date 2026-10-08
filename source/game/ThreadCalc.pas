@@ -53,7 +53,6 @@ procedure ProcessPlayerStarTurn;
 implementation
 
 uses
-  GI_MessageLoop,
   aCalc,
   Types,
   GameSystem,
@@ -130,10 +129,8 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      RequestedScreenId := screenNone;
-      TMessageLoopGI(RegisteredScreens[CurrentScreenId]).RequestClose(1);
-      ExitScreenLoop := True;
-      raise Exception.Create('Error in procedure ThCa label = ' + IntToStr(Stage));
+      E.Message := 'Player-star turn failed, stage = ' + IntToStr(Stage) + ': ' + E.Message;
+      raise;
     end;
   end;
 end;
@@ -142,20 +139,24 @@ procedure TThreadCalc.Execute;
 var
   StartTick, EndTick: Cardinal;
   FrameMs: Integer;
+  FailureContext: string;
 begin
-  // $133F and $FCFF selects nearest rounding, single x87 precision and masked exceptions.
-  // Fixed-precision CPUs retain their native precision through FPC.
-  ClearExceptions(False);
-  SetExceptionMask(
-      [exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]
-  );
-  SetRoundMode(rmNearest);
-  SetPrecisionMode(pmSingle);
-  if Job = tcjGalaxy then
-  begin
-    TurnCalculationPhase := tcpGalaxyRunning;
-    if Galaxy.StasisModEnabled <> 1 then
-      try
+  try
+    if IsStopRequested then
+      Exit;
+    // $133F and $FCFF selects nearest rounding, single x87 precision and masked exceptions.
+    // Fixed-precision CPUs retain their native precision through FPC.
+    ClearExceptions(False);
+    SetExceptionMask(
+        [exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]
+    );
+    SetRoundMode(rmNearest);
+    SetPrecisionMode(pmSingle);
+    if Job = tcjGalaxy then
+    begin
+      TurnCalculationPhase := tcpGalaxyRunning;
+      if Galaxy.StasisModEnabled <> 1 then
+      begin
         if (GetPlayer <> nil) and GetPlayer.InNormalSpace then
         begin
           StartTick := GameTickCount;
@@ -183,60 +184,39 @@ begin
         else
           Galaxy.NextDay;
         Galaxy.TransferShipsInTransit;
-      except
-        on E: Exception do
-        begin
-          AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-          AppendLogLineThreadSafe('ThreadCalc exception 1');
-          if Galaxy.CurrentTurn < GalaxyWarmupTurns then
-            AppendLogLineThreadSafe(
-                'Galaxy create exception, seed = ' + IntToStr(Integer(Galaxy.GenerationSeed))
-            );
-          raise;
-        end;
       end;
-    TurnCalculationPhase := tcpGalaxyFinished;
-  end
-  else if Job = tcjPlayerStar then
-  begin
-    TurnCalculationPhase := tcpPlayerStarRunning;
-    try
+      TurnCalculationPhase := tcpGalaxyFinished;
+    end
+    else if Job = tcjPlayerStar then
+    begin
+      TurnCalculationPhase := tcpPlayerStarRunning;
       ProcessPlayerStarTurn;
-    except
-      on E: Exception do
-      begin
-        AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-        AppendLogLineThreadSafe('ThreadCalc exception 2');
-        if Galaxy.CurrentTurn < GalaxyWarmupTurns then
-          AppendLogLineThreadSafe(
-              'Galaxy create exception, seed = ' + IntToStr(Integer(Galaxy.GenerationSeed))
-          );
-        raise;
-      end;
-    end;
-    TurnCalculationPhase := tcpPlayerStarFinished;
-  end
-  else
-  begin
-    TurnCalculationPhase := tcpPlayerStarPreparationRunning;
-    PlayerStarDayPrepared := True;
-    try
+      TurnCalculationPhase := tcpPlayerStarFinished;
+    end
+    else
+    begin
+      TurnCalculationPhase := tcpPlayerStarPreparationRunning;
+      PlayerStarDayPrepared := True;
       PrimaryFilm.Clear;
       if Galaxy.StasisModEnabled <> 1 then
         PlayerStar.PrepareNextDay;
-    except
-      on E: Exception do
-      begin
-        AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-        AppendLogLineThreadSafe('ThreadCalc exception 3');
-        if Galaxy.CurrentTurn < GalaxyWarmupTurns then
-          AppendLogLineThreadSafe(
-              'Galaxy create exception, seed = ' + IntToStr(Integer(Galaxy.GenerationSeed))
-          );
-        raise;
-      end;
+      TurnCalculationPhase := tcpPlayerStarPrepared;
     end;
-    TurnCalculationPhase := tcpPlayerStarPrepared;
+  except
+    on E: Exception do
+    begin
+      AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
+      FailureContext := 'Turn calculation failed, job = ' + IntToStr(Ord(Job));
+      if Galaxy <> nil then
+        FailureContext :=
+            FailureContext
+                + ', seed = '
+                + IntToStr(Integer(Galaxy.GenerationSeed))
+                + ', turn = '
+                + IntToStr(Galaxy.CurrentTurn);
+      E.Message := FailureContext + ': ' + E.Message;
+      raise;
+    end;
   end;
 end;
 

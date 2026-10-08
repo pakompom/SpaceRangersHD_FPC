@@ -14,6 +14,9 @@ type
   TThreadCreateNewGame = class;
 
   TThreadCreateNewGame = class(TThreadEC)
+  protected
+    procedure WaitForCalculation;
+  public
     PlayerRace: TOwnerId;
     DifficultyLevels: TGalaxyDifficultyLevels;
     CaptainPortraitIndex: Integer;
@@ -29,6 +32,7 @@ implementation
 
 uses
   Classes,
+  GameEvents,
   SysUtils,
   Math,
   EC_Str,
@@ -55,8 +59,18 @@ uses
   aRuins,
   fIntroduction,
   ThreadCalc,
-  aCalc,
   aScript;
+
+procedure TThreadCreateNewGame.WaitForCalculation;
+var
+  Events: array[0..1] of TGameEventHandle;
+begin
+  Events[0] := StopEvent;
+  Events[1] := TurnCalculationThread.IdleEvent;
+  if WaitGameEvents(Length(Events), @Events, False, INFINITE) = WAIT_OBJECT_0 then
+    TurnCalculationThread.RequestStop;
+  TurnCalculationThread.WaitForIdle(INFINITE);
+end;
 
 procedure TThreadCreateNewGame.Execute;
 const
@@ -82,9 +96,13 @@ var
   StartStar: TStar;
   OwnerId: TOwnerId;
   NameLists: array[TOwnerId] of TList;
+  FailureContext: string;
+
 begin
   Stage := 0;
   try
+    if IsStopRequested then
+      Exit;
     // $133F and $FCFF selects nearest rounding, single x87 precision and masked exceptions.
     // Fixed-precision CPUs retain their native precision through FPC.
     ClearExceptions(False);
@@ -237,6 +255,8 @@ begin
     NewGameGenerationStage := 1;
     PlayerStar := nil;
     Stage := 1;
+    if IsStopRequested then
+      Exit;
     for I := 1 to GalaxyStarCount do
     begin
       Star := TStar.Create;
@@ -244,12 +264,16 @@ begin
     end;
     Galaxy.GenerateGalaxyLayout(PlayerRace);
     Stage := 2;
+    if IsStopRequested then
+      Exit;
     for I := 0 to Galaxy.Stars.Count - 1 do
     begin
       Star := Galaxy.Stars[I];
       Star.BackgroundImage := -1;
     end;
     Stage := 3;
+    if IsStopRequested then
+      Exit;
     TStar(Galaxy.Stars[0]).BackgroundImage := 14;
     TStar(Galaxy.Stars[1]).BackgroundImage := 5;
     TStar(Galaxy.Stars[2]).BackgroundImage := 70;
@@ -266,6 +290,8 @@ begin
       Star.BackgroundImage := 50 + I;
     end;
     Stage := 4;
+    if IsStopRequested then
+      Exit;
     for I := 0 to Galaxy.Stars.Count - 1 do
     begin
       Star := Galaxy.Stars[I];
@@ -273,6 +299,8 @@ begin
         Star.BackgroundImage := NextRandomIntRange(0, 15, Galaxy.RandomState);
     end;
     Stage := 5;
+    if IsStopRequested then
+      Exit;
     NewGameGenerationStage := 2;
     SpecialStar := nil;
     HomePlanet := nil;
@@ -407,9 +435,13 @@ begin
     end;
     Galaxy.HideSpecialConstellation;
     Stage := 6;
+    if IsStopRequested then
+      Exit;
     Galaxy.RefreshTechLevel;
     Galaxy.RebuildStarDistances;
     Stage := 7;
+    if IsStopRequested then
+      Exit;
     Player := TPlayer.Create;
     Player.PortraitFaceId := CaptainPortraitIndex;
     Planet := HomePlanet;
@@ -519,9 +551,13 @@ begin
     PlayerOldQuests := aMyFunction.TObjectList.Create;
     LastLoadedPlayerName := PlayerName;
     Stage := 8;
+    if IsStopRequested then
+      Exit;
     Galaxy.RefreshRangerWealthStats;
     Galaxy.RefreshRangerStrengthStats;
     Stage := 9;
+    if IsStopRequested then
+      Exit;
     Star := TObject(GetPlayer.CurrentStar.StarDistances[Galaxy.Stars.Count - 1].Star) as TStar;
     Galaxy.CreateDominatorSpawnProxy(Star);
     I := 0;
@@ -565,6 +601,8 @@ begin
       end;
     end;
     Stage := 10;
+    if IsStopRequested then
+      Exit;
     N := Round(Galaxy.GetInitialDominatorControlPercent * (Galaxy.Stars.Count / 100));
     if N > Galaxy.Stars.Count - 1 then
       N := Galaxy.Stars.Count - 1;
@@ -586,6 +624,8 @@ begin
       end;
     end;
     Stage := 11;
+    if IsStopRequested then
+      Exit;
     N :=
         Round(
             (Galaxy.Stars.Count / 100)
@@ -606,6 +646,8 @@ begin
     TStar(Galaxy.Stars[70]).ControlFaction := sfPirates;
     TStar(Galaxy.Stars[71]).ControlFaction := sfPirates;
     Stage := 12;
+    if IsStopRequested then
+      Exit;
     NewGameGenerationStage := 3;
     Galaxy.AssignTextQuestsToPlanets;
     Galaxy.InitializeConstellationDistanceTiers;
@@ -618,6 +660,8 @@ begin
         Constellation.Visible := False;
     end;
     Stage := 13;
+    if IsStopRequested then
+      Exit;
     NewGameGenerationStage := 4;
     for I := 0 to Galaxy.Planets.Count - 1 do
     begin
@@ -663,6 +707,8 @@ begin
       end;
     end;
     Stage := 14;
+    if IsStopRequested then
+      Exit;
     NewGameGenerationStage := 5;
     TRuins.Create.Init(rstRangerCenter, GetPlayer.CurrentStar, '');
     TRuins.Create.Init(rstScienceBase, GetPlayer.CurrentStar, '');
@@ -678,6 +724,8 @@ begin
         .Init(rstMilitaryBase, TObject(GetPlayer.CurrentStar.StarDistances[2].Star) as TStar, '');
     Galaxy.UpdateConstellationMilitaryStats;
     Stage := 15;
+    if IsStopRequested then
+      Exit;
     for I := 1 to Galaxy.Rangers.Count - 1 do
     begin
       Ranger := Galaxy.Rangers[I];
@@ -686,25 +734,34 @@ begin
         Ranger.SimulateUnseenProgression;
     end;
     Stage := 16;
+    if IsStopRequested then
+      Exit;
     Galaxy.RunConfigOnStartHandlers;
     Galaxy.AppendIntegritySnapshot;
     NewGameGenerationStage := 6;
     Stage := 17;
-    CalculateGalaxyTurnAndWait;
-    if ExitScreenLoop then
+    if IsStopRequested or ExitScreenLoop then
+      Exit;
+    StartGalaxyTurnCalculation;
+    WaitForCalculation;
+    if IsStopRequested or ExitScreenLoop then
       Exit;
     for I := 1 to GalaxyWarmupTurns do
     begin
       if I mod 20 = 0 then
         SysUtils.Sleep(1);
-      CalculatePlayerStarTurnAndWait;
-      if ExitScreenLoop then
+      StartPlayerStarTurnCalculation;
+      WaitForCalculation;
+      if IsStopRequested or ExitScreenLoop then
         Exit;
-      CalculateGalaxyTurnAndWait;
-      if ExitScreenLoop then
+      StartGalaxyTurnCalculation;
+      WaitForCalculation;
+      if IsStopRequested or ExitScreenLoop then
         Exit;
     end;
     Stage := 18;
+    if IsStopRequested then
+      Exit;
     GetPlayer.CurrentPlanet := nil;
     GetPlayer.DockedTo := nil;
     for I := 0 to GetPlayer.CurrentStar.Ships.Count - 1 do
@@ -856,6 +913,8 @@ begin
       Entry.SlotIndex := 0;
     end;
     Stage := 19;
+    if IsStopRequested then
+      Exit;
     // Native code passes the last planet visited by the population loop above.
     GetPlayer.ApplyCharacterPreset(
         Planet,
@@ -869,12 +928,11 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      AppendLogLineThreadSafe(
-          'Galaxy create exception, label = '
-              + IntToStr(Stage)
-              + ' seed = '
-              + IntToStr(Integer(Galaxy.GenerationSeed))
-      );
+      FailureContext := 'Galaxy generation failed, stage = ' + IntToStr(Stage);
+      if Galaxy <> nil then
+        FailureContext := FailureContext + ', seed = ' + IntToStr(Integer(Galaxy.GenerationSeed));
+      E.Message := FailureContext + ': ' + E.Message;
+      raise;
     end;
   end;
 end;

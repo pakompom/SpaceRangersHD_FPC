@@ -819,14 +819,16 @@ begin
           end;
           PurgeCacheDirectoryFiles;
         except
-          // A script may be waiting for a conversation when the UI raises.
-          // Wake it before either retrying startup or freeing script/game state.
-          if TurnCalculationThread <> nil then
-          begin
-            TurnCalculationThread.RequestStop;
-            WaitGameEvent(TurnCalculationThread.IdleEvent, INFINITE);
-          end;
-          if not SuppressModRetryPrompt and (SelectedMods <> '') and not SkipModsOnReload then
+          ExitScreenLoop := True;
+          StopGalaxyWorkers;
+          // Startup can retry without mods. A partially generated or simulated
+          // galaxy must never be reused by that recovery path.
+          if (Galaxy = nil)
+              and (NewGameGenerationThread = nil)
+              and not (ExceptObject is EWorkerFailure)
+              and not SuppressModRetryPrompt
+              and (SelectedMods <> '')
+              and not SkipModsOnReload then
             if GameMessageBox(
                     'Failed to launch, do you want to try restarting without mods?',
                     'Exception:',
@@ -837,27 +839,55 @@ begin
               ResetInstalledPackageState;
               ClearModInfoState;
               SkipModsOnReload := True;
+              ExitScreenLoop := False;
               raise;
             end;
           SkipModsOnReload := False;
-          if Galaxy <> nil then
+          if ExceptObject is EWorkerFailure then
           begin
-            Galaxy.Free;
-            Galaxy := nil;
+            AppendLogLineThreadSafe(Exception(ExceptObject).Message);
+            AppendLogLineThreadSafe(EWorkerFailure(ExceptObject).WorkerBacktrace);
+            try
+              GameMessageBox(
+                  'The game stopped because a background task failed.'
+                      + LineEnding
+                      + LineEnding
+                      + UnicodeString(Exception(ExceptObject).Message),
+                  'Space Rangers',
+                  $10
+              );
+            except
+              on DialogException: Exception do
+                AppendLogLineThreadSafe('Error dialog: ' + DialogException.Message);
+            end;
           end;
-          if MemorySnapshotBuffer <> nil then
-            MemorySnapshotBuffer.Free;
-          MemorySnapshotBuffer := nil;
-          MemorySnapshotActive := False;
-          FinalizeGlobalUiRuntime;
-          FinalizeRuntimeAndSettings;
-          FreeAllRandomSounds;
-          FinalizeScriptHostRuntime;
-          FinalizePlatformRuntime;
-          if StartupCleanupObject <> nil then
-          begin
-            StartupCleanupObject.Free;
-            StartupCleanupObject := nil;
+          try
+            FreeAndNil(NewGameGenerationThread);
+            FreeAndNil(SteamCallbackThread);
+            if Galaxy <> nil then
+            begin
+              Galaxy.Free;
+              Galaxy := nil;
+            end;
+            if MemorySnapshotBuffer <> nil then
+              MemorySnapshotBuffer.Free;
+            MemorySnapshotBuffer := nil;
+            MemorySnapshotActive := False;
+            FinalizeGlobalUiRuntime;
+            FinalizeRuntimeAndSettings;
+            FreeAllRandomSounds;
+            FinalizeScriptHostRuntime;
+            FinalizePlatformRuntime;
+            if StartupCleanupObject <> nil then
+            begin
+              StartupCleanupObject.Free;
+              StartupCleanupObject := nil;
+            end;
+          except
+            // Damaged/partially initialized state may also fail destruction.
+            // Keep the original failure; all galaxy workers are already idle.
+            on CleanupException: Exception do
+              AppendLogLineThreadSafe('Error during cleanup: ' + CleanupException.Message);
           end;
           raise;
         end;
@@ -873,6 +903,8 @@ begin
           // The launcher runs this executable directly; report failures there
           // as well as in the game log, and return a failing process status.
           WriteLn(StdErr, StartupException.ClassName, ': ', StartupException.Message);
+          if StartupException is EWorkerFailure then
+            WriteLn(StdErr, EWorkerFailure(StartupException).WorkerBacktrace);
           DumpExceptionBackTrace(StdErr);
           ExitCode := 1;
         end;

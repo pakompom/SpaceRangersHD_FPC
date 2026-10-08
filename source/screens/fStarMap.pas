@@ -1302,6 +1302,7 @@ begin
       Events[1] := TalkRequestEvent;
       EventList := @Events;
       WaitResult := WaitGameEvents(Length(Events), EventList, False, INFINITE);
+      TurnCalculationThread.CheckFailure;
       if not ExitScreenLoop then
       begin
         if (TurnCalculationThread.IdleEvent = 0) or (WaitResult = WAIT_OBJECT_0) then
@@ -7420,6 +7421,7 @@ begin
           end
           else
             WaitResult := WAIT_OBJECT_0;
+          TurnCalculationThread.CheckFailure;
           Stage := 23;
           if WaitResult = WAIT_FAILED then
             raise Exception.Create('Failed waiting for script UI event')
@@ -7463,6 +7465,7 @@ begin
           Events[1] := TalkRequestEvent;
           EventList := @Events;
           WaitResult := WaitGameEvents(Length(Events), EventList, False, INFINITE);
+          TurnCalculationThread.CheckFailure;
           if (TurnCalculationThread.IdleEvent = 0) or (WaitResult = WAIT_OBJECT_0) then
           begin
             AnimateSpacePanelOnResume := True;
@@ -7484,7 +7487,8 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      raise Exception.Create('Error in TfStarMap.FilmStep, label = ' + IntToStr(Stage));
+      E.Message := 'Error in TfStarMap.FilmStep, label = ' + IntToStr(Stage) + ': ' + E.Message;
+      raise;
     end;
   end;
 end;
@@ -9401,6 +9405,7 @@ begin
   Events[1] := TalkRequestEvent;
   EventList := @Events;
   WaitResult := WaitGameEvents(Length(Events), EventList, False, INFINITE);
+  TurnCalculationThread.CheckFailure;
   if (TurnCalculationThread.IdleEvent = 0) or (WaitResult = WAIT_OBJECT_0) then
   begin
     if PlayerStarDayPrepared then

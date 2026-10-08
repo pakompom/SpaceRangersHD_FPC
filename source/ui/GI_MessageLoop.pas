@@ -2056,11 +2056,14 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      raise Exception.Create(
+      E.Message :=
           'Error in procedure TMessageLoopGI.Run2, '
               + RegisteredLoopName
               + ', label = '
-              + IntToStr(Stage));
+              + IntToStr(Stage)
+              + ': '
+              + E.Message;
+      raise;
     end;
   end;
 end;
@@ -2095,11 +2098,14 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      raise Exception.Create(
+      E.Message :=
           'Error in procedure TMessageLoopGI.Takt2, '
               + RegisteredLoopName
               + ', label = '
-              + IntToStr(Stage));
+              + IntToStr(Stage)
+              + ': '
+              + E.Message;
+      raise;
     end;
   end;
 end;
@@ -2463,8 +2469,12 @@ begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
       if Stage in [31, 32] then
         AppendLogLineThreadSafe('key=' + IntToWideString(WParam));
-      raise Exception.Create(
-          'Error in procedure TMessageLoopGI.SysMessage, label = ' + IntToStr(Stage));
+      E.Message :=
+          'Error in procedure TMessageLoopGI.SysMessage, label = '
+              + IntToStr(Stage)
+              + ': '
+              + E.Message;
+      raise;
     end;
   end;
 end;
