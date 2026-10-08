@@ -6157,10 +6157,10 @@ begin
     Dec(PresentationDepth);
     if PresentationDepth = 0 then
     begin
-      // The canvas presentation path waits for the browser's refresh callback.
-      // Its display modes have no refresh rate; applying the legacy fallback
-      // here would discard frames at 50 Hz before that wait is reached.
-      if PresentWithoutLimit or GameWindowUsesCanvas then
+      // SDL vsync and browser refresh callbacks already pace presentation.
+      // The legacy millisecond gate would discard refreshes: at 120 Hz its
+      // strict comparison requires at least 9 ms instead of 8.33 ms.
+      if PresentWithoutLimit or VSyncEnabled or GameWindowUsesCanvas then
         PresentScreenBuffer
       else
       begin

@@ -133,8 +133,8 @@ This changelog records game-source changes for Free Pascal compatibility.
   Refresh the detected display mode on runtime reinitialization. For the canvas
   backend, use the existing list-style resolution selector and show Auto's
   actual dimensions.
-  Let canvas presentation follow browser refresh callbacks instead of applying
-  the legacy 50 FPS fallback limit and an additional loop delay. Calculate the
+  Let SDL vsync and browser refresh callbacks pace presentation without applying
+  the legacy millisecond limit and an additional loop delay. Calculate the
   FPS label from submitted frames and elapsed time rather than update iterations.
   Query the desktop cursor for window-leave handling where supported, and refresh
   the game cursor on re-entry instead of retaining a stale position at the edge.

@@ -1972,7 +1972,7 @@ begin
           RootUiObject.UnlinkOwnedChild(PopupController);
         end;
         Stage := 19;
-        if not GameWindowUsesCanvas then
+        if not (VSyncEnabled or GameWindowUsesCanvas) then
           SysUtils.Sleep(1);
         FrameTime := GameTickCount - FrameTime;
         if FrameTime > 200 then
