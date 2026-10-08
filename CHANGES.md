@@ -22,6 +22,8 @@ This changelog records game-source changes for Free Pascal compatibility.
   free its worker with the script engine. The leaked worker otherwise kept
   waiting on SDL's event condition during process shutdown. Its wait for turn
   calculation now also observes cancellation.
+- Preserve the original exception class, message and address when adding
+  message-loop context; re-raise it instead of replacing it with a generic error.
 - Ignore relative `XDG_DATA_HOME` values, preserve UTF-8 user-directory names,
   and report failed resource-directory changes instead of silently using the
   caller's working directory.

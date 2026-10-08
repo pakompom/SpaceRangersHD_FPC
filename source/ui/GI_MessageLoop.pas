@@ -1888,11 +1888,14 @@ begin
     on E: Exception do
     begin
       AppendLogLineThreadSafe(E.ClassName + ' ' + E.Message);
-      raise Exception.Create(
+      E.Message :=
           'Error in procedure TMessageLoopGI.Run, '
               + RegisteredLoopName
               + ', label = '
-              + IntToStr(Stage));
+              + IntToStr(Stage)
+              + ': '
+              + E.Message;
+      raise;
     end;
   end;
 end;
