@@ -124,8 +124,11 @@ def prepare_compiler(
     source = work / "source"
     if target == "android" and toolchain is None:
         raise RuntimeError("Android runtime compilation requires the NDK.")
-    bootstrap_flags = llvm_options()
-    llvm_flags = llvm_options(toolchain / "clang") if toolchain else bootstrap_flags
+    # LLVM object emission is independent between units. Bound the worker
+    # count so large units do not exhaust memory on hosts with many CPUs.
+    jobs = f"-j{min(6, os.cpu_count() or 1)}"
+    bootstrap_flags = (*llvm_options(), jobs)
+    llvm_flags = (*llvm_options(toolchain / "clang"), jobs) if toolchain else bootstrap_flags
     if target == "linux":
         llvm_flags += ("-Aclang-llvm",)
     sdk = None

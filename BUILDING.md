@@ -23,6 +23,9 @@ git submodule update --init --recursive
 The scripts detect the host OS; `--target=linux` or `--target=macos` selects it
 explicitly. Resources default to `game/` when `--game-dir` is omitted.
 
+The scripts set FPC's `-jN` to use up to six parallel LLVM assembly jobs, capped
+by the detected logical CPU count. This limit does not adapt to available RAM.
+
 - `--release`: `-O4` instead of the default `-O2`.
 - `--lto`: enable LLVM link-time optimization on desktop or browser builds.
 - `--rebuild`: rebuild all game units and native code (build script only).
