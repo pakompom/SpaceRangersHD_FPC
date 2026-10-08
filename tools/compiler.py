@@ -1,6 +1,7 @@
 """Bootstrap the pinned FPC compiler and isolated platform runtimes."""
 
 import hashlib
+import json
 import os
 import platform
 import re
@@ -25,17 +26,68 @@ def llvm_options(clang: str | Path = "clang") -> tuple[str, ...]:
 
 
 def source_revision() -> str:
-    """Invalidate generated compilers when their source or build recipe changes."""
-    digest = hashlib.sha256(Path(__file__).read_bytes())
-    inputs = [
-        path for name in ("compiler", "rtl", "packages") for path in (VENDOR / name).rglob("*")
-    ]
-    inputs.extend(VENDOR.glob("Makefile*"))
+    """Hash compiler inputs without rereading an unchanged vendored checkout."""
+    digest = hashlib.sha256()
+    # Packages are compiled from VENDOR by the game build, not compiler_cycle.
+    names = ["compiler", "rtl", *sorted(path.name for path in VENDOR.glob("Makefile*"))]
+    try:
+        git = ["git", "-C", str(VENDOR)]
+        toplevel = subprocess.check_output(
+            [*git, "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL
+        )
+        if Path(os.fsdecode(toplevel).strip()).resolve() != VENDOR.resolve():
+            raise ValueError("The vendor directory is not a Git worktree.")
+        digest.update(subprocess.check_output([*git, "ls-tree", "-z", "HEAD", "--", *names]))
+        digest.update(
+            subprocess.check_output(
+                [
+                    *git,
+                    "diff",
+                    "--binary",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "HEAD",
+                    "--",
+                    *names,
+                ]
+            )
+        )
+        untracked = subprocess.check_output(
+            [
+                *git,
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                *names,
+            ]
+        )
+        for name in sorted(filter(None, untracked.split(b"\0"))):
+            digest.update(name + b"\0")
+            digest.update((VENDOR / os.fsdecode(name)).read_bytes())
+        return digest.hexdigest()
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        # Source archives also work without Git metadata.
+        digest = hashlib.sha256()
+    inputs = [path for name in names for path in (VENDOR / name).rglob("*")]
+    inputs.extend(path for name in names if (path := VENDOR / name).is_file())
     for path in sorted(inputs):
         if path.is_file() and path.suffix not in (".md", ".txt"):
             digest.update(str(path.relative_to(VENDOR)).encode())
             digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+def recipe_revision(source: str, command: list[str | Path], tools: tuple[str | Path, ...]) -> str:
+    identities = []
+    for tool in tools:
+        path = Path(shutil.which(str(tool)) or tool).resolve()
+        stat = path.stat()
+        identities.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+    return hashlib.sha256(
+        json.dumps([source, list(map(str, command)), identities]).encode()
+    ).hexdigest()
 
 
 def matches(path: Path, revision: str) -> bool:
@@ -53,7 +105,7 @@ def prepare_compiler(
     if target not in ("linux", "macos", "android"):
         raise ValueError(f"Unsupported target: {target}")
     if lto and target == "android":
-        raise ValueError("LTO is currently supported only for Linux and macOS builds.")
+        raise ValueError("LTO is not supported for Android builds.")
     if target != "android" and target != desktop_target():
         raise RuntimeError("Desktop builds require a host with the target OS.")
     if not (VENDOR / "compiler/pp.pas").is_file():
@@ -62,7 +114,11 @@ def prepare_compiler(
         )
     native_cpu = host_cpu()
     cpu = "aarch64" if target == "android" else native_cpu
-    system = {"linux": "linux", "macos": "darwin", "android": "android"}[target]
+    system = {
+        "linux": "linux",
+        "macos": "darwin",
+        "android": "android",
+    }[target]
     work = WORK / f"{cpu}-{system}"
     source = work / "source"
     if target == "android" and toolchain is None:
@@ -77,30 +133,37 @@ def prepare_compiler(
     make = shutil.which("gmake") or shutil.which("make")
     if make is None:
         raise FileNotFoundError("Install GNU Make to build the vendored compiler.")
-    revision = hashlib.sha256((source_revision() + repr(bootstrap_flags)).encode()).hexdigest()
     work.mkdir(parents=True, exist_ok=True)
     compiler_name = "ppcx64" if cpu == "x86_64" else "ppca64"
     cross_flags = []
     if cpu != native_cpu:
         compiler_name = "ppcrossa64"
-        # Stop after producing a host executable that targets AArch64; the
-        # target RTL is built separately below with the Android toolchain.
-        cross_flags = ["CPU_TARGET=aarch64", "CROSSINSTALL=1"]
+        # Build a host executable; compile the target runtime separately.
+        cross_flags = [f"CPU_TARGET={cpu}", "CROSSINSTALL=1"]
     compiler = source / "compiler" / compiler_name
+    bootstrap = shutil.which(os.environ.get("FPC_BOOTSTRAP", "fpc"))
+    if bootstrap is None:
+        raise FileNotFoundError("Install FPC 3.2.2 to bootstrap the vendored compiler.")
+    compiler_command = [
+        make,
+        "-C",
+        source,
+        "compiler_cycle",
+        "NOWPOCYCLE=1",
+        f"PP={bootstrap}",
+        "OPT=-O2" + (f" -XR{sdk}" if sdk else ""),
+        "LLVM=1",
+        "OPTNEW=" + " ".join(bootstrap_flags),
+        *cross_flags,
+    ]
+    revision = recipe_revision(source_revision(), compiler_command, (make, bootstrap, "clang"))
     stamp = work / "compiler.stamp"
     if not compiler.is_file() or not matches(stamp, revision):
-        bootstrap = shutil.which(os.environ.get("FPC_BOOTSTRAP", "fpc"))
-        if bootstrap is None:
-            raise FileNotFoundError("Install FPC 3.2.2 to bootstrap the vendored compiler.")
         stamp.unlink(missing_ok=True)
         if source.exists():
             shutil.rmtree(source)
         shutil.copytree(VENDOR, source, ignore=shutil.ignore_patterns(".git"))
-        run_step(work, "compiler", [
-            make, "-C", source, "compiler_cycle", "NOWPOCYCLE=1",
-            f"PP={bootstrap}", "OPT=-O2" + (f" -XR{sdk}" if sdk else ""),
-            "LLVM=1", "OPTNEW=" + " ".join(bootstrap_flags), *cross_flags,
-        ])  # fmt: skip
+        run_step(work, "compiler", compiler_command)
         stamp.write_text(revision)
 
     runtime = work / ("runtime-lto" if lto else "runtime")
@@ -131,7 +194,20 @@ def prepare_compiler(
     if lto:
         options.append("-Clflto")
     stamp = runtime / "runtime.stamp"
-    runtime_revision = revision + repr((options, target_flags))
+    runtime_command = [
+        make,
+        "-C",
+        runtime_source / "rtl",
+        "all",
+        *target_flags,
+        f"FPC={compiler}",
+        "OPT=" + " ".join(options),
+    ]
+    runtime_revision = recipe_revision(
+        revision,
+        runtime_command,
+        (compiler, toolchain / "clang" if toolchain else "clang"),
+    )
     if not (units / "classes.ppu").is_file() or not matches(stamp, runtime_revision):
         runtime.mkdir(parents=True, exist_ok=True)
         stamp.unlink(missing_ok=True)
@@ -154,10 +230,7 @@ def prepare_compiler(
                     "-x", "assembler", "-Wa,-defsym,CPU64=1",
                     runtime_source / f"rtl/android/{loader}.as", "-o", units / f"{loader}.o",
                 ])  # fmt: skip
-        run_step(runtime, "runtime", [
-            make, "-C", runtime_source / "rtl", "all", *target_flags,
-            f"FPC={compiler}", "OPT=" + " ".join(options),
-        ])  # fmt: skip
+        run_step(runtime, "runtime", runtime_command)
         stamp.write_text(runtime_revision)
 
     packages = VENDOR / "packages"

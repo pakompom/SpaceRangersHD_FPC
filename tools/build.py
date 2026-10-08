@@ -10,6 +10,7 @@ import resource
 import shlex
 import shutil
 import subprocess
+import time
 import zipfile
 from pathlib import Path
 
@@ -18,6 +19,24 @@ from targets import desktop_directory, desktop_target
 
 ROOT = Path(__file__).resolve().parents[1]
 PASCAL_FLAGS = ("-Mdelphi", "-FcUTF8")
+PASCAL_INPUT_SUFFIXES = {
+    ".pas",
+    ".pp",
+    ".inc",
+    ".dpr",
+    ".lpr",
+    ".ppu",
+    ".o",
+    ".a",
+    ".res",
+    ".rc",
+    ".s",
+    ".as",
+    ".ico",
+    ".bmp",
+    ".png",
+    ".manifest",
+}
 
 
 def require_tool(name: str) -> Path:
@@ -35,6 +54,7 @@ def run_step(work: Path, name: str, command: list[str | Path]) -> None:
     """Keep each build step's output beside its generated files."""
     log = work / f"{name}.log"
     print(f"Building {name}…", flush=True)
+    started = time.monotonic()
     with log.open("w") as stream:
         try:
             subprocess.run(
@@ -47,61 +67,245 @@ def run_step(work: Path, name: str, command: list[str | Path]) -> None:
         except subprocess.CalledProcessError as error:
             print("\n".join(log.read_text(errors="replace").splitlines()[-30:]))
             raise RuntimeError(f"{name} failed; see {log}") from error
+    print(f"Built {name} in {time.monotonic() - started:.1f}s.", flush=True)
 
 
 def command_signature(command: list[str | Path]) -> str:
-    compiler = Path(command[0]).resolve()
+    compiler = require_tool(str(command[0]))
     stat = compiler.stat()
-    return json.dumps([list(map(str, command)), str(compiler), stat.st_mtime_ns, stat.st_size])
+    environment = {
+        key: os.environ.get(key)
+        for key in (
+            "CC",
+            "CXX",
+            "CFLAGS",
+            "CXXFLAGS",
+            "CPPFLAGS",
+            "LDFLAGS",
+            "CPATH",
+            "C_INCLUDE_PATH",
+            "CPLUS_INCLUDE_PATH",
+            "LIBRARY_PATH",
+            "SDKROOT",
+            "MACOSX_DEPLOYMENT_TARGET",
+            "EMCC_CFLAGS",
+            "EMMAKEN_CFLAGS",
+            "EM_CONFIG",
+        )
+    }
+    return json.dumps(
+        [
+            list(map(str, command)),
+            str(compiler),
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+            stat.st_size,
+            environment,
+        ]
+    )
 
 
-def compile_pascal(work: Path, command: list[str | Path], rebuild: bool) -> None:
+def file_state(paths) -> list:
+    """Conservative input inventory, including removals and preserved mtimes."""
+    result = []
+    for path in sorted(set(map(Path, paths))):
+        try:
+            stat = path.stat()
+            result.append([str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns])
+        except FileNotFoundError:
+            result.append([str(path), None])
+    return result
+
+
+def pascal_state(command: list[str | Path], dependencies: tuple[Path, ...]) -> str:
+    roots = {Path(str(arg)[3:]) for arg in command if str(arg).startswith(("-Fu", "-Fi"))}
+    sources = [Path(arg) for arg in command if str(arg).endswith((".pas", ".pp", ".dpr", ".lpr"))]
+    roots.update(path.parent for path in sources)
+    # Search paths include nested game directories. Visit each source tree once.
+    roots = {path for path in roots if not any(parent in roots for parent in path.parents)}
+    files = [
+        path
+        for root in roots
+        for path in root.rglob("*")
+        if path.suffix.lower() in PASCAL_INPUT_SUFFIXES and path.is_file()
+    ]
+    files.extend(sources)
+    files.extend(dependencies)
+    # Missing or externally replaced generated units also invalidate the cache.
+    for arg in command:
+        if str(arg).startswith("-FU"):
+            files.extend(Path(str(arg)[3:]).glob("*.ppu"))
+            files.extend(Path(str(arg)[3:]).glob("*.o"))
+    return json.dumps(file_state(files))
+
+
+def compile_pascal(
+    work: Path,
+    command: list[str | Path],
+    rebuild: bool,
+    artifact: Path,
+    dependencies: tuple[Path, ...] = (),
+) -> bool:
     # FPC tracks unit/source dependencies, but not every change to compiler options.
     stamp = work / "pascal-command.json"
-    signature = command_signature(command)
-    if rebuild or not stamp.is_file() or stamp.read_text() != signature:
+    inputs = work / "pascal-inputs.json"
+    # LLVM object emission runs a separate Clang executable. Its replacement
+    # must invalidate the game/package objects as well as the compiler's RTL.
+    directory = next((str(arg)[3:] for arg in reversed(command) if str(arg).startswith("-FD")), "")
+    prefix = next((str(arg)[3:] for arg in reversed(command) if str(arg).startswith("-XP")), "")
+    clang = require_tool(str(Path(directory) / (prefix + "clang")))
+    signature = json.dumps([command_signature(command), file_state([clang])])
+    state = pascal_state(command, dependencies)
+    same_command = stamp.is_file() and stamp.read_text() == signature
+    previous_inputs = inputs.read_text() if inputs.is_file() else ""
+    same_inputs = previous_inputs == state
+    if not rebuild and same_command and same_inputs and artifact.is_file():
+        print("Pascal code is up to date.", flush=True)
+        return False
+    # FPC compares source timestamps at whole-second resolution. A preserved
+    # timestamp (or two edits in one second) must really invalidate the PPUs.
+    invalidate_units = False
+    if not same_inputs:
+        linked_files = set(map(str, dependencies))
+        try:
+            before = {e[0]: e[1:] for e in json.loads(previous_inputs) if e[0] not in linked_files}
+            after = {e[0]: e[1:] for e in json.loads(state) if e[0] not in linked_files}
+            invalidate_units = before.keys() != after.keys() or any(
+                old != after[name]
+                and (
+                    len(old) != 3
+                    or len(after[name]) != 3
+                    or Path(name).suffix in (".ppu", ".o")
+                    or old[1] // 1_000_000_000 == after[name][1] // 1_000_000_000
+                )
+                for name, old in before.items()
+            )
+        except (ValueError, TypeError):
+            invalidate_units = True
+    if rebuild or not same_command or invalidate_units or ("-Ur" in command and not same_inputs):
         if "-Ur" in command:
             # Released dependencies ignore -B; invalidate their generated PPUs
             # before recompiling this package with its own language mode.
             for unit in work.glob("*.ppu"):
                 unit.unlink()
-        command = [command[0], "-B", *command[1:]]
+        build_command = [command[0], "-B", *command[1:]]
+    else:
+        build_command = command
     # A failed build must not leave units compiled with a mixture of settings.
     stamp.write_text("")
-    run_step(work, "pascal", command)
+    run_step(work, "pascal", build_command)
     stamp.write_text(signature)
+    inputs.write_text(pascal_state(command, dependencies))
+    return True
 
 
-def compile_native(work: Path, command: list[str | Path], rebuild: bool) -> None:
-    stamp = work / "native-command.json"
-    depfile = work / "native.d"
+def compile_native(
+    work: Path,
+    command: list[str | Path],
+    rebuild: bool,
+    tools: tuple[Path, ...] = (),
+) -> None:
     target = Path(command[command.index("-o") + 1])
+    stamp = work / f"{target.stem}-command.json"
+    depfile = work / f"{target.stem}.d"
     command = [*command, "-MD", "-MF", depfile]
-    signature = command_signature(command)
+    signature = json.dumps([command_signature(command), file_state(tools)])
+
+    def state() -> str:
+        dependencies = shlex.split(depfile.read_text().replace("\\\n", "").split(": ", 1)[1])
+        return json.dumps([signature, file_state([work / name for name in dependencies])])
+
     if (
         not rebuild
         and target.is_file()
         and depfile.is_file()
         and stamp.is_file()
-        and stamp.read_text() == signature
+        and stamp.read_text()
     ):
-        dependencies = shlex.split(depfile.read_text().replace("\\\n", "").split(": ", 1)[1])
-        if dependencies and all(
-            (work / name).is_file()
-            and (work / name).stat().st_mtime_ns <= target.stat().st_mtime_ns
-            for name in dependencies
-        ):
-            print("Native platform code is up to date.", flush=True)
+        try:
+            unchanged = stamp.read_text() == state()
+        except (IndexError, ValueError):
+            unchanged = False
+        if unchanged:
+            print(f"{target.stem} is up to date.", flush=True)
             return
     stamp.write_text("")
-    run_step(work, "native", command)
+    run_step(work, target.stem, command)
+    stamp.write_text(state())
+
+
+def configure_native(work: Path, directory: Path, command: list[str | Path]) -> bool:
+    """Configure when needed; report same-path compiler replacements requiring a clean."""
+    stamp = directory / "configure-command.json"
+    cache = directory / "CMakeCache.txt"
+    inputs = [ROOT / "native/CMakeLists.txt", *ROOT.glob("native/*.patch")]
+
+    def signature() -> str:
+        compilers = (
+            re.findall(r"^CMAKE_(?:C|CXX)_COMPILER:[^=]+=(.+)$", cache.read_text(), re.MULTILINE)
+            if cache.is_file()
+            else []
+        )
+        return json.dumps(
+            [
+                command_signature(command),
+                file_state(inputs),
+                file_state(Path(path).resolve() for path in compilers),
+            ]
+        )
+
+    previous = stamp.read_text() if stamp.is_file() else ""
+    if not cache.is_file() or previous != signature():
+        try:
+            old_state = json.loads(previous)
+            old_compilers = {entry[0]: entry[1:] for entry in old_state[2]}
+        except (ValueError, IndexError, TypeError):
+            old_compilers = {}
+        run_step(work, "configure", command)
+        current = signature()
+        stamp.write_text(current)
+        # CMake tracks changed flags and sources itself, but build systems do
+        # not necessarily notice replacement of a compiler at an unchanged path.
+        return any(
+            entry[0] in old_compilers and old_compilers[entry[0]] != entry[1:]
+            for entry in json.loads(current)[2]
+        )
+    return False
+
+
+def link_native(
+    work: Path,
+    command: list[str | Path],
+    inputs: list[Path],
+    outputs: list[Path],
+    rebuild: bool,
+) -> None:
+    stamp = work / "link-command.json"
+    signature = json.dumps([command_signature(command), file_state(inputs)])
+    if (
+        not rebuild
+        and all(path.is_file() for path in outputs)
+        and stamp.is_file()
+        and stamp.read_text() == signature
+    ):
+        print("Linked game is up to date.", flush=True)
+        return
+    stamp.write_text("")
+    run_step(work, "link", command)
     stamp.write_text(signature)
+
+
+def copy_if_changed(source: Path, destination: Path) -> bool:
+    if destination.is_file() and source.read_bytes() == destination.read_bytes():
+        return False
+    shutil.copy2(source, destination)
+    return True
 
 
 def build_okgf(work: Path, release: bool, *options: str, rebuild: bool = False) -> Path:
     directory = work / "native"
     configuration = "Release" if release else "RelWithDebInfo"
-    run_step(work, "configure", [
+    compiler_changed = configure_native(work, directory, [
         "cmake", "-S", ROOT / "native", "-B", directory, f"-DCMAKE_BUILD_TYPE={configuration}",
         *options,
     ])  # fmt: skip
@@ -113,7 +317,7 @@ def build_okgf(work: Path, release: bool, *options: str, rebuild: bool = False) 
             "--build",
             directory,
             "--parallel",
-            *(["--clean-first"] if rebuild else []),
+            *(["--clean-first"] if rebuild or compiler_changed else []),
         ],
     )
     return directory
@@ -154,7 +358,7 @@ def build_paszlib(
         f"-FU{directory}", f"-FE{directory}",
         f"-Fu{ROOT / 'vendor/fpc/packages/hash/src'}",
         ROOT / "vendor/fpc/packages/paszlib/src/paszlib.pas",
-    ], rebuild)  # fmt: skip
+    ], rebuild, directory / "paszlib.ppu")  # fmt: skip
     return directory
 
 
@@ -177,9 +381,20 @@ def build_macos(release: bool, rebuild: bool = False, *, lto: bool = False) -> P
         "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g",
         rebuild=rebuild,
     )
-    shutil.copy2(native / "libokgf.dylib", libraries)
+    # Signing changes the bundled copy. Compare the original library's state,
+    # rather than treating the added signature as a new source change.
+    copy_stamp = work / "okgf-copy.json"
+    copy_state = json.dumps(file_state([native / "libokgf.dylib"]))
+    changed = (
+        not (libraries / "libokgf.dylib").is_file()
+        or not copy_stamp.is_file()
+        or copy_stamp.read_text() != copy_state
+    )
+    if changed:
+        shutil.copy2(native / "libokgf.dylib", libraries)
+        copy_stamp.write_text(copy_state)
     paszlib = build_paszlib(work, compiler, compiler_flags, rebuild, "-Aclang-llvm-darwin")
-    compile_pascal(work, [
+    changed = compile_pascal(work, [
         compiler, *compiler_flags, *pascal_flags(release, paszlib), "-Aclang-llvm-darwin",
         f"-FU{units}", f"-FE{libraries}", f"-Fl{libraries}",
         f"-Fl{output('brew', '--prefix')}/lib",
@@ -187,26 +402,31 @@ def build_macos(release: bool, rebuild: bool = False, *, lto: bool = False) -> P
         # Retain the linker's generated object so dsymutil can read LTO DWARF.
         *(["-k-object_path_lto", f'-k"{work / "lto.o"}"'] if lto else []),
         ROOT / "source/Rangers.dpr",
-    ], rebuild)  # fmt: skip
+    ], rebuild, libraries / "Rangers", (native / "libokgf.dylib",)) or changed  # fmt: skip
     for name in ("Rangers", "libokgf.dylib"):
-        run_step(work, f"symbols-{name}", [
-            "xcrun", "dsymutil", libraries / name, "-o", libraries / f"{name}.dSYM",
-        ])  # fmt: skip
-    (app / "Contents/Info.plist").write_bytes(
-        plistlib.dumps(
-            {
-                "CFBundleExecutable": "Rangers",
-                "CFBundleIdentifier": "org.spacerangershd.fpc",
-                "CFBundleName": "Space Rangers HD",
-                "CFBundleDisplayName": "Space Rangers HD",
-                "CFBundlePackageType": "APPL",
-                "CFBundleVersion": "1",
-                "NSHighResolutionCapable": True,
-                "LSMinimumSystemVersion": "11.0",
-            }
-        )
+        if changed or not (libraries / f"{name}.dSYM").is_dir():
+            run_step(work, f"symbols-{name}", [
+                "xcrun", "dsymutil", libraries / name, "-o", libraries / f"{name}.dSYM",
+            ])  # fmt: skip
+            changed = True
+    info = plistlib.dumps(
+        {
+            "CFBundleExecutable": "Rangers",
+            "CFBundleIdentifier": "org.spacerangershd.fpc",
+            "CFBundleName": "Space Rangers HD",
+            "CFBundleDisplayName": "Space Rangers HD",
+            "CFBundlePackageType": "APPL",
+            "CFBundleVersion": "1",
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0",
+        }
     )
-    run_step(work, "sign", ["codesign", "--force", "--deep", "--sign", "-", app])
+    info_file = app / "Contents/Info.plist"
+    if not info_file.is_file() or info_file.read_bytes() != info:
+        info_file.write_bytes(info)
+        changed = True
+    if changed or not (app / "Contents/_CodeSignature/CodeResources").is_file():
+        run_step(work, "sign", ["codesign", "--force", "--deep", "--sign", "-", app])
     return app
 
 
@@ -225,7 +445,7 @@ def build_linux(release: bool, rebuild: bool = False, *, lto: bool = False) -> P
         check=True,
     )
     native = build_okgf(work, release, rebuild=rebuild)
-    shutil.copy2(native / "libokgf.so", libraries)
+    copy_if_changed(native / "libokgf.so", libraries / "libokgf.so")
     compiler, compiler_flags = prepare_compiler("linux", run_step, lto=lto)
     # FPC's LLVM exception runtime uses libgcc; -n disables system fpc.cfg.
     libgcc = Path(output("clang", "-print-libgcc-file-name"))
@@ -243,7 +463,7 @@ def build_linux(release: bool, rebuild: bool = False, *, lto: bool = False) -> P
         # FPC reparses -k options; quote the whole linker argument for spaced paths.
         f'-k"-L{libraries}"', "-k-lokgf", "-k--enable-new-dtags", "-k-rpath", "-k$ORIGIN",
         ROOT / "source/Rangers.dpr",
-    ], rebuild)  # fmt: skip
+    ], rebuild, libraries / "Rangers", (libraries / "libokgf.so", libgcc))  # fmt: skip
     return libraries / "Rangers"
 
 
@@ -321,7 +541,7 @@ def build_android(release: bool, rebuild: bool = False) -> Path:
         f"-Fl{system_libraries}/26", f"-Fl{system_libraries}", f'-k"-L{system_libraries}/26"',
         "-k-z", "-kmax-page-size=16384", "-k-lm", "-k--no-undefined",
         platform / "main.lpr",
-    ], rebuild)  # fmt: skip
+    ], rebuild, libraries / "libmain.so", (libraries / "libokgf.so", libraries / "libgamenative.so"))  # fmt: skip
     return package_android(work, sdk, sdl_source, prefix, toolchain)
 
 
@@ -393,7 +613,11 @@ def sign_android_apk(work: Path, unsigned: Path, sdk_tools: Path, java: Path) ->
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", choices=("linux", "macos", "android"), default=desktop_target())
+    parser.add_argument(
+        "--target",
+        choices=("linux", "macos", "android"),
+        default=desktop_target(),
+    )
     parser.add_argument("--release", action="store_true", help="Build an optimized release.")
     parser.add_argument("--lto", action="store_true", help="Enable LLVM LTO (Linux or macOS).")
     parser.add_argument(
@@ -401,7 +625,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.lto and args.target == "android":
-        parser.error("--lto is currently supported only for Linux and macOS builds.")
+        parser.error("--lto is not supported for Android builds.")
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
