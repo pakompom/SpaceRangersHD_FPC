@@ -2,6 +2,9 @@
 
 This changelog records game-source changes for Free Pascal compatibility.
 
+- Use each language's code as its settings label when its install file or
+  `LangName` is missing, or the name is blank. Release the temporary language
+  configuration if loading raises an exception.
 - Guard arcade ship actions after player-ship destruction, including Q/W/E
   weapon shortcuts and battle entry, while preserving pause, exit, and the
   victory-panel Tab shortcut. Clear the hovered space before arcade cleanup

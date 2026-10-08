@@ -323,12 +323,24 @@ begin
       for I := 0 to LanguageCount - 1 do
       begin
         Language := ExtractDelimitedPartW(AvailableLanguageCodes, I, ',');
+        LanguageName := Language;
         if FileExists(NativeGamePath(AnsiString('install_' + Language + '.txt'))) then
         begin
           Block := TBlockParEC.Create;
-          Block.LoadFromTextFileWithEncodingProbe(PWideChar('install_' + Language + '.txt'), False);
-          LanguageName := Block.GetParam('LangName');
-          Block.Free;
+          try
+            Block.LoadFromTextFileWithEncodingProbe(
+                PWideChar('install_' + Language + '.txt'),
+                False
+            );
+            if Block.CountParams('LangName') > 0 then
+            begin
+              LanguageName := Block.GetParam('LangName');
+              if TrimWideString(LanguageName) = '' then
+                LanguageName := Language;
+            end;
+          finally
+            Block.Free;
+          end;
         end;
         AddOptionChoice(
             I,
