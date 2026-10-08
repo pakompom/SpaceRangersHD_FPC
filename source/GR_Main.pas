@@ -195,7 +195,10 @@ var
   WideCaseTable: array of TWideCasePair;
 
 const
-{$IFDEF MSWINDOWS}
+{$IFDEF WASI}
+  // Match the namespace of the statically linked C implementation.
+  OkgfLibraryName = 'env';
+{$ELSEIF Defined(MSWINDOWS)}
   OkgfLibraryName = 'okgf.dll';
 {$ELSE}
   OkgfLibraryName = 'okgf';

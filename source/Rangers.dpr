@@ -4,9 +4,18 @@ program Rangers;
 {$IMAGEBASE $00400000}
 {$SETPEFLAGS $20}
 {$I-}
-{$R Rangers.res}
+{$IFNDEF WASI}
+  {$R Rangers.res}
+{$ENDIF}
 
 uses
+{$IFDEF FPC_WASM_EMSCRIPTEN}
+  EmscriptenThreads,
+{$ENDIF}
+{$IFDEF WASI}
+  unicodeducet,
+  fpwidestring,
+{$ENDIF}
 {$IFDEF UNIX}
   cthreads,
   cwstring,
@@ -541,6 +550,10 @@ end;
 
 begin
 
+{$IFDEF WASI}
+  SetMultiByteConversionCodePage(CP_UTF8);
+  SetMultiByteRTLFileSystemCodePage(CP_UTF8);
+{$ENDIF}
   DecimalSeparator := '.';
   MainRuntimeThreadId := System.GetCurrentThreadID;
   GR_Main.CCInterface := TCCInterface.Create;

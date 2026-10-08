@@ -1,0 +1,212 @@
+--- a/src/audio/emscripten/SDL_emscriptenaudio.c
++++ b/src/audio/emscripten/SDL_emscriptenaudio.c
+@@ -180,6 +180,7 @@
+             SDL2.capture = undefined;
+         } else {
+             if (SDL2.audio.scriptProcessorNode != undefined) {
++                SDL2.audio.scriptProcessorNode.onaudioprocess = function(audioProcessingEvent) {};
+                 SDL2.audio.scriptProcessorNode.disconnect();
+             }
+             if (SDL2.audio.silenceTimer !== undefined) {
+@@ -270,7 +271,8 @@
+     this->hidden = (struct SDL_PrivateAudioData *)0x1;
+ 
+     /* limit to native freq */
+-    this->spec.freq = EM_ASM_INT({
++    /* Browser pthread support: AudioContext belongs to the browser thread with PROXY_TO_PTHREAD. */
++    this->spec.freq = MAIN_THREAD_EM_ASM_INT({
+       var SDL2 = Module['SDL2'];
+       return SDL2.audioContext.sampleRate;
+     });
+@@ -341,25 +343,28 @@
+         /* setup a ScriptProcessorNode */
+         MAIN_THREAD_EM_ASM({
+             var SDL2 = Module['SDL2'];
+-            SDL2.audio.scriptProcessorNode = SDL2.audioContext['createScriptProcessor']($1, 0, $0);
+-            SDL2.audio.scriptProcessorNode['onaudioprocess'] = function (e) {
+-                if ((SDL2 === undefined) || (SDL2.audio === undefined)) { return; }
++            // A queued callback can outlive close/reopen and must not use the new device.
++            var audio = SDL2.audio;
++            audio.scriptProcessorNode = SDL2.audioContext['createScriptProcessor']($1, 0, $0);
++            audio.scriptProcessorNode['onaudioprocess'] = function (e) {
++                if (SDL2.audio !== audio) { return; }
+                 // if we're actually running the node, we don't need the fake callback anymore, so kill it.
+-                if (SDL2.audio.silenceTimer !== undefined) {
+-                    clearInterval(SDL2.audio.silenceTimer);
+-                    SDL2.audio.silenceTimer = undefined;
+-                    SDL2.audio.silenceBuffer = undefined;
+-                }
+-                SDL2.audio.currentOutputBuffer = e['outputBuffer'];
++                if (audio.silenceTimer !== undefined) {
++                    clearInterval(audio.silenceTimer);
++                    audio.silenceTimer = undefined;
++                    audio.silenceBuffer = undefined;
++                }
++                audio.currentOutputBuffer = e['outputBuffer'];
+                 dynCall('vp', $2, [$3]);
+             };
+ 
+-            SDL2.audio.scriptProcessorNode['connect'](SDL2.audioContext['destination']);
++            audio.scriptProcessorNode['connect'](SDL2.audioContext['destination']);
+ 
+             if (SDL2.audioContext.state === 'suspended') {  // uhoh, autoplay is blocked.
+-                SDL2.audio.silenceBuffer = SDL2.audioContext.createBuffer($0, $1, SDL2.audioContext.sampleRate);
+-                SDL2.audio.silenceBuffer.getChannelData(0).fill(0.0);
++                audio.silenceBuffer = SDL2.audioContext.createBuffer($0, $1, SDL2.audioContext.sampleRate);
++                audio.silenceBuffer.getChannelData(0).fill(0.0);
+                 var silence_callback = function() {
++                    if (SDL2.audio !== audio) { return; }
+                     if ((typeof navigator.userActivation) !== 'undefined') {
+                         if (navigator.userActivation.hasBeenActive) {
+                             SDL2.audioContext.resume();
+@@ -368,12 +373,12 @@
+ 
+                     // the buffer that gets filled here just gets ignored, so the app can make progress
+                     //  and/or avoid flooding audio queues until we can actually play audio.
+-                    SDL2.audio.currentOutputBuffer = SDL2.audio.silenceBuffer;
++                    audio.currentOutputBuffer = audio.silenceBuffer;
+                     dynCall('vp', $2, [$3]);
+-                    SDL2.audio.currentOutputBuffer = undefined;
++                    audio.currentOutputBuffer = undefined;
+                 };
+ 
+-                SDL2.audio.silenceTimer = setInterval(silence_callback, ($1 / SDL2.audioContext.sampleRate) * 1000);
++                audio.silenceTimer = setInterval(silence_callback, ($1 / SDL2.audioContext.sampleRate) * 1000);
+             }
+         }, this->spec.channels, this->spec.samples, HandleAudioProcess, this);
+     }
+--- a/src/video/emscripten/SDL_emscriptenopengles.c
++++ b/src/video/emscripten/SDL_emscriptenopengles.c
+@@ -23,6 +23,9 @@
+ #if defined(SDL_VIDEO_DRIVER_EMSCRIPTEN) && defined(SDL_VIDEO_OPENGL_EGL)
+ 
+ #include <emscripten/emscripten.h>
++#ifdef __EMSCRIPTEN_PTHREADS__
++#include <emscripten/html5_webgl.h>
++#endif
+ #include <GLES2/gl2.h>
+ 
+ #include "SDL_emscriptenvideo.h"
+@@ -82,17 +85,78 @@
+     return 0;
+ }
+ 
++#ifdef __EMSCRIPTEN_PTHREADS__
++/* Browser pthread support: EGL's JavaScript make-current bypasses Emscripten's pthread-local GL
++ * context tracking. Use the public WebGL API so GL command proxying has a valid
++ * owning thread. The original SDL/EGL path remains for non-pthread builds. */
++SDL_GLContext Emscripten_GLES_CreateContext(_THIS, SDL_Window *window)
++{
++    EmscriptenWebGLContextAttributes attributes;
++    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context;
++    SDL_WindowData *data = (SDL_WindowData *)window->driverdata;
++    emscripten_webgl_init_context_attributes(&attributes);
++    attributes.alpha = _this->gl_config.alpha_size > 0;
++    attributes.depth = _this->gl_config.depth_size > 0;
++    attributes.stencil = _this->gl_config.stencil_size > 0;
++    attributes.antialias = _this->gl_config.multisamplebuffers > 0;
++    attributes.majorVersion = 1; /* SDL's GLES2 renderer */
++    attributes.premultipliedAlpha = SDL_FALSE;
++    attributes.explicitSwapControl = SDL_TRUE;
++    attributes.renderViaOffscreenBackBuffer = SDL_TRUE;
++    attributes.proxyContextToMainThread = EMSCRIPTEN_WEBGL_CONTEXT_PROXY_ALWAYS;
++    context = emscripten_webgl_create_context(data->canvas_id, &attributes);
++    if (!context) {
++        SDL_SetError("Could not create the proxied WebGL context");
++        return NULL;
++    }
++    if (emscripten_webgl_make_context_current(context) != EMSCRIPTEN_RESULT_SUCCESS) {
++        emscripten_webgl_destroy_context(context);
++        SDL_SetError("Could not activate the proxied WebGL context");
++        return NULL;
++    }
++    return (SDL_GLContext)(uintptr_t)context;
++}
++
++int Emscripten_GLES_MakeCurrent(_THIS, SDL_Window *window, SDL_GLContext context)
++{
++    if (emscripten_webgl_make_context_current((uintptr_t)context) != EMSCRIPTEN_RESULT_SUCCESS)
++        return SDL_SetError("Could not activate the proxied WebGL context");
++    return 0;
++}
++
++void Emscripten_GLES_DeleteContext(_THIS, SDL_GLContext context)
++{
++    if (context)
++        emscripten_webgl_destroy_context((uintptr_t)context);
++}
++
++int Emscripten_GLES_SetSwapInterval(_THIS, int interval)
++{
++    /* The application paces its blocking game loop on the application pthread. */
++    if (!_this->egl_data || interval < 0)
++        return SDL_SetError("Unsupported WebGL swap interval");
++    _this->egl_data->egl_swapinterval = interval;
++    return 0;
++}
++#else
+ SDL_EGL_CreateContext_impl(Emscripten)
+ SDL_EGL_MakeCurrent_impl(Emscripten)
++#endif
+ 
+ int Emscripten_GLES_SwapWindow(_THIS, SDL_Window *window)
+ {
++#ifdef __EMSCRIPTEN_PTHREADS__
++    if (emscripten_webgl_commit_frame() != EMSCRIPTEN_RESULT_SUCCESS)
++        return SDL_SetError("Could not present the WebGL frame");
++    return 0;
++#else
+     EGLBoolean ret = SDL_EGL_SwapBuffers(_this, ((SDL_WindowData *) window->driverdata)->egl_surface);
+     if (emscripten_has_asyncify() && SDL_GetHintBoolean(SDL_HINT_EMSCRIPTEN_ASYNCIFY, SDL_TRUE)) {
+         /* give back control to browser for screen refresh */
+         emscripten_sleep(0);
+     }
+     return ret;
++#endif
+ }
+ 
+ #endif /* SDL_VIDEO_DRIVER_EMSCRIPTEN && SDL_VIDEO_OPENGL_EGL */
+--- a/src/video/emscripten/SDL_emscriptenopengles.h
++++ b/src/video/emscripten/SDL_emscriptenopengles.h
+@@ -32,9 +32,14 @@
+ #define Emscripten_GLES_GetAttribute SDL_EGL_GetAttribute
+ #define Emscripten_GLES_GetProcAddress SDL_EGL_GetProcAddress
+ #define Emscripten_GLES_UnloadLibrary SDL_EGL_UnloadLibrary
++#ifdef __EMSCRIPTEN_PTHREADS__
++extern int Emscripten_GLES_SetSwapInterval(_THIS, int interval);
++extern void Emscripten_GLES_DeleteContext(_THIS, SDL_GLContext context);
++#else
+ #define Emscripten_GLES_SetSwapInterval SDL_EGL_SetSwapInterval
++#define Emscripten_GLES_DeleteContext SDL_EGL_DeleteContext
++#endif
+ #define Emscripten_GLES_GetSwapInterval SDL_EGL_GetSwapInterval
+-#define Emscripten_GLES_DeleteContext SDL_EGL_DeleteContext
+ 
+ extern int Emscripten_GLES_LoadLibrary(_THIS, const char *path);
+ extern SDL_GLContext Emscripten_GLES_CreateContext(_THIS, SDL_Window * window);
+--- a/src/video/emscripten/SDL_emscriptenvideo.c
++++ b/src/video/emscripten/SDL_emscriptenvideo.c
+@@ -35,6 +35,9 @@
+ #include "SDL_emscriptenframebuffer.h"
+ #include "SDL_emscriptenevents.h"
+ #include "SDL_emscriptenmouse.h"
++#ifdef __EMSCRIPTEN_PTHREADS__
++#include <emscripten/threading.h>
++#endif
+ 
+ #define EMSCRIPTENVID_DRIVER_NAME "emscripten"
+ 
+@@ -315,6 +318,13 @@
+         data = (SDL_WindowData *)window->driverdata;
+ 
+         Emscripten_UnregisterEventHandlers(data);
++#ifdef __EMSCRIPTEN_PTHREADS__
++        /* Removing DOM handlers does not cancel callbacks already queued to
++         * this thread. The unregister calls synchronously stop new callbacks;
++         * finish the existing ones while their window and canvas_id are valid.
++         * Otherwise a queued mouse/resize callback dereferences freed data. */
++        emscripten_current_thread_process_queued_calls();
++#endif
+ #ifdef SDL_VIDEO_OPENGL_EGL
+         if (data->egl_surface != EGL_NO_SURFACE) {
+             SDL_EGL_DestroySurface(_this, data->egl_surface);

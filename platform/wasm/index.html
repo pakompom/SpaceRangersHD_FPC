@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Space Rangers HD</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; border: 0; outline: none; }
+  #launcher { position: fixed; inset: 0; display: grid; place-content: center; gap: 16px; background: #080b10; color: #ddd; font: 15px system-ui; text-align: center; }
+  #launcher[hidden] { display: none; }
+  button { font: inherit; padding: 8px 24px; }
+</style>
+<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+<div id="launcher">
+  <div id="status">Saves are stored in this browser.</div>
+  <button id="start">Start game</button>
+</div>
+<script>
+  const canvas = document.getElementById('canvas');
+  const launcher = document.getElementById('launcher');
+  const status = document.getElementById('status');
+  const start = document.getElementById('start');
+  const showStatus = text => { launcher.hidden = false; status.textContent = text; };
+  var Module = {
+    canvas,
+    // FetchFS/OPFS own workers. Keep their runtime attached to the page rather
+    // than running blocking C++ global destructors on the browser thread.
+    noExitRuntime: true,
+    arguments: ['--game-dir=/game'],
+    print: text => console.log(text),
+    printErr: text => {
+      console.error(text);
+      if (/^(Exception:|Game error:|Error:|Aborted)/.test(text)) showStatus(text);
+    },
+    onGameReady: () => { launcher.hidden = true; canvas.focus(); },
+    onGameExit: code => { showStatus(code ? 'Game stopped (' + code + '). See the browser console for details.' : 'Game closed. Reload to restart.'); },
+    onAbort: reason => { showStatus('Game stopped: ' + reason); },
+    onExit: code => { showStatus('Game exited (' + code + '). Reload to restart.'); }
+  };
+  start.onclick = () => {
+    if (!crossOriginIsolated) {
+      status.textContent = 'Start the included server: shared memory requires its isolation headers.';
+      return;
+    }
+    start.remove();
+    status.textContent = 'Loading game…';
+    canvas.focus();
+    const script = document.createElement('script');
+    script.src = 'srhd-fpc.js';
+    document.body.appendChild(script);
+  };
+</script>

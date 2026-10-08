@@ -11,7 +11,10 @@ unit SDL2;
 interface
 
 const
-{$IFDEF MSWINDOWS}
+{$IFDEF WASI}
+  // Static C objects use the default WebAssembly import namespace.
+  SDL2Library = 'env';
+{$ELSEIF Defined(MSWINDOWS)}
   SDL2Library = 'SDL2.dll';
 {$ELSE}
   SDL2Library = 'SDL2';
@@ -20,6 +23,7 @@ const
   SDL_INIT_AUDIO = $00000010;
   SDL_INIT_VIDEO = $00000020;
   SDL_WINDOW_SHOWN = $00000004;
+  SDL_WINDOW_RESIZABLE = $00000020;
   SDL_WINDOW_ALLOW_HIGHDPI = $00002000;
   SDL_WINDOW_FULLSCREEN_DESKTOP = $00001001;
   SDL_WINDOW_INPUT_FOCUS = $00000200;
@@ -36,6 +40,8 @@ const
   SDL_PIXELFORMAT_XRGB8888 = $16161804;
   SDL_BLENDMODE_NONE = 0;
   SDL_BLENDMODE_BLEND = 1;
+  SDL_ScaleModeNearest = 0;
+  SDL_ScaleModeLinear = 1;
   SDL_QUIT_EVENT = $100;
   SDL_WINDOWEVENT = $200;
   SDL_KEYDOWN = $300;
@@ -213,6 +219,10 @@ procedure SDL_SetWindowBordered(
 ); cdecl; external SDL2Library;
 procedure SDL_SetWindowSize(Window: PSDL_Window; W, H: Integer); cdecl; external SDL2Library;
 procedure SDL_GetWindowSize(Window: PSDL_Window; out W, H: Integer); cdecl; external SDL2Library;
+procedure SDL_GetWindowSizeInPixels(
+    Window: PSDL_Window;
+    out W, H: Integer
+); cdecl; external SDL2Library;
 function SDL_SetWindowFullscreen(
     Window: PSDL_Window;
     Flags: Cardinal
@@ -221,6 +231,14 @@ procedure SDL_RaiseWindow(Window: PSDL_Window); cdecl; external SDL2Library;
 procedure SDL_SetWindowGrab(Window: PSDL_Window; Grabbed: Integer); cdecl; external SDL2Library;
 procedure SDL_MinimizeWindow(Window: PSDL_Window); cdecl; external SDL2Library;
 function SDL_GetNumDisplayModes(Display: Integer): Integer; cdecl; external SDL2Library;
+function SDL_GetDisplayUsableBounds(
+    Display: Integer;
+    out Bounds: TSDL_Rect
+): Integer; cdecl; external SDL2Library;
+function SDL_GetDisplayDPI(
+    Display: Integer;
+    Diagonal, Horizontal, Vertical: PSingle
+): Integer; cdecl; external SDL2Library;
 function SDL_GetDisplayMode(
     Display, Mode: Integer;
     out Value: TSDL_DisplayMode
@@ -313,6 +331,11 @@ function SDL_RenderReadPixels(
     Pixels: Pointer;
     Pitch: Integer
 ): Integer; cdecl; external SDL2Library;
+function SDL_GetRendererOutputSize(
+    Renderer: PSDL_Renderer;
+    out Width, Height: Integer
+): Integer; cdecl; external SDL2Library;
+function SDL_RenderFlush(Renderer: PSDL_Renderer): Integer; cdecl; external SDL2Library;
 procedure SDL_RenderPresent(Renderer: PSDL_Renderer); cdecl; external SDL2Library;
 function SDL_ConvertPixels(
     W, H: Integer;
@@ -377,6 +400,17 @@ function SDL_ShowSimpleMessageBox(
     Window: PSDL_Window
 ): Integer; cdecl; external SDL2Library;
 function SDL_OpenURL(URL: PAnsiChar): Integer; cdecl; external SDL2Library;
+{$IFDEF FPC_WASM_EMSCRIPTEN}
+// Device construction and destruction share the browser callback's thread.
+// SDL's common close frees its work buffer before unregistering that callback.
+function SDL_OpenAudioDevice(
+    Device: PAnsiChar;
+    IsCapture: Integer;
+    Desired, Obtained: PSDL_AudioSpec;
+    AllowedChanges: Integer
+): Cardinal; cdecl; external name 'sr_fpc_open_audio_device';
+procedure SDL_CloseAudioDevice(Device: Cardinal); cdecl; external name 'sr_fpc_close_audio_device';
+{$ELSE}
 function SDL_OpenAudioDevice(
     Device: PAnsiChar;
     IsCapture: Integer;
@@ -384,14 +418,27 @@ function SDL_OpenAudioDevice(
     AllowedChanges: Integer
 ): Cardinal; cdecl; external SDL2Library;
 procedure SDL_CloseAudioDevice(Device: Cardinal); cdecl; external SDL2Library;
+{$ENDIF}
 procedure SDL_PauseAudioDevice(Device: Cardinal; Pause: Integer); cdecl; external SDL2Library;
-
+{$IFDEF FPC_WASM_EMSCRIPTEN}
+// SDL's Emscripten callback drains on the browser thread without a device lock.
+// Serialize queue access there; the caller retains its PCM until this returns.
+function SDL_QueueAudio(
+    Device: Cardinal;
+    Data: Pointer;
+    Length: Cardinal
+): Integer; cdecl; external name 'sr_fpc_queue_audio';
+function SDL_GetQueuedAudioSize(
+    Device: Cardinal
+): Cardinal; cdecl; external name 'sr_fpc_queued_audio_size';
+{$ELSE}
 function SDL_QueueAudio(
     Device: Cardinal;
     Data: Pointer;
     Length: Cardinal
 ): Integer; cdecl; external SDL2Library;
 function SDL_GetQueuedAudioSize(Device: Cardinal): Cardinal; cdecl; external SDL2Library;
+{$ENDIF}
 
 implementation
 

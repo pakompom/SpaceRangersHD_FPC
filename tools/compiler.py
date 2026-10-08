@@ -102,22 +102,23 @@ def prepare_compiler(
     lto: bool = False,
 ) -> tuple[Path, list[str]]:
     """Build the LLVM compiler and the game's Delphi-compatible runtime."""
-    if target not in ("linux", "macos", "android"):
+    if target not in ("linux", "macos", "android", "wasm"):
         raise ValueError(f"Unsupported target: {target}")
     if lto and target == "android":
         raise ValueError("LTO is not supported for Android builds.")
-    if target != "android" and target != desktop_target():
+    if target not in ("android", "wasm") and target != desktop_target():
         raise RuntimeError("Desktop builds require a host with the target OS.")
     if not (VENDOR / "compiler/pp.pas").is_file():
         raise FileNotFoundError(
             "Initialize dependencies with: git submodule update --init --recursive"
         )
     native_cpu = host_cpu()
-    cpu = "aarch64" if target == "android" else native_cpu
+    cpu = {"android": "aarch64", "wasm": "wasm32"}.get(target, native_cpu)
     system = {
         "linux": "linux",
         "macos": "darwin",
         "android": "android",
+        "wasm": "wasip1threads",
     }[target]
     work = WORK / f"{cpu}-{system}"
     source = work / "source"
@@ -137,9 +138,11 @@ def prepare_compiler(
     compiler_name = "ppcx64" if cpu == "x86_64" else "ppca64"
     cross_flags = []
     if cpu != native_cpu:
-        compiler_name = "ppcrossa64"
+        compiler_name = "ppcrosswasm32" if cpu == "wasm32" else "ppcrossa64"
         # Build a host executable; compile the target runtime separately.
         cross_flags = [f"CPU_TARGET={cpu}", "CROSSINSTALL=1"]
+        if target == "wasm":
+            cross_flags.append("OS_TARGET=wasip1threads")
     compiler = source / "compiler" / compiler_name
     bootstrap = shutil.which(os.environ.get("FPC_BOOTSTRAP", "fpc"))
     if bootstrap is None:
@@ -178,7 +181,25 @@ def prepare_compiler(
         "-dFPC_USE_PC24_RANDOM",
         "-dFPC_USE_PC24_MATH",
     ]
-    if target == "android":
+    if target == "wasm":
+        if toolchain is None:
+            raise RuntimeError("WebAssembly compilation requires Emscripten's LLVM tools.")
+        options += [
+            "-Aclang-llvm",
+            "-XP",
+            f"-FD{toolchain}",
+            "-dFPC_WASM_EMSCRIPTEN",
+            "-dFPC_WASM_HOST_ALLOCATOR",
+            "-dFPC_WASM_EMBEDDED_RUNTIME",
+            "-dFPC_WASM_SEPARATE_WASI_IMPORTS",
+        ]
+        target_flags = [
+            "CPU_TARGET=wasm32",
+            "OS_TARGET=wasip1threads",
+            "BINUTILSPREFIX=",
+            f"CROSSBINDIR={toolchain}",
+        ]
+    elif target == "android":
         options += ["-Cg", "-Aclang-llvm", "-XP"]
         target_flags = [
             "CPU_TARGET=aarch64",
@@ -240,10 +261,12 @@ def prepare_compiler(
         packages / "fcl-base/src",
         packages / "pthreads/src",
         packages / "fcl-process/src",
+        *([packages / "rtl-unicode/src/inc"] if target == "wasm" else []),
     ]
     return compiler, [
         "-n", *llvm_flags, *(["-Clflto"] if lto else []),
         *(["-XLL"] if target == "linux" else []),
+        *(["-Twasip1threads", "-dFPC_WASM_EMSCRIPTEN", "-Aclang-llvm", "-XP", f"-FD{toolchain}"] if target == "wasm" else []),
         *(f"-Fu{path}" for path in paths),
         f"-Fi{packages}/fcl-process/src/unix",
     ]  # fmt: skip

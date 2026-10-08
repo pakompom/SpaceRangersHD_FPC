@@ -50,6 +50,13 @@ uses
 var
   InstanceFile: THandle = THandle(-1);
 
+{$IFDEF FPC_WASM_EMSCRIPTEN}
+procedure NativeWasmMemoryStatus(
+    out Capacity,
+    Available: QWord
+); cdecl; external name 'sr_fpc_memory_status';
+{$ENDIF}
+
 {$IFDEF MSWINDOWS}
 // The FPC Windows unit does not declare the extended memory query.
 function NativeGlobalMemoryStatusEx(
@@ -141,7 +148,19 @@ var
 begin
   Status := Default(TGameMemoryStatus);
   Status.Length := SizeOf(Status);
-{$IFDEF MSWINDOWS}
+{$IF defined(FPC_WASM_EMSCRIPTEN)}
+  Heap := GetFPCHeapStatus;
+  NativeWasmMemoryStatus(Status.TotalPhys, Status.AvailPhys);
+  // FPC keeps free blocks inside arenas owned by malloc. Those bytes are not
+  // in malloc's free list, so add the current Pascal thread's reusable space.
+  // Other threads' private arenas remain reserved and are counted conservatively.
+  Inc(Status.AvailPhys, Min(Status.TotalPhys - Status.AvailPhys, QWord(Heap.CurrHeapFree)));
+  Status.TotalVirtual := Status.TotalPhys;
+  Status.AvailVirtual := Status.AvailPhys;
+  if Status.TotalPhys <> 0 then
+    Status.MemoryLoad := ((Status.TotalPhys - Status.AvailPhys) * 100) div Status.TotalPhys;
+  Result := Status.TotalPhys <> 0;
+{$ELSEIF defined(MSWINDOWS)}
   Result := NativeGlobalMemoryStatusEx(Status);
 {$ELSE}
   Status.TotalPhys := QWord(SDL_GetSystemRAM) * 1024 * 1024;
@@ -203,7 +222,7 @@ begin
   Result := Cardinal(GetTickCount64);
 end;
 
-{$IFDEF UNIX}
+{$IF defined(UNIX) or defined(WASI)}
 function ResolveGamePathCase(const Path: UnicodeString): UnicodeString;
 var
   Directory, Name: UnicodeString;
@@ -243,13 +262,17 @@ begin
   for Index := 1 to Length(Result) do
     if (Result[Index] = '\') or (Result[Index] = '/') then
       Result[Index] := DirectorySeparator;
-{$IFDEF UNIX}
+{$IF defined(UNIX) or defined(WASI)}
   Result := ResolveGamePathCase(Result);
 {$ENDIF}
 end;
 
 function GameUserDirectory: UnicodeString;
 begin
+{$IFDEF FPC_WASM_EMSCRIPTEN}
+  // OPFS is mounted here before the Pascal runtime starts.
+  Exit('/user/');
+{$ENDIF}
 {$IFDEF DARWIN}
   Result := GetUserDir + 'Library/Application Support/SpaceRangersHD/';
 {$ELSE}

@@ -17,6 +17,8 @@ type
   end;
 
 procedure InitializeGameVideo;
+function GameWindowUsesCanvas: Boolean;
+procedure GetGameWindowLogicalSize(out Width, Height: Integer);
 procedure OpenGameWindow(Width, Height: Integer; Windowed, VSync: Boolean);
 procedure CloseGameWindow;
 function PollGameMessage(out Message: TGameMessage): Boolean;
@@ -43,6 +45,7 @@ var
   GameSDLWindow: PSDL_Window;
   GameSDLRenderer: PSDL_Renderer;
   GameTextureGeneration, GameTargetGeneration: LongInt;
+  GamePresentedFrames: QWord;
 
 implementation
 
@@ -59,6 +62,7 @@ uses
 var
   VideoInitialized: Boolean;
   DesktopMouseAvailable: Boolean;
+  BrowserWindow: Boolean;
   PostedMessageType: Cardinal;
   TextInput: UnicodeString;
   TextPosition: Integer;
@@ -122,11 +126,24 @@ begin
   // (notably Wayland) may return cached window coordinates from the same API.
   Driver := string(SDL_GetCurrentVideoDriver);
   DesktopMouseAvailable := (Driver = 'cocoa') or (Driver = 'windows') or (Driver = 'x11');
+  BrowserWindow := Driver = 'emscripten';
   PostedMessageType := SDL_RegisterEvents(1);
   if PostedMessageType = Cardinal(-1) then
     raise Exception.Create('Registering game messages: ' + string(SDL_GetError));
   SDL_AddEventWatch(WatchRendererReset, nil);
   VideoInitialized := True;
+end;
+
+function GameWindowUsesCanvas: Boolean;
+begin
+  InitializeGameVideo;
+  Result := BrowserWindow;
+end;
+
+procedure GetGameWindowLogicalSize(out Width, Height: Integer);
+begin
+  Width := LogicalWidth;
+  Height := LogicalHeight;
 end;
 
 procedure OpenGameWindow(Width, Height: Integer; Windowed, VSync: Boolean);
@@ -137,12 +154,18 @@ var
   Created: Boolean;
 begin
   InitializeGameVideo;
+  // The browser controls canvas size and fullscreen through CSS and user gestures.
+  if BrowserWindow then
+    Windowed := True;
   TargetGeneration := GameTargetGeneration;
   LogicalWidth := Width;
   LogicalHeight := Height;
   Created := GameSDLWindow = nil;
   if Created then
   begin
+    Flags := SDL_WINDOW_ALLOW_HIGHDPI;
+    if BrowserWindow then
+      Flags := Flags or SDL_WINDOW_RESIZABLE;
     GameSDLWindow :=
         SDL_CreateWindow(
             'Rangers',
@@ -150,7 +173,7 @@ begin
             SDL_WINDOWPOS_CENTERED,
             Width,
             Height,
-            SDL_WINDOW_ALLOW_HIGHDPI
+            Flags
         );
     if GameSDLWindow = nil then
       raise Exception.Create(string(SDL_GetError));
@@ -173,7 +196,10 @@ begin
     end;
     SDL_StartTextInput;
   end;
-  SDL_SetWindowSize(GameSDLWindow, Width, Height);
+  // SDL's browser resize handler follows the canvas CSS size. Keep the selected
+  // game resolution in the renderer instead of replacing the canvas dimensions.
+  if not BrowserWindow then
+    SDL_SetWindowSize(GameSDLWindow, Width, Height);
   Flags := 0;
   if not Windowed then
     Flags := SDL_WINDOW_FULLSCREEN_DESKTOP;

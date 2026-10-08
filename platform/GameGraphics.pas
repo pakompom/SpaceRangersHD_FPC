@@ -706,6 +706,10 @@ function TSDLDevice.EndScene: LongInt;
 begin
   Result := 0
 end;
+{$IFDEF FPC_WASM_EMSCRIPTEN}
+procedure BrowserFramePresented; cdecl; external name 'fpc_browser_presented';
+{$ENDIF}
+
 function TSDLDevice.Present(
     SourceRect, DestRect: PRect;
     DestWindow: Cardinal;
@@ -757,6 +761,9 @@ begin
   Check(SDL_SetTextureBlendMode(Texture, SDL_BLENDMODE_NONE));
   Check(SDL_RenderCopy(GameSDLRenderer, Texture, nil, nil));
   SDL_RenderPresent(GameSDLRenderer);
+{$IFDEF FPC_WASM_EMSCRIPTEN}
+  BrowserFramePresented;
+{$ENDIF}
   // A device reset may have happened in Present itself. Never rebind the old
   // target handle: D3D11 has already freed its backend storage at this point.
   TestCooperativeLevel;

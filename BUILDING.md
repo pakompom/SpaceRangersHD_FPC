@@ -24,7 +24,7 @@ The scripts detect the host OS; `--target=linux` or `--target=macos` selects it
 explicitly. Resources default to `game/` when `--game-dir` is omitted.
 
 - `--release`: `-O4` instead of the default `-O2`.
-- `--lto`: enable LLVM link-time optimization on Linux or macOS.
+- `--lto`: enable LLVM link-time optimization on desktop or browser builds.
 - `--rebuild`: rebuild all game units and native code (build script only).
 
 Use matching `--target`, `--release` and `--lto` options for build and run.
@@ -38,6 +38,22 @@ enabled; compiler and runtime caches live in `.local/fpc/<cpu>-<system>/`.
 
 Linux CPU names are `x86_64` and `aarch64`. Keep the Linux executable and OKGF
 library together; SDL and codecs remain system dependencies.
+
+## Browser
+
+Browser builds require Python, FPC, GNU Make, CMake, host Clang and Emscripten.
+SDL2 and the codec dependencies are downloaded during the build. The browser
+must support WebAssembly threads and exception handling.
+
+```sh
+./tools/build.py --target=wasm --release
+./tools/run.py --target=wasm --release --game-dir=/path/to/game
+```
+
+Open `http://127.0.0.1:8788/` and select **Start game**. The server streams the
+original game assets and supplies the isolation headers needed for shared memory.
+Saves are stored in this browser. Use `--port` to select a different server port.
+The browser files are in `.local/wasm/release/bin/`; `--lto` is also supported.
 
 ## Formatting
 

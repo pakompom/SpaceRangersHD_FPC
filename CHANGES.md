@@ -81,7 +81,8 @@ This changelog records game-source changes for Free Pascal compatibility.
 - Encode and decode ZL01 buffers through Pascal zlib, retaining the original
   compression levels, size limit and header-only size query. The buffer format
   remains unchanged.
-- Initialize the FPC thread and wide-string managers on Unix targets.
+- Initialize FPC's thread and Unicode managers before game units on Unix and
+  WASI. Omit the desktop executable's resource section on WASI.
 - Replace VCL/Win32 windowing, input, cursors, clipboard and document opening
   with direct Pascal SDL2 calls. Preserve game message/key values and map window
   coordinates through the displayed game viewport, including high-DPI scaling.
@@ -126,7 +127,8 @@ This changelog records game-source changes for Free Pascal compatibility.
 - Declare C record-pointer arguments with `constref`, preserving the original
   OKGF clipping-rectangle ABI and SDL's message-box data pointer across targets.
   Declare `OKGR_Planet2_TemplDel` as a procedure to match its C ABI; the game-facing
-  wrapper returns zero after cleanup.
+  wrapper returns zero after cleanup. Use the static C import namespace for
+  OKGF on Wasm.
 - Share SDL's logical window resolution between presentation and mouse events.
   Query the desktop cursor for window-leave handling where supported, and refresh
   the game cursor on re-entry instead of retaining a stale position at the edge.

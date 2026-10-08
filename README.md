@@ -3,10 +3,11 @@
 A Free Pascal port of **Space Rangers HD: A War Apart**, based on the
 recovered Delphi source and intended to preserve the original game behavior.
 
-Supported native platforms:
+Supported platforms:
 
 - Linux x86_64
 - macOS ARM64
+- WebAssembly (browser)
 
 See [BUILDING.md](BUILDING.md) for dependencies and build/run instructions.
 
@@ -19,7 +20,8 @@ which reconstructs the **2026-08-11 prerelease** build.
 - `source/`: game source, organized by subsystem.
 - `tools/`: build, run, compiler bootstrap, and formatting scripts.
 - `platform/`: Pascal windowing, input, graphics, audio, and OS services.
-- `native/`: OKGF build integration.
+- `platform/wasm/`: browser page and adapters to Emscripten's host runtime.
+- `native/`: OKGF build integration and the browser SDL dependency patch.
 - `vendor/okgf/`: pinned [OKGF](https://github.com/pakompom/okgf) submodule.
 - `vendor/fpc/`: pinned [FPC fork](https://github.com/pakompom/fpc_sr) submodule.
 

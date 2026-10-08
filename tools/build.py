@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Space Rangers HD for Linux, macOS or Android."""
+"""Build Space Rangers HD for desktop, Android or the browser."""
 
 import argparse
 import json
@@ -479,6 +479,90 @@ def latest_sdk_directory(parent: Path, prefix: str = "") -> Path:
     return versions[max(versions)]
 
 
+def build_wasm(release: bool, rebuild: bool = False, *, lto: bool = False) -> Path:
+    emcc = require_tool("emcc")
+    emxx = require_tool("em++")
+    toolchain = Path(output("em-config", "LLVM_ROOT"))
+    work = ROOT / ".local/wasm" / ("release" if release else "debug")
+    if lto:
+        work = work.with_name(work.name + "-lto")
+    units, binary = work / "units", work / "bin"
+    for directory in (work, units, binary):
+        directory.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("EM_CACHE", str(ROOT / ".local/emscripten-cache"))
+    os.environ.setdefault("EMCC_CORES", "6")
+    os.environ.setdefault("BINARYEN_CORES", "6")
+    compiler, flags = prepare_compiler("wasm", run_step, toolchain, lto=lto)
+    paszlib = build_paszlib(work, compiler, flags, rebuild)
+    native = work / "native"
+    compiler_changed = configure_native(work, native, [
+        "emcmake", "cmake", "-S", ROOT / "native", "-B", native,
+        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG",
+        *(["-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"] if lto else []),
+    ])  # fmt: skip
+    run_step(
+        work,
+        "okgf",
+        [
+            "cmake",
+            "--build",
+            native,
+            "--parallel",
+            "6",
+            *(["--clean-first"] if rebuild or compiler_changed else []),
+        ],
+    )
+    compile_pascal(work, [
+        compiler, *flags, *pascal_flags(release, paszlib, ROOT / "platform/wasm"),
+        "-Cn", "-XMFPC_GAME_MAIN", f"-FU{units}", f"-FE{binary}",
+        ROOT / "source/Rangers.dpr",
+    ], rebuild, binary / "ppas.sh")  # fmt: skip
+    # FPC writes the transitive object list into its deferred linker command.
+    # Let Emscripten perform the final link so libc, SDL and the JS loader agree
+    # on shared memory, exceptions and filesystem configuration.
+    commands = [
+        shlex.split(line)
+        for line in (binary / "ppas.sh").read_text().splitlines()
+        if "wasm-ld" in line
+    ]
+    link = next((line for line in commands if line and Path(line[0]).name == "wasm-ld"), [])
+    objects = [arg for arg in link if arg.endswith(".o")]
+    if not objects:
+        raise RuntimeError("FPC did not write a WebAssembly object list to ppas.sh.")
+    platform = ROOT / "platform/wasm"
+    cache = (native / "CMakeCache.txt").read_text()
+    sdl_source = re.search(r"^SDL2_SOURCE_DIR:STATIC=(.+)$", cache, re.MULTILINE)
+    if sdl_source is None:
+        raise RuntimeError("CMake did not record the SDL2 source directory.")
+    native_tools = (emcc, toolchain / "clang", toolchain / "wasm-ld")
+    native_objects = []
+    for source in sorted(platform.glob("*.cpp")):
+        obj = work / (source.stem + ".o")
+        compile_native(work, [
+            emxx,
+            "-O2", "-pthread", "-fwasm-exceptions", "-sWASM_LEGACY_EXCEPTIONS=0",
+            "-std=c++17", f"-I{Path(sdl_source[1]) / 'include'}",
+            *(["-flto"] if lto else []), "-c", source, "-o", obj,
+        ], rebuild, native_tools)  # fmt: skip
+        native_objects.append(obj)
+    link_native(work, [
+        emxx, "-O2", "-pthread", "-fwasm-exceptions", "-sWASM_LEGACY_EXCEPTIONS=0",
+        *(["-flto"] if lto else []), *objects, *native_objects,
+        native / "libokgf.a", native / "libSDL2.a",
+        "-sUSE_LIBJPEG=1", "-sUSE_LIBPNG=1", "-sUSE_ZLIB=1", "-sUSE_VORBIS=1",
+        "-sWASMFS=1", "-sFORCE_FILESYSTEM=1", "-sPROXY_TO_PTHREAD=1",
+        "-sPTHREAD_POOL_SIZE=16", "-sALLOW_BLOCKING_ON_MAIN_THREAD=0",
+        "-sALLOW_MEMORY_GROWTH=1", "-sINITIAL_MEMORY=134217728", "-sMAXIMUM_MEMORY=2147483648",
+        "-sSTACK_SIZE=8388608", "-sDEFAULT_PTHREAD_STACK_SIZE=8388608",
+        "-sEXIT_RUNTIME=1", "-sASSERTIONS=1", "-sGL_ENABLE_GET_PROC_ADDRESS=1",
+        "-sOFFSCREEN_FRAMEBUFFER=1", "-sJS_MATH=0", "-g2", "-Wl,--threads=6",
+        "-o", binary / "srhd-fpc.js",
+    ], [*map(Path, objects), *native_objects, native / "libokgf.a", native / "libSDL2.a", *native_tools],
+       [binary / "srhd-fpc.js", binary / "srhd-fpc.wasm"], rebuild)  # fmt: skip
+    copy_if_changed(platform / "index.html", binary / "index.html")
+    return binary / "index.html"
+
+
 def prepare_android_binutils(directory: Path, toolchain: Path) -> None:
     for name, executable in (
         ("clang", "clang"),
@@ -615,11 +699,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--target",
-        choices=("linux", "macos", "android"),
+        choices=("linux", "macos", "android", "wasm"),
         default=desktop_target(),
     )
     parser.add_argument("--release", action="store_true", help="Build an optimized release.")
-    parser.add_argument("--lto", action="store_true", help="Enable LLVM LTO (Linux or macOS).")
+    parser.add_argument("--lto", action="store_true", help="Enable LLVM LTO (desktop or browser).")
     parser.add_argument(
         "--rebuild", action="store_true", help="Rebuild all game units and native code."
     )
@@ -630,7 +714,9 @@ def main() -> None:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
         resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, desired), hard))
-        if args.target == "android":
+        if args.target == "wasm":
+            artifact = build_wasm(args.release, args.rebuild, lto=args.lto)
+        elif args.target == "android":
             artifact = build_android(args.release, args.rebuild)
         elif args.target == "linux":
             artifact = build_linux(args.release, args.rebuild, lto=args.lto)

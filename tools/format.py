@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Format Pascal, C, Java, Python, CMake, and XML source."""
+"""Format Pascal, C/C++, Java, Python, CMake, and XML source."""
 
 import argparse
 import shutil
@@ -37,7 +37,7 @@ def format_sources(check: bool) -> None:
         [
             "clang-format",
             *(["--dry-run", "--Werror"] if check else ["-i"]),
-            *source_files(".c", ".h", ".java"),
+            *source_files(".c", ".cpp", ".h", ".java"),
         ],
         [
             "ruff",
