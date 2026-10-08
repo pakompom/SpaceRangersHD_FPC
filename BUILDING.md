@@ -58,14 +58,3 @@ Open `http://127.0.0.1:8788/` and select **Start game**. The server streams the
 original game assets and supplies the isolation headers needed for shared memory.
 Saves are stored in this browser. Use `--port` to select a different server port.
 The browser files are in `.local/wasm/release/bin/`; `--lto` is also supported.
-
-## Formatting
-
-Pascal source uses [pasfmt](https://github.com/integrated-application-development/pasfmt)
-with `pasfmt.toml`. `tools/format.py` also uses clang-format, Ruff,
-cmake-format, and xmllint.
-
-```sh
-./tools/format.py
-./tools/format.py --check
-```

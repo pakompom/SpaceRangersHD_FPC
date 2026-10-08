@@ -8,3 +8,4 @@ __pycache__/
 .ruff_cache/
 # Keep tracked documentation; ignore untracked Markdown notes.
 *.[mM][dD]
+!/DEVELOPING.md
