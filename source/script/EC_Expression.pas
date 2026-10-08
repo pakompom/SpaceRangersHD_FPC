@@ -195,6 +195,8 @@ type
     Kind: TVarKind;
     // Mods pass object addresses through both integer kinds. GetInt still
     // exposes signed 32-bit arithmetic; GetDword retains every address bit.
+    // Arithmetic operators explicitly wrap DWORD results to 32 bits; copying,
+    // comparisons and truth tests retain the full address for object handles.
     IntValue: PtrInt;
     DwordValue: PtrUInt;
     StringValue: WideString;
@@ -796,6 +798,8 @@ begin
   // Like native $45FE4C, collect all decimal digits, ignore other characters,
   // and recognize a minus only at the start. Use the target's pointer width:
   // EvoTranc stores a weapon address in TextData1 between combat phases.
+  // Without a distinct handle kind, oversized decimal scalars are ambiguous
+  // with these addresses and cannot be safely narrowed here.
   Result := 0;
   for I := 1 to Length(Text) do
     if (Text[I] >= '0') and (Text[I] <= '9') then
@@ -2029,6 +2033,8 @@ begin
   if Count > 0 then
   begin
     Text := StringValue;
+    // FPC can share WideString storage; raw writes must first detach this copy.
+    SetLength(StringValue, Count);
     Dest := PAnsiChar(PWideChar(StringValue));
     for i := 0 to Count - 1 + 1 do
     begin
@@ -2184,7 +2190,7 @@ begin
   begin
     case Left.RealVType of
       vkInt: SetInt(Left.GetInt + Right.GetInt);
-      vkDword: SetDword(Left.GetDword + Right.GetDword);
+      vkDword: SetDword(Dword(Left.GetDword + Right.GetDword));
       vkFloat: SetFloat(Left.GetFloat + Right.GetFloat);
       vkString: SetString(Left.GetString + Right.GetString);
       vkExternFun: SetExternFun(nil);
@@ -2205,7 +2211,7 @@ begin
   begin
     case Left.RealVType of
       vkInt: SetInt(Left.GetInt - Right.GetInt);
-      vkDword: SetDword(Left.GetDword - Right.GetDword);
+      vkDword: SetDword(Dword(Left.GetDword - Right.GetDword));
       vkFloat: SetFloat(Left.GetFloat - Right.GetFloat);
       vkString: SetString(Left.GetString + Right.GetString);
       vkExternFun: SetExternFun(nil);
@@ -2226,7 +2232,7 @@ begin
   begin
     case Left.RealVType of
       vkInt: SetInt(Left.GetInt * Right.GetInt);
-      vkDword: SetDword(Left.GetDword * Right.GetDword);
+      vkDword: SetDword(Dword(Left.GetDword * Right.GetDword));
       vkFloat: SetFloat(Left.GetFloat * Right.GetFloat);
       vkString: SetString(Left.GetString + Right.GetString);
       vkExternFun: SetExternFun(nil);
@@ -2247,7 +2253,7 @@ begin
   begin
     case Left.RealVType of
       vkInt: SetInt(Left.GetInt div Right.GetInt);
-      vkDword: SetDword(Left.GetDword div Right.GetDword);
+      vkDword: SetDword(Dword(Left.GetDword) div Dword(Right.GetDword));
       vkFloat: SetFloat(Left.GetFloat / Right.GetFloat);
       vkString: SetString(Left.GetString + Right.GetString);
       vkExternFun: SetExternFun(nil);
@@ -2268,7 +2274,7 @@ begin
   begin
     case Left.RealVType of
       vkInt: SetInt(Left.GetInt mod Right.GetInt);
-      vkDword: SetDword(Left.GetDword mod Right.GetDword);
+      vkDword: SetDword(Dword(Left.GetDword) mod Dword(Right.GetDword));
       vkFloat: SetFloat(Trunc(Left.GetFloat) mod Trunc(Right.GetFloat));
       vkString: SetString('');
       vkExternFun: SetExternFun(nil);
@@ -2289,7 +2295,7 @@ begin
   begin
     case Left.RealVType of
       vkInt: SetInt(Left.GetInt and Right.GetInt);
-      vkDword: SetDword(Left.GetDword and Right.GetDword);
+      vkDword: SetDword(Dword(Left.GetDword and Right.GetDword));
       vkFloat: SetFloat(Trunc(Left.GetFloat) and Trunc(Right.GetFloat));
       vkString: SetString('');
       vkExternFun: SetExternFun(nil);
@@ -2310,7 +2316,7 @@ begin
   begin
     case Left.RealVType of
       vkInt: SetInt(Left.GetInt or Right.GetInt);
-      vkDword: SetDword(Left.GetDword or Right.GetDword);
+      vkDword: SetDword(Dword(Left.GetDword or Right.GetDword));
       vkFloat: SetFloat(Trunc(Left.GetFloat) or Trunc(Right.GetFloat));
       vkString: SetString('');
       vkExternFun: SetExternFun(nil);
@@ -2331,7 +2337,7 @@ begin
   begin
     case Left.RealVType of
       vkInt: SetInt(Left.GetInt xor Right.GetInt);
-      vkDword: SetDword(Left.GetDword xor Right.GetDword);
+      vkDword: SetDword(Dword(Left.GetDword xor Right.GetDword));
       vkFloat: SetFloat(Trunc(Left.GetFloat) xor Trunc(Right.GetFloat));
       vkString: SetString('');
       vkExternFun: SetExternFun(nil);
@@ -2386,6 +2392,26 @@ begin
   end;
 end;
 
+function ScriptShiftInt64(Value, Count: Int64; ShiftLeft: Boolean): Int64;
+var
+  Bits: Integer;
+begin
+  // Delphi 2007's Win32 Int64 helpers inspect the count as a signed byte.
+  // Counts 64..127 produce zero; negative bytes take the 0..31-bit path.
+  Bits := ShortInt(Count);
+  if Bits >= 64 then
+    Result := 0
+  else
+  begin
+    if Bits < 0 then
+      Bits := Bits and 31;
+    if ShiftLeft then
+      Result := Value shl Bits
+    else
+      Result := Value shr Bits;
+  end;
+end;
+
 procedure TVarEC.OShl(Left, Right: TVarEC);
 begin
   if RealVType = vkEmpty then
@@ -2393,9 +2419,9 @@ begin
   if RealVType <> vkEmpty then
   begin
     case Left.RealVType of
-      vkInt: SetInt(Left.GetInt shl Right.GetInt);
-      vkDword: SetDword(Left.GetDword shl Right.GetDword);
-      vkFloat: SetFloat(Trunc(Left.GetFloat) shl Trunc(Right.GetFloat));
+      vkInt: SetInt(Left.GetInt shl (Right.GetInt and 31));
+      vkDword: SetDword(Dword(Dword(Left.GetDword) shl (Right.GetDword and 31)));
+      vkFloat: SetFloat(ScriptShiftInt64(Trunc(Left.GetFloat), Trunc(Right.GetFloat), True));
       vkString: SetString('');
       vkExternFun: SetExternFun(nil);
       vkFunction: SetFunction(nil);
@@ -2414,9 +2440,9 @@ begin
   if RealVType <> vkEmpty then
   begin
     case Left.RealVType of
-      vkInt: SetInt(Left.GetInt shr Right.GetInt);
-      vkDword: SetDword(Left.GetDword shr Right.GetDword);
-      vkFloat: SetFloat(Trunc(Left.GetFloat) shr Trunc(Right.GetFloat));
+      vkInt: SetInt(Left.GetInt shr (Right.GetInt and 31));
+      vkDword: SetDword(Dword(Dword(Left.GetDword) shr (Right.GetDword and 31)));
+      vkFloat: SetFloat(ScriptShiftInt64(Trunc(Left.GetFloat), Trunc(Right.GetFloat), False));
       vkString: SetString('');
       vkExternFun: SetExternFun(nil);
       vkFunction: SetFunction(nil);
@@ -2563,8 +2589,7 @@ begin
   begin
     case Value.RealVType of
       vkInt: SetInt(-Value.GetInt);
-      // Match DWORD addition/subtraction at the target's pointer width.
-      vkDword: SetDword(PtrUInt(-Int64(Value.GetDword)));
+      vkDword: SetDword(Dword(0 - Value.GetDword));
       vkFloat: SetFloat(-Value.GetFloat);
       vkString: SetString(Value.GetString);
       vkExternFun: SetExternFun(nil);
@@ -2585,7 +2610,7 @@ begin
   begin
     case Value.RealVType of
       vkInt: SetInt(not Value.GetInt);
-      vkDword: SetDword(not Value.GetDword);
+      vkDword: SetDword(Dword(not Value.GetDword));
       vkFloat: SetFloat(0);
       vkString: SetString('');
       vkExternFun: SetExternFun(nil);

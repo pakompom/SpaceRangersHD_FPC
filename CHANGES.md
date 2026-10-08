@@ -2,6 +2,10 @@
 
 This changelog records game-source changes for Free Pascal compatibility.
 
+- Keep script DWORD arithmetic at 32 bits, including overflow and the original
+  masked shift counts. Preserve full-width storage for object references passed
+  through script variables, assignments and comparisons on 64-bit targets.
+  Float-valued shifts retain Delphi's separate 64-bit helper count rules.
 - Preserve native arcade exit shuffling, including its zero-filled portal-count
   field and ten RNG calls per node. Model the original `Exits[-1]` stack overlap
   as an explicit array slot initialized from the map-center Y coordinate and
@@ -11,9 +15,10 @@ This changelog records game-source changes for Free Pascal compatibility.
 - Present an initial cleared SDL frame when creating the window. Wayland needs
   this buffer to map the surface before the game can receive activation and
   start drawing its loading screen.
-- Detach shared WideString results before case conversion writes through raw
-  pointers. Preserve the game's configured case table and the caller's string,
-  including read-only literals and shared strings on Unix.
+- Detach shared WideString results before case conversion or script `toansi`
+  packing writes through raw pointers. Preserve the game's configured case
+  table and the caller's string, including read-only literals and shared strings
+  on Unix.
 - Update cursor image and hotspot together. Rebuilding a new cropped image with
   the previous hotspot could fail SDL's bounds check during cursor transitions.
 - Preserve full pointer width when inspecting a missile owner's tranclucator
