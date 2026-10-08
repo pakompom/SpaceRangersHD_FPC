@@ -4,6 +4,10 @@ This changelog records game-source changes for Free Pascal compatibility.
 
 - Preserve original exceptions through the selected screen-transition and
   recursive drawing handlers, adding context without replacing their backtraces.
+- Stop mouse edge scrolling outside the focused window in the star map and film
+  view. Use game coordinates for alternate viewports and preserve scrolling at
+  letterbox bars in windows and browser canvases, keyboard scrolling and
+  configured edge sensitivity.
 - Report galaxy-generation and simulation failures on the main thread, retaining
   script errors, stage/seed context and worker backtraces. Cancel dependent work
   before cleanup and exit with an error instead of leaving the introduction

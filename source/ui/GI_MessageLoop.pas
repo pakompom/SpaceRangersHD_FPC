@@ -325,6 +325,7 @@ type
     procedure RestoreCursorState(State: PCursorStateGI);
     procedure UpdateCursorPosition;
     function GetCursorPoint: TPoint;
+    function GetScrollMousePoint(out Point: TPoint): Boolean;
     procedure SetSystemCursorPosition(Point: TPoint);
     function ConsumeTimerTickChange: Boolean;
     function QueryPointOcclusionState(
@@ -367,6 +368,7 @@ procedure PopMessageLoop(Loop: TMessageLoopGI);
 implementation
 
 uses
+  Math,
   GameWindow,
   PopUp,
   BreakMessageGIException,
@@ -2838,6 +2840,19 @@ end;
 function TMessageLoopGI.GetCursorPoint: TPoint;
 begin
   Result := CursorControl.LocalPosition;
+end;
+
+function TMessageLoopGI.GetScrollMousePoint(out Point: TPoint): Boolean;
+begin
+  Result := GameMouseInWindow and (GameScreenWidth > 0) and (GameScreenHeight > 0);
+  if not Result then
+    Exit;
+  // Cursor positions already include the alternate viewport's scale or offset.
+  Point := GetCursorPoint;
+  // Letterbox bars are inside the window/canvas too. Clamp only the scrolling
+  // sample, leaving the actual cursor and hit testing untouched.
+  Point.X := Math.EnsureRange(Point.X, 0, GameScreenWidth - 1);
+  Point.Y := Math.EnsureRange(Point.Y, 0, GameScreenHeight - 1);
 end;
 
 procedure TMessageLoopGI.SetSystemCursorPosition(Point: TPoint);

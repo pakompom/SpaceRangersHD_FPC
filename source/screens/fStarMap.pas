@@ -2963,8 +2963,7 @@ end;
 
 procedure TfStarMap.ScrollMap(Timer: PCallbackTimerGI; UserData: PtrInt);
 var
-  Point, OldPoint: TPoint;
-  X, Y: SmallInt;
+  Point, OldPoint, MousePoint: TPoint;
 begin
   OldPoint := GetMapCenter;
   Point := OldPoint;
@@ -2976,22 +2975,17 @@ begin
     Dec(Point.Y, ScrollStep);
   if ScrollDownHeld then
     Inc(Point.Y, ScrollStep);
-  X := GetCursorPoint.X;
-  Y := GetCursorPoint.Y;
   if GameWindowFocused then
   begin
-    if (X >= -30) and (X <= Integer(GameScreenWidth) + 30) then
+    if GetScrollMousePoint(MousePoint) then
     begin
-      if X < ScrollSense then
+      if MousePoint.X < ScrollSense then
         Dec(Point.X, ScrollStep);
-      if X > Integer(GameScreenWidth) - ScrollSense - 1 then
+      if MousePoint.X > GameScreenWidth - ScrollSense - 1 then
         Inc(Point.X, ScrollStep);
-    end;
-    if (Y >= -30) and (Y <= Integer(GameScreenHeight) + 30) then
-    begin
-      if Y < ScrollSense then
+      if MousePoint.Y < ScrollSense then
         Dec(Point.Y, ScrollStep);
-      if Y > Integer(GameScreenHeight) - ScrollSense - 1 then
+      if MousePoint.Y > GameScreenHeight - ScrollSense - 1 then
         Inc(Point.Y, ScrollStep);
     end;
     if (OldPoint.X <> Point.X) or (OldPoint.Y <> Point.Y) then

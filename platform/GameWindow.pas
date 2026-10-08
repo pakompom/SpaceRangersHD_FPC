@@ -24,6 +24,7 @@ procedure CloseGameWindow;
 function PollGameMessage(out Message: TGameMessage): Boolean;
 function PostGameMessage(Message, WParam: Cardinal; LParam: Integer): Boolean;
 function GameWindowFocused: Boolean;
+function GameMouseInWindow: Boolean;
 function GameKeyState(Key: Integer): SmallInt;
 function GameDoubleClickTime: Cardinal;
 procedure GetGameMouse(out Point: TPoint);
@@ -572,6 +573,11 @@ begin
     Exit;
   end;
   Point := WindowPoint(X, Y);
+end;
+
+function GameMouseInWindow: Boolean;
+begin
+  Result := GameWindowFocused and (SDL_GetMouseFocus = GameSDLWindow);
 end;
 
 procedure WarpGameMouse(X, Y: Integer);

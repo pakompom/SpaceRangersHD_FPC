@@ -318,8 +318,7 @@ end;
 
 procedure TfFilm.PanView(Timer: PCallbackTimerGI; UserData: PtrInt);
 var
-  Offset, OldOffset: TPoint;
-  X, Y: SmallInt;
+  Offset, OldOffset, MousePoint: TPoint;
 begin
   OldOffset := GetViewOffset;
   Offset := OldOffset;
@@ -331,16 +330,17 @@ begin
     Dec(Offset.Y, ScrollStep);
   if PanDown then
     Inc(Offset.Y, ScrollStep);
-  X := GetCursorPoint.X;
-  Y := GetCursorPoint.Y;
-  if X < ScrollSense then
-    Dec(Offset.X, ScrollStep);
-  if X > GameScreenWidth - ScrollSense - 1 then
-    Inc(Offset.X, ScrollStep);
-  if Y < ScrollSense then
-    Dec(Offset.Y, ScrollStep);
-  if Y > GameScreenHeight - ScrollSense - 1 then
-    Inc(Offset.Y, ScrollStep);
+  if GetScrollMousePoint(MousePoint) then
+  begin
+    if MousePoint.X < ScrollSense then
+      Dec(Offset.X, ScrollStep);
+    if MousePoint.X > GameScreenWidth - ScrollSense - 1 then
+      Inc(Offset.X, ScrollStep);
+    if MousePoint.Y < ScrollSense then
+      Dec(Offset.Y, ScrollStep);
+    if MousePoint.Y > GameScreenHeight - ScrollSense - 1 then
+      Inc(Offset.Y, ScrollStep);
+  end;
   if (OldOffset.X <> Offset.X) or (OldOffset.Y <> Offset.Y) then
     SetViewOffset(Offset);
 end;
