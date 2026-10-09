@@ -330,8 +330,10 @@ def package_android(config: BuildConfig, native: Path, ndk: Path) -> Path:
     android = sdk / f"platforms/android-{ANDROID_TARGET_API}/android.jar"
     build_tools = newest_version(sdk / "build-tools")
     java = java_home()
-    # d8/apksigner launch Java themselves; keep them on the same JDK as javac.
+    # SDK launchers may invoke java from PATH without consulting JAVA_HOME.
+    # Keep d8/apksigner on the same JDK as javac in either case.
     os.environ["JAVA_HOME"] = str(java)
+    os.environ["PATH"] = str(java / "bin") + os.pathsep + os.environ.get("PATH", os.defpath)
     llvm = ndk_toolchain(ndk) / "bin"
     for required in [
         android,

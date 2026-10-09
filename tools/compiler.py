@@ -278,7 +278,7 @@ def prepare_compiler(
     ]
     return compiler, [
         "-n", *llvm_flags, *(["-Clflto"] if lto else []),
-        *(["-XLL"] if target == "linux" else []),
+        *(["-XLL"] if target in ("linux", "android") else []),
         *(["-Tandroid", "-Cg", "-XP", f"-FD{toolchain}"] if target == "android" else []),
         *(["-Twasip1threads", "-dFPC_WASM_EMSCRIPTEN", "-Aclang-llvm", "-XP", f"-FD{toolchain}"] if target == "wasm" else []),
         *(f"-Fu{path}" for path in paths),
