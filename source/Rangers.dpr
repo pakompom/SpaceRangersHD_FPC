@@ -538,6 +538,8 @@ begin
 
 {$IFDEF WASI}
   SetMultiByteConversionCodePage(CP_UTF8);
+  // OS path encoding is separate from strings returned by RTL file routines.
+  SetMultiByteFileSystemCodePage(CP_UTF8);
   SetMultiByteRTLFileSystemCodePage(CP_UTF8);
 {$ENDIF}
   DecimalSeparator := '.';
