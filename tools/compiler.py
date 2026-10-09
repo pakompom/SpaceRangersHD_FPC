@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 from build_support import BuildStamp, run_step
-from targets import ROOT, TARGETS, desktop_target, host_cpu
+from targets import ANDROID_MIN_API, ROOT, TARGETS, desktop_target, host_cpu
 
 VENDOR = ROOT / "vendor/fpc"
 WORK = ROOT / ".local/fpc"
@@ -99,29 +99,32 @@ def prepare_compiler(
     """Build the LLVM compiler and the game's Delphi-compatible runtime."""
     if target not in TARGETS:
         raise ValueError(f"Unsupported target: {target}")
-    if target != "wasm" and target != desktop_target():
+    if target not in ("wasm", "android") and target != desktop_target():
         raise RuntimeError("Desktop builds require a host with the target OS.")
     if not (VENDOR / "compiler/pp.pas").is_file():
         raise FileNotFoundError(
             "Initialize dependencies with: git submodule update --init --recursive"
         )
     native_cpu = host_cpu()
-    cpu = "wasm32" if target == "wasm" else native_cpu
+    cpu = "wasm32" if target == "wasm" else "aarch64" if target == "android" else native_cpu
     system = {
         "linux": "linux",
         "macos": "darwin",
         "wasm": "wasip1threads",
+        "android": "android",
     }[target]
     work = WORK / f"{cpu}-{system}"
     source = work / "source"
     if target == "wasm" and toolchain is None:
         raise RuntimeError("WebAssembly compilation requires Emscripten's LLVM tools.")
+    if target == "android" and toolchain is None:
+        raise RuntimeError("Android compilation requires the NDK LLVM tools.")
     # LLVM object emission is independent between units. Bound the worker
     # count so large units do not exhaust memory on hosts with many CPUs.
     jobs = f"-j{min(6, os.cpu_count() or 1)}"
     bootstrap_flags = (*llvm_options(), jobs)
     llvm_flags = (*llvm_options(toolchain / "clang"), jobs) if toolchain else bootstrap_flags
-    if target == "linux":
+    if target in ("linux", "android"):
         llvm_flags += ("-Aclang-llvm",)
     if cpu == "x86_64":
         llvm_flags += ("-CpX86-64-V2", "-CfX86-64-V2")
@@ -139,6 +142,9 @@ def prepare_compiler(
         # Build a host executable; compile the target runtime separately.
         cross_flags = [f"CPU_TARGET={cpu}", "CROSSINSTALL=1"]
         cross_flags.append("OS_TARGET=wasip1threads")
+    elif target == "android" and native_cpu != cpu:
+        compiler_name = "ppcrossa64"
+        cross_flags = ["CPU_TARGET=aarch64", "CROSSINSTALL=1", "OS_TARGET=android"]
     compiler = source / "compiler" / compiler_name
     bootstrap = shutil.which(os.environ.get("FPC_BOOTSTRAP", "fpc"))
     if bootstrap is None:
@@ -192,6 +198,15 @@ def prepare_compiler(
             "BINUTILSPREFIX=",
             f"CROSSBINDIR={toolchain}",
         ]
+    elif target == "android":
+        options += ["-Cg", "-XP", f"-FD{toolchain}"]
+        target_flags = [
+            "CPU_TARGET=aarch64",
+            "OS_TARGET=android",
+            "BINUTILSPREFIX=",
+            f"CROSSBINDIR={toolchain}",
+            "LOADERS=",
+        ]
     elif target == "macos":
         options += ["-Aclang-llvm-darwin", f"-XR{sdk}"]
         target_flags = []
@@ -210,11 +225,15 @@ def prepare_compiler(
         "OPT=" + " ".join(options),
     ]
     runtime_revision = recipe_revision(
-        revision,
+        # The startup assembly below also depends on the Android API level.
+        f"{revision}:{ANDROID_MIN_API}" if target == "android" else revision,
         runtime_command,
         (compiler, toolchain / "clang" if toolchain else "clang"),
     )
-    if not stamp.matches(runtime_revision, units / "classes.ppu"):
+    runtime_outputs = [units / "classes.ppu"]
+    if target == "android":
+        runtime_outputs += [units / "prt0.o", units / "dllprt0.o"]
+    if not stamp.matches(runtime_revision, *runtime_outputs):
         with stamp.recording(runtime_revision):
             if runtime_source.exists():
                 shutil.rmtree(runtime_source)
@@ -228,6 +247,24 @@ def prepare_compiler(
             for name in ("compiler", "packages"):
                 (runtime_source / name).symlink_to(source / name, target_is_directory=True)
             units.mkdir(parents=True, exist_ok=True)
+            if target == "android":
+                # NDK clang replaces GNU as for these tiny startup objects.
+                for name in ("prt0", "dllprt0"):
+                    run_step(
+                        runtime,
+                        name,
+                        [
+                            toolchain / "clang",
+                            f"--target=aarch64-linux-android{ANDROID_MIN_API}",
+                            "-x",
+                            "assembler",
+                            "-Wa,-defsym,CPU64=1",
+                            "-c",
+                            source / f"rtl/android/{name}.as",
+                            "-o",
+                            units / f"{name}.o",
+                        ],
+                    )
             run_step(runtime, "runtime", runtime_command)
 
     packages = VENDOR / "packages"
@@ -237,11 +274,12 @@ def prepare_compiler(
         packages / "fcl-base/src",
         packages / "pthreads/src",
         packages / "fcl-process/src",
-        *([packages / "rtl-unicode/src/inc"] if target == "wasm" else []),
+        *([packages / "rtl-unicode/src/inc"] if target in ("wasm", "android") else []),
     ]
     return compiler, [
         "-n", *llvm_flags, *(["-Clflto"] if lto else []),
         *(["-XLL"] if target == "linux" else []),
+        *(["-Tandroid", "-Cg", "-XP", f"-FD{toolchain}"] if target == "android" else []),
         *(["-Twasip1threads", "-dFPC_WASM_EMSCRIPTEN", "-Aclang-llvm", "-XP", f"-FD{toolchain}"] if target == "wasm" else []),
         *(f"-Fu{path}" for path in paths),
         f"-Fi{packages}/fcl-process/src/unix",

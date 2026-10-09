@@ -27,6 +27,7 @@ type
     RepeatCount: Cardinal;
     procedure OnOpen; override;
     procedure OnClose; override;
+    procedure CancelPointerInput; override;
     procedure ProcessCallbackTimers; override;
     procedure ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer); override;
     procedure InitializeLayout; override;
@@ -152,6 +153,18 @@ begin
     GetByName('Kind0').SetActive(False);
   end;
   RefreshValue;
+end;
+
+procedure TfCount1.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  Dragging := False;
+  if RepeatTimer <> nil then
+  begin
+    CancelCallbackTimer(RepeatTimer);
+    RepeatTimer := nil;
+  end;
+  RepeatCount := 0;
 end;
 
 procedure TfCount1.OnClose;

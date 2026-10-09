@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Build Space Rangers HD for Linux, macOS, or the browser."""
+"""Build Space Rangers HD for Linux, macOS, Android ARM64, or the browser."""
 
 import argparse
 import json
 import os
 import plistlib
-import re
 import resource
 import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
+from android import build_android
 from build_support import (
     BuildStamp,
     build_okgf,
@@ -22,6 +22,7 @@ from build_support import (
     output,
     require_tool,
     run_step,
+    sdl_source,
 )
 from compiler import prepare_compiler
 from pascal import build_paszlib, compile_pascal, pascal_flags
@@ -179,17 +180,14 @@ def link_wasm(
     if not objects:
         raise RuntimeError("FPC did not write a WebAssembly object list to ppas.sh.")
     platform = ROOT / "platform/wasm"
-    cache = (native / "CMakeCache.txt").read_text()
-    sdl_source = re.search(r"^SDL2_SOURCE_DIR:STATIC=(.+)$", cache, re.MULTILINE)
-    if sdl_source is None:
-        raise RuntimeError("CMake did not record the SDL2 source directory.")
+    sdl = sdl_source(native)
     native_objects = []
     for source in sorted(platform.glob("*.cpp")):
         obj = work / (source.stem + ".o")
         compile_native(work, [
             emxx,
             "-O2", "-pthread", "-fwasm-exceptions", "-sWASM_LEGACY_EXCEPTIONS=0",
-            "-std=c++17", f"-I{Path(sdl_source[1]) / 'include'}",
+            "-std=c++17", f"-I{sdl / 'include'}",
             *(["-flto"] if config.lto else []), "-c", source, "-o", obj,
         ], rebuild, native_tools)  # fmt: skip
         native_objects.append(obj)
@@ -221,7 +219,12 @@ def main() -> None:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
         resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, desired), hard))
-        builders = {"linux": build_linux, "macos": build_macos, "wasm": build_wasm}
+        builders = {
+            "linux": build_linux,
+            "macos": build_macos,
+            "wasm": build_wasm,
+            "android": build_android,
+        }
         artifact = builders[config.target](config, args.rebuild)
     except subprocess.CalledProcessError as error:
         parser.exit(1, error.output or str(error))

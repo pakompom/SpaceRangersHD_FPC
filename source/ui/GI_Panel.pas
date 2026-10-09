@@ -33,6 +33,7 @@ type
     procedure OnMouseEnter; override;
     procedure OnMouseLeave; override;
     procedure OnActivate; override;
+    procedure CancelPointerInput; override;
     procedure ProcessRightButtonDown(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessRightButtonUp(KeyState: Cardinal; Point: TPoint); override;
     function ToLocalPoint(Point: TPoint): TPoint; override;
@@ -269,6 +270,12 @@ end;
 procedure TPanelGI.OnActivate;
 begin
   inherited OnActivate;
+  Dragging := False;
+end;
+
+procedure TPanelGI.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
   Dragging := False;
 end;
 

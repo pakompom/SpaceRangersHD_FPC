@@ -8,13 +8,8 @@ interface
 uses
   Classes,
   Types,
+  GameInput,
   SDL2;
-
-type
-  TGameMessage = record
-    Message, WParam: Cardinal;
-    LParam: Integer;
-  end;
 
 procedure InitializeGameVideo;
 function GameWindowUsesCanvas: Boolean;
@@ -25,6 +20,7 @@ function PollGameMessage(out Message: TGameMessage): Boolean;
 function PostGameMessage(Message, WParam: Cardinal; LParam: Integer): Boolean;
 function GameWindowFocused: Boolean;
 function GameMouseInWindow: Boolean;
+function GamePointerAllowsEdgeScroll: Boolean;
 function GameKeyState(Key: Integer): SmallInt;
 function GameDoubleClickTime: Cardinal;
 procedure GetGameMouse(out Point: TPoint);
@@ -40,6 +36,7 @@ procedure WaitGameMessages(Timeout: Cardinal);
 function GameMessageBox(const Text, Title: UnicodeString; Options: Cardinal): Integer;
 procedure ShowGameDialog(const Text: UnicodeString);
 function GameMessagesPending: Boolean;
+procedure CancelGamePointerInput;
 
 var
   OnGameActivated, OnGameDeactivated: TNotifyEvent;
@@ -56,7 +53,7 @@ uses
 {$ENDIF}
   SysUtils,
   Math,
-  GameInput,
+  GameTouch,
   GameSystem,
   URIParser;
 
@@ -64,6 +61,7 @@ var
   VideoInitialized: Boolean;
   DesktopMouseAvailable: Boolean;
   BrowserWindow: Boolean;
+  MobileWindow, AppInBackground: Boolean;
   PostedMessageType: Cardinal;
   TextInput: UnicodeString;
   TextPosition: Integer;
@@ -74,11 +72,25 @@ var
   LogicalWidth, LogicalHeight: Integer;
   PendingEvent: TSDL_Event;
   HasPendingEvent: Boolean;
+  Touch: TGameTouch;
+  TouchMouse: TPoint;
+  TouchMouseActive: Boolean;
+  TouchMode: Integer;
+  TouchSlop: Integer;
+  HasPendingActivation: Boolean;
+  PendingActivation: Cardinal;
 
 procedure CheckSDL(Value: Integer);
 begin
   if Value < 0 then
     raise Exception.Create(string(SDL_GetError));
+end;
+
+procedure CancelGamePointerInput;
+begin
+  if Touch <> nil then
+    Touch.Cancel;
+  WheelRemainder := 0;
 end;
 
 function WatchRendererReset(UserData: Pointer; Event: PSDL_Event): Integer; cdecl;
@@ -122,16 +134,33 @@ begin
       [exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]
   );
   SDL_SetMainReady;
+  // Handle native fingers ourselves; synthesized mouse presses commit game
+  // actions before the user can distinguish a tap from a drag.
+  SDL_SetHint('SDL_TOUCH_MOUSE_EVENTS', '0');
+  SDL_SetHint('SDL_MOUSE_TOUCH_EVENTS', '0');
+{$IFDEF ANDROID}
+  SDL_SetHint('SDL_ORIENTATIONS', 'LandscapeLeft LandscapeRight');
+  SDL_SetHint('SDL_ANDROID_TRAP_BACK_BUTTON', '1');
+  // Android's keyboard is opened explicitly by Controls > Keyboard. Keep this
+  // policy in force during video initialization, window creation and resume;
+  // restoring the default permits SDL to request an IME asynchronously.
+  SDL_SetHint('SDL_ENABLE_SCREEN_KEYBOARD', '0');
+{$ENDIF}
   CheckSDL(SDL_InitSubSystem(SDL_INIT_VIDEO or SDL_INIT_TIMER));
   // These desktop backends provide real global coordinates. Other backends
   // (notably Wayland) may return cached window coordinates from the same API.
-  Driver := string(SDL_GetCurrentVideoDriver);
+  // SDL spells its Android backend "Android", unlike the lower-case desktop
+  // names. Normalize before selecting mobile sizing and keyboard behavior.
+  Driver := LowerCase(string(SDL_GetCurrentVideoDriver));
   DesktopMouseAvailable := (Driver = 'cocoa') or (Driver = 'windows') or (Driver = 'x11');
   BrowserWindow := Driver = 'emscripten';
+  MobileWindow := Driver = 'android';
+  TouchSlop := EnsureRange(StrToIntDef(string(SDL_GetHint('SRHD_TOUCH_SLOP')), 8), 1, 256);
   PostedMessageType := SDL_RegisterEvents(1);
   if PostedMessageType = Cardinal(-1) then
     raise Exception.Create('Registering game messages: ' + string(SDL_GetError));
   SDL_AddEventWatch(WatchRendererReset, nil);
+  Touch := TGameTouch.Create;
   VideoInitialized := True;
 end;
 
@@ -158,6 +187,8 @@ begin
   // The browser controls canvas size and fullscreen through CSS and user gestures.
   if BrowserWindow then
     Windowed := True;
+  if MobileWindow then
+    Windowed := False;
   TargetGeneration := GameTargetGeneration;
   LogicalWidth := Width;
   LogicalHeight := Height;
@@ -195,11 +226,19 @@ begin
       GameSDLWindow := nil;
       raise Exception.Create(string(SDL_GetError));
     end;
-    SDL_StartTextInput;
+    // Enable UTF-8 commits without calling SDL_StartTextInput on Android: that
+    // API also requests the soft keyboard. The Java overlay opens it directly.
+    if MobileWindow then
+    begin
+      SDL_EventState(SDL_TEXTINPUT, SDL_ENABLE);
+      SDL_EventState(SDL_TEXTEDITING, SDL_ENABLE);
+    end
+    else
+      SDL_StartTextInput;
   end;
   // SDL's browser resize handler follows the canvas CSS size. Keep the selected
   // game resolution in the renderer instead of replacing the canvas dimensions.
-  if not BrowserWindow then
+  if not BrowserWindow and not MobileWindow then
     SDL_SetWindowSize(GameSDLWindow, Width, Height);
   Flags := 0;
   if not Windowed then
@@ -240,6 +279,9 @@ begin
   GameSDLWindow := nil;
   TextInput := '';
   TextPosition := 0;
+  CancelGamePointerInput;
+  TouchMouseActive := False;
+  HasPendingActivation := False;
 end;
 
 function KeyFromScanCode(ScanCode: Integer): Cardinal;
@@ -277,6 +319,7 @@ begin
     72: Result := 19;
     45: Result := 189;
     46: Result := 187;
+    270: Result := VK_ESCAPE; // SDL_SCANCODE_AC_BACK, including Android Back.
     47: Result := 219;
     48: Result := 221;
     49: Result := 220;
@@ -322,7 +365,7 @@ var
   Width, Height: Integer;
 begin
   SDL_GetWindowSize(GameSDLWindow, Width, Height);
-  Scale := Min(Width / LogicalWidth, Height / LogicalHeight);
+  Scale := Min(Width / Max(1, LogicalWidth), Height / Max(1, LogicalHeight));
   if Scale <= 0 then
     Scale := 1;
   OffsetX := Trunc((Width - LogicalWidth * Scale) / 2);
@@ -338,21 +381,39 @@ begin
   Result := Types.Point(Floor((X - OffsetX) / Scale), Floor((Y - OffsetY) / Scale));
 end;
 
-function PackPoint(X, Y: Integer): Integer;
-begin
-  Result := Integer(Cardinal(Word(X)) or (Cardinal(Word(Y)) shl 16));
-end;
-
 function PollGameMessage(out Message: TGameMessage): Boolean;
 var
   Event: TSDL_Event;
-  Step, X, Y: Integer;
-  Amount: Double;
+  Step, X, Y, OffsetX, OffsetY: Integer;
+  Amount, Scale: Double;
   Point: TPoint;
+  Phase: TTouchPhase;
+
+  procedure CancelInput;
+  begin
+    CancelGamePointerInput;
+    TextInput := '';
+    TextPosition := 0;
+    Message.Message := WM_GAME_CANCEL_INPUT;
+  end;
+
 begin
   Result := True;
   Message := Default(TGameMessage);
   repeat
+    if HasPendingActivation then
+    begin
+      HasPendingActivation := False;
+      Message.Message := WM_ACTIVATEAPP;
+      Message.WParam := PendingActivation;
+      Exit;
+    end;
+    if (Touch <> nil) and Touch.Poll(Message) then
+    begin
+      TouchMouseActive := True;
+      TouchMouse := Types.Point(SmallInt(Message.LParam), SmallInt(Message.LParam shr 16));
+      Exit;
+    end;
     if TextPosition <= Length(TextInput) then
       if TextPosition > 0 then
       begin
@@ -377,6 +438,35 @@ begin
     end
     else if SDL_PollEvent(Event) = 0 then
       Break;
+    // JNI overlay messages are queued by the native Android launcher. Check
+    // their codes before our registered event (which may equal SDL_USEREVENT).
+    if (Event.Kind = SDL_USEREVENT) and (Event.User.Code = $53524354) then
+    begin
+      CancelInput;
+      Exit;
+    end;
+    if (Event.Kind = SDL_USEREVENT) and (Event.User.Code = $5352494D) then
+    begin
+      TouchMode := PtrInt(Event.User.Data1) and 3;
+      Continue;
+    end;
+    if (Event.Kind = SDL_USEREVENT) and (Event.User.Code = $53525343) then
+    begin
+      if AppInBackground then
+        Continue;
+      Step := Sign(PtrInt(Event.User.Data1));
+      if Step = 0 then
+        Continue;
+      // The Android controls overlay has no game-space coordinates. Resolve
+      // its target here, after queued touches have updated the virtual cursor.
+      // Touch-to-mouse synthesis is disabled, so SDL's mouse position is stale.
+      GetGameMouse(Point);
+      Message.Message := WM_MOUSEWHEEL;
+      Message.WParam :=
+          MouseKeys(SDL_GetMouseState(nil, nil)) or (Cardinal(Word(Step * WHEEL_DELTA)) shl 16);
+      Message.LParam := PackGamePoint(Point.X, Point.Y);
+      Exit;
+    end;
     if Event.Kind = PostedMessageType then
     begin
       Message.Message := Cardinal(Event.User.Code);
@@ -385,6 +475,24 @@ begin
       Exit;
     end;
     case Event.Kind of
+      SDL_APP_WILLENTERBACKGROUND, SDL_APP_DIDENTERBACKGROUND:
+      begin
+        if AppInBackground then
+          Continue;
+        AppInBackground := True;
+        CancelInput;
+        HasPendingActivation := True;
+        PendingActivation := 0;
+        Exit;
+      end;
+      SDL_APP_DIDENTERFOREGROUND:
+      begin
+        AppInBackground := False;
+        RefreshGameCursor;
+        Message.Message := WM_ACTIVATEAPP;
+        Message.WParam := 1;
+        Exit;
+      end;
       SDL_RENDER_TARGETS_RESET, SDL_RENDER_DEVICE_RESET:
       begin
         Message.Message := WM_GAME_RENDER_RESET;
@@ -404,6 +512,13 @@ begin
           end;
           12, 13:
           begin
+            if Event.Window.Event = 13 then
+            begin
+              CancelInput;
+              HasPendingActivation := True;
+              PendingActivation := 0;
+              Exit;
+            end;
             if Event.Window.Event = 12 then
               RefreshGameCursor;
             Message.Message := WM_ACTIVATEAPP;
@@ -416,7 +531,7 @@ begin
             GetGameMouse(Point);
             Message.Message := WM_MOUSEMOVE;
             Message.WParam := MouseKeys(SDL_GetMouseState(nil, nil));
-            Message.LParam := PackPoint(Point.X, Point.Y);
+            Message.LParam := PackGamePoint(Point.X, Point.Y);
             Exit;
           end;
           11:
@@ -445,13 +560,19 @@ begin
       end;
       SDL_MOUSEMOTION:
       begin
+        if Event.Motion.Which = SDL_TOUCH_MOUSEID then
+          Continue;
+        TouchMouseActive := False;
         Message.Message := WM_MOUSEMOVE;
         Message.WParam := MouseKeys(Event.Motion.State);
-        Message.LParam := PackPoint(Event.Motion.X, Event.Motion.Y);
+        Message.LParam := PackGamePoint(Event.Motion.X, Event.Motion.Y);
         Exit;
       end;
       SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONUP:
       begin
+        if Event.Button.Which = SDL_TOUCH_MOUSEID then
+          Continue;
+        TouchMouseActive := False;
         case Event.Button.Button of
           1: Message.Message := WM_LBUTTONDOWN;
           2: Message.Message := WM_MBUTTONDOWN;
@@ -464,7 +585,7 @@ begin
         else if Event.Button.Clicks = 2 then
           Inc(Message.Message, 2);
         Message.WParam := MouseKeys(SDL_GetMouseState(nil, nil));
-        Message.LParam := PackPoint(Event.Button.X, Event.Button.Y);
+        Message.LParam := PackGamePoint(Event.Button.X, Event.Button.Y);
         Exit;
       end;
       SDL_MOUSEWHEEL:
@@ -478,7 +599,43 @@ begin
         WheelRemainder := WheelRemainder + Amount;
         WheelMessage.Message := WM_MOUSEWHEEL;
         WheelMessage.WParam := MouseKeys(SDL_GetMouseState(@X, @Y));
-        WheelMessage.LParam := PackPoint(Event.Wheel.MouseX, Event.Wheel.MouseY);
+        WheelMessage.LParam := PackGamePoint(Event.Wheel.MouseX, Event.Wheel.MouseY);
+      end;
+      SDL_FINGERDOWN, SDL_FINGERMOTION, SDL_FINGERUP:
+      begin
+        if AppInBackground or (Event.Finger.TouchID = SDL_MOUSE_TOUCHID) then
+          Continue;
+        // Indirect trackpads already provide cursor/wheel events. Consuming
+        // their raw contacts as touchscreen taps would produce duplicate clicks.
+        if SDL_GetTouchDeviceType(Event.Finger.TouchID) <> SDL_TOUCH_DEVICE_DIRECT then
+          Continue;
+        Phase := tpMove;
+        if Event.Kind = SDL_FINGERDOWN then
+          Phase := tpDown
+        else if Event.Kind = SDL_FINGERUP then
+          Phase := tpUp;
+        // SDL2 clamps letterbox touches to the normalized edges. Reject initial
+        // contacts there, including SDL backends that retain outside coordinates.
+        if (Phase = tpDown)
+            and ((Event.Finger.X <= 0)
+                or (Event.Finger.X >= 1)
+                or (Event.Finger.Y <= 0)
+                or (Event.Finger.Y >= 1)) then
+          Continue;
+        WindowTransform(Scale, OffsetX, OffsetY);
+        // SDL's renderer already maps normalized finger events into its logical
+        // viewport, just as it scales queued mouse events.
+        Touch.Feed(
+            Phase,
+            Event.Finger.TouchID,
+            Event.Finger.FingerID,
+            Event.Finger.X * LogicalWidth,
+            Event.Finger.Y * LogicalHeight,
+            Max(4, TouchSlop / Scale),
+            TouchMode,
+            Event.Finger.Timestamp,
+            GameDoubleClickTime
+        );
       end;
     end;
   until False;
@@ -508,6 +665,7 @@ function GameWindowFocused: Boolean;
 begin
   Result :=
       (GameSDLWindow <> nil)
+          and not AppInBackground
           and (SDL_GetWindowFlags(GameSDLWindow) and SDL_WINDOW_INPUT_FOCUS <> 0);
 end;
 
@@ -517,6 +675,8 @@ var
   Count, Index, Mask: Integer;
 begin
   Result := 0;
+  if AppInBackground then
+    Exit;
   if Key in [1, 2, 4] then
   begin
     Mask := 1;
@@ -548,6 +708,11 @@ procedure GetGameMouse(out Point: TPoint);
 var
   X, Y, WindowX, WindowY: Integer;
 begin
+  if TouchMouseActive then
+  begin
+    Point := TouchMouse;
+    Exit;
+  end;
   if (GameSDLWindow <> nil) and DesktopMouseAvailable then
   begin
     // The original GetCursorPos + ScreenToClient also works outside the window.
@@ -577,7 +742,14 @@ end;
 
 function GameMouseInWindow: Boolean;
 begin
-  Result := GameWindowFocused and (SDL_GetMouseFocus = GameSDLWindow);
+  Result := GameWindowFocused and (TouchMouseActive or (SDL_GetMouseFocus = GameSDLWindow));
+end;
+
+function GamePointerAllowsEdgeScroll: Boolean;
+begin
+  // A released finger leaves a hover location, not a parked desktop cursor.
+  // Touch panning is explicit; an edge tap must never start perpetual motion.
+  Result := not TouchMouseActive;
 end;
 
 procedure WarpGameMouse(X, Y: Integer);
@@ -585,6 +757,11 @@ var
   OffsetX, OffsetY: Integer;
   Scale: Double;
 begin
+  if TouchMouseActive then
+  begin
+    TouchMouse := Types.Point(X, Y);
+    Exit;
+  end;
   if GameSDLRenderer = nil then
     Exit;
   WindowTransform(Scale, OffsetX, OffsetY);
@@ -666,6 +843,8 @@ function GameMessagesPending: Boolean;
 begin
   Result :=
       HasPendingEvent
+          or HasPendingActivation
+          or ((Touch <> nil) and Touch.Pending)
           or (TextPosition > 0) and (TextPosition <= Length(TextInput))
           or (Abs(WheelRemainder) >= 1)
           or (SDL_HasEvents(0, $FFFF) <> 0);
@@ -726,6 +905,7 @@ end;
 
 finalization
   CloseGameWindow;
+  FreeAndNil(Touch);
   if VideoInitialized then
   begin
     SDL_DelEventWatch(WatchRendererReset, nil);

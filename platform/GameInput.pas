@@ -4,6 +4,12 @@ unit GameInput;
 
 interface
 
+type
+  TGameMessage = record
+    Message, WParam: Cardinal;
+    LParam: Integer;
+  end;
+
 // Message and key values used by the game UI and configuration files.
 const
   MK_LBUTTON = 1;
@@ -68,12 +74,41 @@ const
   WM_TIMER = 275;
   // Internal notification: SDL discarded render targets or the whole device.
   WM_GAME_RENDER_RESET = $8001;
+  // Signed 1/64 logical-pixel scroll deltas in WParam; gesture anchor in LParam.
+  WM_GAME_PAN = $8002;
+  WM_GAME_TOUCH_DRAG_BEGIN = $8003;
+  WM_GAME_TOUCH_DRAG_MOVE = $8004;
+  WM_GAME_TOUCH_DRAG_END = $8005;
+  WM_GAME_PAN_BEGIN = $8006;
+  WM_GAME_CANCEL_INPUT = $8007;
 
   WHEEL_DELTA = 120;
   MK_MBUTTON = $10;
   MK_SHIFT = $4;
   MK_CONTROL = $8;
 
+function PackGamePoint(X, Y: Integer): Integer;
+function PackGamePan(X, Y: Double): Cardinal;
+
 implementation
+
+uses
+  Math;
+
+function PackGamePoint(X, Y: Integer): Integer;
+begin
+  Result := Integer(Cardinal(Word(X)) or (Cardinal(Word(Y)) shl 16));
+end;
+
+function PackGamePan(X, Y: Double): Cardinal;
+begin
+  Result :=
+      Cardinal(
+          PackGamePoint(
+              Round(EnsureRange(X * 64, -32768.0, 32767.0)),
+              Round(EnsureRange(Y * 64, -32768.0, 32767.0))
+          )
+      );
+end;
 
 end.

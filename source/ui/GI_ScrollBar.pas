@@ -48,6 +48,7 @@ type
     procedure ProcessMouseMove(KeyState: Cardinal; Point: TPoint); override;
     procedure OnMouseEnter; override;
     procedure OnMouseLeave; override;
+    procedure CancelPointerInput; override;
     procedure ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessLeftButtonDoubleClick(KeyState: Cardinal; Point: TPoint); override;
@@ -1064,6 +1065,19 @@ begin
     MessageLoop.SetFocusedControl(nil);
   UpdateLayout;
   StopAutoRepeat;
+end;
+
+procedure TScrollBarGI.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  StopAutoRepeat;
+  if MessageLoop.FocusedControl = Self then
+    MessageLoop.SetFocusedControl(nil);
+  if PressedRegion <> 0 then
+  begin
+    PressedRegion := 0;
+    UpdateLayout;
+  end;
 end;
 
 procedure TScrollBarGI.ProcessLeftButtonDoubleClick(KeyState: Cardinal; Point: TPoint);

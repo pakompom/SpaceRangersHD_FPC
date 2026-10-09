@@ -28,11 +28,11 @@ The scripts set FPC's `-jN` to use up to six parallel LLVM assembly jobs, capped
 by the detected logical CPU count. This limit does not adapt to available RAM.
 
 - `--release`: `-O4` instead of the default `-O2`.
-- `--lto`: enable LLVM link-time optimization on desktop or browser builds.
+- `--lto`: enable LLVM link-time optimization.
 - `--rebuild`: rebuild all game units and native code (build script only).
 
 Use matching `--target`, `--release` and `--lto` options for build and run.
-Desktop configurations are `debug` and `release`, with a `-lto` suffix when
+Configurations are `debug` and `release`, with a `-lto` suffix when
 enabled; compiler and runtime caches live in `.local/fpc/<cpu>-<system>/`.
 
 | Platform | Output |
@@ -58,3 +58,24 @@ Open `http://127.0.0.1:8788/` and select **Start game**. The server streams the
 original game assets and supplies the isolation headers needed for shared memory.
 Saves are stored in this browser. Use `--port` to select a different server port.
 The browser files are in `.local/wasm/release/bin/`; `--lto` is also supported.
+
+## Android
+
+Requires Python 3.10+ with current patch updates, FPC 3.2.2, GNU Make, CMake,
+Ninja, host Clang, JDK 17+, Android SDK platform 35, build-tools 35+ and NDK r28+.
+Build on macOS or x86_64 Linux for ARM64 devices running Android 8.0+.
+Set `ANDROID_HOME`, `ANDROID_NDK_HOME` or `JAVA_HOME` to override tool locations.
+
+```sh
+./tools/build.py --target=android
+```
+
+The APK is `.local/android-arm64/debug/Rangers.apk`; `--release` and `--lto`
+select other profiles. Install it, copy your game folder to the device, and select
+**Select game folder** in the launcher. Keep `build/android-signing/` to sign
+updates with the same key.
+
+Release symbols are kept in `build/android-symbols/<build-id>/` for crash diagnostics.
+Android builds currently omit Xvid, so AVI cinematics do not play.
+
+The package ID and version are defined in `tools/targets.py`; rebuilding does not bump the version.

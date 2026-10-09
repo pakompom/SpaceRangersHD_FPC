@@ -2,6 +2,12 @@
 
 This changelog records game-source changes for Free Pascal compatibility.
 
+- Build the Android game as a shared library with an exported entry point,
+  deferring startup until SDL has established the application paths. Use FPC's
+  Unicode manager in place of `cwstring` on Android.
+- Translate SDL touchscreen input into deferred taps, dragging and camera
+  gestures. Cancel pressed controls and screen-owned drag/repeat state on focus
+  loss and modal transitions without invoking release actions.
 - Remove empty placeholder units, the unused VFW unit, inactive Delphi exception
   hook and unused registry/Direct3D helpers. Drop empty nonvirtual compatibility
   hooks and statements after unconditional returns or breaks, preserving RNG

@@ -17,6 +17,12 @@ def main() -> None:
     )
     args, game_options = parser.parse_known_args()
     config = BuildConfig(args.target, args.release, args.lto)
+    if args.target == "android":
+        parser.error(
+            "Android runs from its launcher. Build with ./tools/build.py --target=android, "
+            "then install the APK and import your game folder on the device. "
+            "See BUILDING.md."
+        )
     game_directory = args.game_dir.expanduser().resolve()
     if not game_directory.is_dir():
         parser.error(f"Game asset directory does not exist: {game_directory}")

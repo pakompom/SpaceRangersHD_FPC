@@ -159,8 +159,11 @@ type
     procedure DrawFrame; override;
     procedure OnOpen; override;
     procedure OnClose; override;
+    procedure CancelPointerInput; override;
     procedure SelectMusic; override;
     procedure ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer); override;
+    function CanPanGesture(Point: TPoint): Boolean; override;
+    procedure ProcessPanGesture(DX, DY: Double; Point: TPoint); override;
     procedure InitializeLayout; override;
     procedure UpdateActionCursor(CanTake: Boolean); override;
     procedure ExecuteUiCode(Block: TBlockParEC; Key: Cardinal); override;
@@ -942,6 +945,15 @@ begin
       end;
     end;
   end;
+end;
+
+procedure TfStarMap.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  ScrollLeftHeld := False;
+  ScrollRightHeld := False;
+  ScrollUpHeld := False;
+  ScrollDownHeld := False;
 end;
 
 procedure TfStarMap.OnClose;
@@ -6970,6 +6982,33 @@ begin
     end;
   end;
   UpdateSpacePanelPosition;
+end;
+
+function TfStarMap.CanPanGesture(Point: TPoint): Boolean;
+begin
+  Result :=
+      (ChildLoop = nil)
+          and (MapControls <> nil)
+          and (MainPanel <> nil)
+          and MapControls.Active
+          and MapControls.DragScrollingEnabled
+          and not MapControls.Dragging
+          and not MainPanel.NavigationLocked
+          and ((ShipScreen = nil) or not ShipScreen.ReopenRequested)
+          and MapControls.ContainsPoint(Point)
+          and not MapControls.IsOccludedAtPoint(Point);
+end;
+
+procedure TfStarMap.ProcessPanGesture(DX, DY: Double; Point: TPoint);
+begin
+  // Never fall back to the space wheel action: it changes ship orders. A
+  // gesture over the HUD, a modal dialog or a locked map must remain harmless.
+  if not CanPanGesture(Point) then
+    Exit;
+  MapControls.SetScrollOffset(AccumulatePanGesture(DX, DY, MapControls.ScrollOffset));
+  FilmCameraFollow := False;
+  if Assigned(MapControls.ScrollChangedCallback) then
+    MapControls.ScrollChangedCallback(MapControls);
 end;
 
 procedure TfStarMap.ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer);

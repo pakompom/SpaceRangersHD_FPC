@@ -304,9 +304,9 @@ class ConfigurationTests(unittest.TestCase):
                                 name = "index.html" if target == "wasm" else "Rangers"
                                 self.assertEqual(config.artifact, config.binary_directory / name)
 
-    def test_android_is_not_advertised_as_a_working_target(self):
+    def test_unknown_target_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported target"):
-            BuildConfig("android")
+            BuildConfig("unknown")
 
 
 if __name__ == "__main__":

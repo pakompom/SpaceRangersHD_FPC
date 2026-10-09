@@ -148,6 +148,7 @@ type
     procedure ProcessWindowMessage(Message: Cardinal; WParam: Cardinal; LParam: Integer); override;
     procedure OnOpen; override;
     procedure OnClose; override;
+    procedure CancelPointerInput; override;
     procedure ProcessCallbackTimers; override;
     procedure SelectMusic; override;
     procedure ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer); override;
@@ -1632,6 +1633,16 @@ begin
   Galaxy.PrimeIntegrityChecksum1(501);
   if not ReopenRequested then
     Galaxy.PrimeIntegrityChecksum2(502);
+end;
+
+procedure TfShip2.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  if HoldScrollTimer <> nil then
+  begin
+    CancelCallbackTimer(HoldScrollTimer);
+    HoldScrollTimer := nil;
+  end;
 end;
 
 procedure TfShip2.OnClose;

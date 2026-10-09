@@ -56,8 +56,11 @@ type
     procedure DrawFrame; override;
     procedure OnOpen; override;
     procedure OnClose; override;
+    procedure CancelPointerInput; override;
     procedure SelectMusic; override;
     procedure InitializeLayout; override;
+    function CanPanGesture(Point: TPoint): Boolean; override;
+    procedure ProcessPanGesture(DX, DY: Double; Point: TPoint); override;
     function GetViewOffset: TPoint;
     procedure SetViewOffset(Offset: TPoint);
     procedure FollowViewOffset(Offset: TPoint);
@@ -252,6 +255,15 @@ begin
   Galaxy.PrimeIntegrityChecksum(133);
 end;
 
+procedure TfFilm.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  PanLeft := False;
+  PanRight := False;
+  PanUp := False;
+  PanDown := False;
+end;
+
 procedure TfFilm.OnClose;
 begin
   Galaxy.CheckIntegrityChecksum(134);
@@ -285,6 +297,25 @@ begin
     PanTimer := nil;
   end;
   SpaceProcess.CloseSpace;
+end;
+
+function TfFilm.CanPanGesture(Point: TPoint): Boolean;
+begin
+  Result :=
+      (ChildLoop = nil)
+          and (SpacePanel <> nil)
+          and SpacePanel.Active
+          and SpacePanel.DragScrollingEnabled
+          and not SpacePanel.Dragging
+          and SpacePanel.ContainsPoint(Point)
+          and not SpacePanel.IsOccludedAtPoint(Point);
+end;
+
+procedure TfFilm.ProcessPanGesture(DX, DY: Double; Point: TPoint);
+begin
+  if not CanPanGesture(Point) then
+    Exit;
+  SetViewOffset(AccumulatePanGesture(DX, DY, GetViewOffset));
 end;
 
 function TfFilm.GetViewOffset: TPoint;

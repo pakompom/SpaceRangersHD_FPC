@@ -5787,7 +5787,15 @@ var
   Bounds: TRect;
   Index: Integer;
 begin
-  if Message = WM_GAME_RENDER_RESET then
+  if Message = WM_GAME_CANCEL_INPUT then
+  begin
+    // Focus/background events must cancel every active or suspended UI loop,
+    // even though GR_WinMessage stops forwarding ordinary input without focus.
+    if MessageLoopStack <> nil then
+      for Index := 0 to MessageLoopStack.Count - 1 do
+        TMessageLoopGI(MessageLoopStack[Index]).CancelPointerInput;
+  end
+  else if Message = WM_GAME_RENDER_RESET then
   begin
     if Direct3DDevice <> nil then
       Direct3DDevice.TestCooperativeLevel;

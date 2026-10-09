@@ -1,10 +1,14 @@
+{$IFDEF ANDROID}
+library Rangers;
+{$ELSE}
 program Rangers;
+{$ENDIF}
 
 {$APPTYPE GUI}
 {$IMAGEBASE $00400000}
 {$SETPEFLAGS $20}
 {$I-}
-{$IFNDEF WASI}
+{$IF not Defined(WASI) and not Defined(ANDROID)}
   {$R Rangers.res}
 {$ENDIF}
 
@@ -12,12 +16,14 @@ uses
 {$IFDEF FPC_WASM_EMSCRIPTEN}
   EmscriptenThreads,
 {$ENDIF}
-{$IFDEF WASI}
+{$IFDEF UNIX}
+  cthreads,
+{$ENDIF}
+{$IF Defined(WASI) or Defined(ANDROID)}
   unicodeducet,
   fpwidestring,
 {$ENDIF}
-{$IFDEF UNIX}
-  cthreads,
+{$IF Defined(UNIX) and not Defined(ANDROID)}
   cwstring,
 {$ENDIF}
 {$IFDEF MSWINDOWS}
@@ -394,8 +400,10 @@ var
   Events: array[0..1] of TGameEventHandle;
   EventPointer: Pointer;
 begin
+{$IFNDEF ANDROID}
   if WindowedModeRequested then
     Exit;
+{$ENDIF}
   RuntimeActive := False;
   Exit;
   // Native O- code retains the following disabled snapshot/wait path.
@@ -534,9 +542,9 @@ begin
   end;
 end;
 
+procedure RunGame;
 begin
-
-{$IFDEF WASI}
+{$IF Defined(WASI) or Defined(ANDROID)}
   SetMultiByteConversionCodePage(CP_UTF8);
   // OS path encoding is separate from strings returned by RTL file routines.
   SetMultiByteFileSystemCodePage(CP_UTF8);
@@ -574,6 +582,11 @@ begin
           SelectedLanguage := '';
           AvailableLanguageCodes := '';
           RequestedLanguage := '';
+          for ArgumentIndex := 1 to ParamCount do
+            if Copy(ParamStr(ArgumentIndex), 1, 11) = '--language=' then
+              RequestedLanguage := UTF8Decode(Copy(ParamStr(ArgumentIndex), 12, MaxInt))
+            else if (ParamStr(ArgumentIndex) = '--language') and (ArgumentIndex < ParamCount) then
+              RequestedLanguage := UTF8Decode(ParamStr(ArgumentIndex + 1));
           InitializeAchievementDefinitions;
           if not SkipModsOnReload then
             InitializePlatformRuntimeAndMainWindow;
@@ -899,4 +912,43 @@ begin
       end;
     until not SkipModsOnReload;
   end;
+end;
+
+{$IFDEF ANDROID}
+var
+  AndroidGameStarted: Boolean = False;
+
+function AndroidGameMain(ArgumentCount: LongInt; Arguments: PPAnsiChar): LongInt; cdecl;
+begin
+  // SDL calls this on its application thread after the launcher has selected
+  // private resource/profile directories and loaded this library. A new game
+  // session gets a fresh Android process; the original globals are not reusable.
+  if AndroidGameStarted then
+    Exit(1);
+  AndroidGameStarted := True;
+  System.argc := ArgumentCount;
+  System.argv := Arguments;
+  try
+    RunGame;
+  except
+    on E: Exception do
+    begin
+      WriteLn(StdErr, E.ClassName, ': ', E.Message);
+      DumpExceptionBackTrace(StdErr);
+      ExitCode := 1;
+    end;
+  end;
+  Flush(StdErr);
+  Flush(StdOut);
+  Result := ExitCode;
+end;
+
+exports
+  AndroidGameMain name 'sr_fpc_main';
+
+begin
 end.
+{$ELSE}
+begin RunGame;
+end.
+{$ENDIF}

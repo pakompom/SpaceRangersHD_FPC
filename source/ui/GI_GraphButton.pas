@@ -65,6 +65,7 @@ type
     procedure OnMouseLeave; override;
     procedure OnActivate; override;
     procedure OnDeactivate; override;
+    procedure CancelPointerInput; override;
     procedure ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessLeftButtonDoubleClick(KeyState: Cardinal; Point: TPoint); override;
@@ -614,6 +615,13 @@ end;
 procedure TGraphButtonGI.OnMouseEnter;
 begin
   inherited OnMouseEnter;
+end;
+
+procedure TGraphButtonGI.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  if (Kind = gbkNormal) or (Kind = gbkDisable) then
+    SetDown(False);
 end;
 
 procedure TGraphButtonGI.OnMouseLeave;

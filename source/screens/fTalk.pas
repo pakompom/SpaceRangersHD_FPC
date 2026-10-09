@@ -65,6 +65,7 @@ type
     SavedChoiceScroll: Integer;
     procedure OnOpen; override;
     procedure OnClose; override;
+    procedure CancelPointerInput; override;
     procedure ProcessCallbackTimers; override;
     procedure SelectMusic; override;
     procedure ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer); override;
@@ -513,6 +514,48 @@ begin
   end;
 end;
 
+procedure SetChoicePressed(Choice: TObjectGI; Pressed: Boolean);
+begin
+  if (Choice.FirstChild <> nil)
+      and (Choice.FirstChild.NextSibling <> nil)
+      and (Choice.FirstChild.NextSibling.FirstChild <> nil)
+      and (Choice.FirstChild.NextSibling.FirstChild.FirstChild <> nil) then
+    Choice.FirstChild.NextSibling.FirstChild.FirstChild.SetPosition(
+        Classes.Point(Ord(Pressed) * 2, 0)
+    );
+end;
+
+procedure TfTalk.CancelPointerInput;
+var
+  Choices, Choice: TObjectGI;
+begin
+  inherited CancelPointerInput;
+  if MapDragging then
+    SetCursorByName('Main');
+  MapDragging := False;
+  if MapSelectionTimer <> nil then
+  begin
+    CancelCallbackTimer(MapSelectionTimer);
+    MapSelectionTimer := nil;
+  end;
+  RequestedMapHover := nil;
+  // Restore the pressed decoration without running a choice's release action.
+  if not ChoiceMousePressed then
+    Exit;
+  ChoiceMousePressed := False;
+  if ContentPanel = nil then
+    Exit;
+  Choices := ContentPanel.FindByNameRecursive('TalkPA');
+  if Choices = nil then
+    Exit;
+  Choice := Choices.FirstChild;
+  while Choice <> nil do
+  begin
+    SetChoicePressed(Choice, False);
+    Choice := Choice.NextSibling;
+  end;
+end;
+
 procedure TfTalk.OnClose;
 var
   I, Count: Integer;
@@ -880,11 +923,7 @@ end;
 
 procedure TfTalk.ChoiceMouseDown(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
 begin
-  if (Sender.FirstChild <> nil)
-      and (Sender.FirstChild.NextSibling <> nil)
-      and (Sender.FirstChild.NextSibling.FirstChild <> nil)
-      and (Sender.FirstChild.NextSibling.FirstChild.FirstChild <> nil) then
-    Sender.FirstChild.NextSibling.FirstChild.FirstChild.SetPosition(Classes.Point(2, 0));
+  SetChoicePressed(Sender, True);
   ChoiceMousePressed := True;
 end;
 
@@ -892,11 +931,7 @@ procedure TfTalk.ChoiceMouseUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPo
 var
   Choice: TfTalkA;
 begin
-  if (Sender.FirstChild <> nil)
-      and (Sender.FirstChild.NextSibling <> nil)
-      and (Sender.FirstChild.NextSibling.FirstChild <> nil)
-      and (Sender.FirstChild.NextSibling.FirstChild.FirstChild <> nil) then
-    Sender.FirstChild.NextSibling.FirstChild.FirstChild.SetPosition(Classes.Point(0, 0));
+  SetChoicePressed(Sender, False);
   if Sender.IsOccludedAtPoint(Point) or not ChoiceMousePressed then
     Exit;
   ChoiceMousePressed := False;

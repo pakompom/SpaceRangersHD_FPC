@@ -31,6 +31,7 @@ type
     procedure OnMouseLeave; override;
     procedure OnActivate; override;
     procedure OnDeactivate; override;
+    procedure CancelPointerInput; override;
     procedure ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint); override;
     procedure LoadFromBlock(Block: TBlockParEC); override;
@@ -146,6 +147,14 @@ end;
 procedure TSBPathGI.OnDeactivate;
 begin
   inherited OnDeactivate;
+  Dragging := False;
+end;
+
+procedure TSBPathGI.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  // Keep the current value and stop later hover motion from changing it.
+  // Cancellation must not dispatch pointer or change callbacks.
   Dragging := False;
 end;
 

@@ -43,14 +43,26 @@ const
   SDL_ScaleModeNearest = 0;
   SDL_ScaleModeLinear = 1;
   SDL_QUIT_EVENT = $100;
+  SDL_APP_WILLENTERBACKGROUND = $103;
+  SDL_APP_DIDENTERBACKGROUND = $104;
+  SDL_APP_WILLENTERFOREGROUND = $105;
+  SDL_APP_DIDENTERFOREGROUND = $106;
   SDL_WINDOWEVENT = $200;
   SDL_KEYDOWN = $300;
   SDL_KEYUP = $301;
+  SDL_TEXTEDITING = $302;
   SDL_TEXTINPUT = $303;
+  SDL_ENABLE = 1;
   SDL_MOUSEMOTION = $400;
   SDL_MOUSEBUTTONDOWN = $401;
   SDL_MOUSEBUTTONUP = $402;
   SDL_MOUSEWHEEL = $403;
+  SDL_FINGERDOWN = $700;
+  SDL_FINGERUP = $701;
+  SDL_FINGERMOTION = $702;
+  SDL_TOUCH_MOUSEID = Cardinal($FFFFFFFF);
+  SDL_MOUSE_TOUCHID = Int64(-1);
+  SDL_TOUCH_DEVICE_DIRECT = 0;
   SDL_RENDER_TARGETS_RESET = $2000;
   SDL_RENDER_DEVICE_RESET = $2001;
   SDL_USEREVENT = $8000;
@@ -130,6 +142,12 @@ type
     Code: Integer;
     Data1, Data2: Pointer;
   end;
+  TSDL_TouchFingerEvent = record
+    Kind, Timestamp: Cardinal;
+    TouchID, FingerID: Int64;
+    X, Y, DX, DY, Pressure: Single;
+    WindowID: Cardinal;
+  end;
   TSDL_Event = record
   case Integer of
     0: (Kind: Cardinal);
@@ -141,6 +159,7 @@ type
     6: (Wheel: TSDL_MouseWheelEvent);
     7: (User: TSDL_UserEvent);
     8: (Padding: array[0..6] of QWord);
+    9: (Finger: TSDL_TouchFingerEvent);
   end;
   PSDL_Event = ^TSDL_Event;
   TSDL_EventFilter = function(UserData: Pointer; Event: PSDL_Event): Integer; cdecl;
@@ -183,6 +202,8 @@ function SDL_InitSubSystem(Flags: Cardinal): Integer; cdecl; external SDL2Librar
 procedure SDL_QuitSubSystem(Flags: Cardinal); cdecl; external SDL2Library;
 function SDL_GetError: PAnsiChar; cdecl; external SDL2Library;
 function SDL_GetHint(Name: PAnsiChar): PAnsiChar; cdecl; external SDL2Library;
+function SDL_SetHint(Name, Value: PAnsiChar): Integer; cdecl; external SDL2Library;
+function SDL_GetTouchDeviceType(TouchID: Int64): Integer; cdecl; external SDL2Library;
 function SDL_GetPerformanceFrequency: QWord; cdecl; external SDL2Library;
 function SDL_GetCPUCount: Integer; cdecl; external SDL2Library;
 function SDL_GetSystemRAM: Integer; cdecl; external SDL2Library;
@@ -367,6 +388,7 @@ procedure SDL_DelEventWatch(
 ); cdecl; external SDL2Library;
 function SDL_HasEvents(MinKind, MaxKind: Cardinal): Integer; cdecl; external SDL2Library;
 function SDL_RegisterEvents(Count: Integer): Cardinal; cdecl; external SDL2Library;
+function SDL_EventState(Kind: Cardinal; State: Integer): Byte; cdecl; external SDL2Library;
 procedure SDL_StartTextInput; cdecl; external SDL2Library;
 procedure SDL_StopTextInput; cdecl; external SDL2Library;
 function SDL_GetKeyboardState(Count: PInteger): PByte; cdecl; external SDL2Library;

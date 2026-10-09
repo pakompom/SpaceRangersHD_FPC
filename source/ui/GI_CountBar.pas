@@ -33,6 +33,7 @@ type
     procedure ProcessMouseMove(KeyState: Cardinal; Point: TPoint); override;
     procedure OnMouseEnter; override;
     procedure OnMouseLeave; override;
+    procedure CancelPointerInput; override;
     procedure ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint); override;
     procedure LoadFromBlock(Block: TBlockParEC); override;
@@ -321,6 +322,17 @@ procedure TCountBarGI.ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint);
 begin
   inherited ProcessLeftButtonUp(KeyState, Point);
   ThumbButton.SetDown(False);
+  if MessageLoop.FocusedControl = Self then
+    MessageLoop.SetFocusedControl(nil);
+end;
+
+procedure TCountBarGI.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  ThumbButton.SetDown(False);
+  if RepeatTimer <> nil then
+    MessageLoop.CancelCallbackTimer(RepeatTimer);
+  RepeatTimer := nil;
   if MessageLoop.FocusedControl = Self then
     MessageLoop.SetFocusedControl(nil);
 end;

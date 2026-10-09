@@ -7,6 +7,7 @@ Supported platforms:
 
 - Linux x86_64
 - macOS ARM64
+- Android ARM64 (8.0+)
 - WebAssembly (browser)
 
 See [BUILDING.md](BUILDING.md) for dependencies and build/run instructions.
@@ -21,7 +22,8 @@ which reconstructs the **2026-08-11 prerelease** build.
 - `tools/`: build, run, compiler bootstrap, and formatting scripts.
 - `platform/`: Pascal windowing, input, graphics, audio, and OS services.
 - `platform/wasm/`: browser page and adapters to Emscripten's host runtime.
-- `native/`: OKGF build integration and the browser SDL dependency patch.
+- `platform/android/`: Android launcher, SDL activity, resource import and native entry point.
+- `native/`: OKGF and SDL build integration for desktop, Android and the browser.
 - `vendor/okgf/`: pinned [OKGF](https://github.com/pakompom/okgf) submodule.
 - `vendor/fpc/`: pinned [FPC fork](https://github.com/pakompom/fpc_sr) submodule.
 

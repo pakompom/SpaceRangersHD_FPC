@@ -165,6 +165,17 @@ def configure_native(work: Path, directory: Path, command: list[str | Path]) -> 
             if cache.is_file()
             else []
         )
+        # The NDK toolchain sets compiler variables without caching them.
+        # CMake's generated language files still record the actual tools.
+        for language in ("C", "CXX"):
+            for config in directory.glob(f"CMakeFiles/*/CMake{language}Compiler.cmake"):
+                compilers.extend(
+                    re.findall(
+                        rf'^set\(CMAKE_{language}_COMPILER "([^"]+)"\)',
+                        config.read_text(),
+                        re.MULTILINE,
+                    )
+                )
         return json.dumps(
             [
                 command_signature(command),
@@ -192,6 +203,14 @@ def configure_native(work: Path, directory: Path, command: list[str | Path]) -> 
             for entry in json.loads(stamp.previous)[2]
         )
     return False
+
+
+def sdl_source(native: Path) -> Path:
+    cache = (native / "CMakeCache.txt").read_text()
+    match = re.search(r"^SDL2_SOURCE_DIR:[^=]+=(.+)$", cache, re.MULTILINE)
+    if match is None:
+        raise RuntimeError("CMake did not record SDL2_SOURCE_DIR")
+    return Path(match[1])
 
 
 def link_native(
@@ -223,14 +242,21 @@ def build_okgf(
     *options: str,
     rebuild: bool = False,
     wasm: bool = False,
+    android: bool = False,
 ) -> Path:
     directory = work / "native"
     # Browser native dependencies use -O2 in both game profiles.
     configuration = "Release" if release or wasm else "RelWithDebInfo"
+    # Platform options may supply their own release flags (Android retains symbols).
+    release_flags = (
+        []
+        if any(option.startswith("-DCMAKE_C_FLAGS_RELEASE=") for option in options)
+        else ["-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG"]
+    )
     compiler_changed = configure_native(work, directory, [
         *(["emcmake"] if wasm else []),
         "cmake", "-S", ROOT / "native", "-B", directory, f"-DCMAKE_BUILD_TYPE={configuration}",
-        "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG",
+        *release_flags,
         *options,
     ])  # fmt: skip
     run_step(
@@ -241,7 +267,7 @@ def build_okgf(
             "--build",
             directory,
             "--parallel",
-            *(["6"] if wasm else []),
+            *(["6"] if wasm or android else []),
             *(["--clean-first"] if rebuild or compiler_changed else []),
         ],
     )

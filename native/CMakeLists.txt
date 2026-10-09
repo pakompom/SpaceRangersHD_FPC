@@ -1,36 +1,64 @@
 cmake_minimum_required(VERSION 3.20)
 project(rangers_native LANGUAGES C)
-if(EMSCRIPTEN)
-  add_compile_options(-pthread -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0)
-  # SDL's browser backend needs explicit WebGL proxying for a blocking game loop on an application
-  # pthread. Keep the small platform patch separate from the pinned upstream dependency.
+if(ANDROID OR EMSCRIPTEN)
   include(FetchContent)
-  # A changed patch needs pristine sources, including in an existing build tree.
-  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/sdl2-wasm.patch" SDL_PATCH_HASH)
+  if(ANDROID)
+    enable_language(CXX)
+    # Android uses unmodified upstream SDL sources.
+    set(SDL_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-android-src")
+    set(SDL_PATCH_COMMAND "")
+    set(SDL_SHARED
+        ON
+        CACHE BOOL "" FORCE)
+    set(SDL_STATIC
+        OFF
+        CACHE BOOL "" FORCE)
+  else()
+    add_compile_options(-pthread -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0)
+    # SDL's browser backend needs explicit WebGL proxying for a blocking game loop on an application
+    # pthread.
+    set(SDL_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/sdl2-wasm.patch")
+    # A changed browser patch needs pristine sources in existing build trees.
+    file(SHA256 "${SDL_PATCH}" SDL_PATCH_HASH)
+    set(SDL_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-${SDL_PATCH_HASH}-src")
+    set(SDL_PATCH_COMMAND patch -p1 -i "${SDL_PATCH}")
+    set(SDL_SHARED
+        OFF
+        CACHE BOOL "" FORCE)
+    set(SDL_STATIC
+        ON
+        CACHE BOOL "" FORCE)
+    set(SDL_ATOMIC
+        ON
+        CACHE BOOL "" FORCE)
+    set(SDL_PTHREADS
+        ON
+        CACHE BOOL "" FORCE)
+  endif()
   FetchContent_Declare(
     SDL2
-    SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-${SDL_PATCH_HASH}-src"
+    SOURCE_DIR "${SDL_SOURCE_DIR}"
     URL https://codeload.github.com/libsdl-org/SDL/zip/refs/tags/release-2.32.10
     URL_HASH
       SHA512=001738b610b42a8f8badfd6af3402f0a1a8601034adef0b8c702dd2b1951dc1b71b733a6779d97499b6f7314d226ec0c8dcffeb753f35a5c51e995ca20bdd459
-    PATCH_COMMAND patch -p1 -i "${CMAKE_CURRENT_SOURCE_DIR}/sdl2-wasm.patch")
-  set(SDL_SHARED
-      OFF
-      CACHE BOOL "" FORCE)
-  set(SDL_STATIC
-      ON
-      CACHE BOOL "" FORCE)
-  set(SDL_ATOMIC
-      ON
-      CACHE BOOL "" FORCE)
-  set(SDL_PTHREADS
-      ON
-      CACHE BOOL "" FORCE)
+    PATCH_COMMAND ${SDL_PATCH_COMMAND})
   set(SDL_TEST
       OFF
       CACHE BOOL "" FORCE)
+  set(SDL_TESTS
+      OFF
+      CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(SDL2)
-  set_target_properties(SDL2-static PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+  if(ANDROID)
+    set_target_properties(SDL2 PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_library(main SHARED "${CMAKE_CURRENT_SOURCE_DIR}/../platform/android/main.cpp")
+    target_compile_features(main PRIVATE cxx_std_17)
+    target_link_libraries(main PRIVATE SDL2::SDL2 dl log)
+    target_link_options(main PRIVATE "-Wl,--no-undefined")
+    set_target_properties(main PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+  else()
+    set_target_properties(SDL2-static PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+  endif()
 endif()
 set(OKGF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/okgf")
 if(NOT EXISTS "${OKGF_ROOT}/CMakeLists.txt")
@@ -46,7 +74,4 @@ set_target_properties(okgf PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_D
                                       ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 if(APPLE)
   set_target_properties(okgf PROPERTIES BUILD_WITH_INSTALL_NAME_DIR YES INSTALL_NAME_DIR "@rpath")
-endif()
-if(ANDROID)
-  target_link_options(okgf PRIVATE "-Wl,-z,max-page-size=16384")
 endif()

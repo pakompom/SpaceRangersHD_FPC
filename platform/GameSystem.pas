@@ -129,6 +129,24 @@ begin
   end;
 end;
 
+{$IFDEF LINUX}
+function LoadProcFile(Lines: TStringList; const Path: string): Boolean;
+begin
+  // Android devices can restrict individual /proc files. Diagnostic queries
+  // must retain their defaults rather than prevent the game from starting.
+  Result := False;
+  try
+    Lines.LoadFromFile(Path);
+    Result := True;
+  except
+    on E: EStreamError do
+      ;
+    on E: EInOutError do
+      ;
+  end;
+end;
+{$ENDIF}
+
 function QueryGameMemory(out Status: TGameMemoryStatus): Boolean;
 {$IFNDEF MSWINDOWS}
 var
@@ -179,27 +197,27 @@ begin
   {$IFDEF LINUX}
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile('/proc/meminfo');
-    for Line in Lines do
-    begin
-      Split := Pos(':', Line);
-      if Split = 0 then
-        Continue;
-      Key := Copy(Line, 1, Split - 1);
-      Value := Trim(Copy(Line, Split + 1, MaxInt));
-      Split := Pos(' ', Value);
-      if Split > 0 then
-        SetLength(Value, Split - 1);
-      Bytes := StrToQWordDef(Value, 0) * 1024;
-      if Key = 'MemTotal' then
-        Status.TotalPhys := Bytes
-      else if Key = 'MemAvailable' then
-        Status.AvailPhys := Bytes
-      else if Key = 'SwapTotal' then
-        Status.TotalPageFile := Bytes
-      else if Key = 'SwapFree' then
-        Status.AvailPageFile := Bytes;
-    end;
+    if LoadProcFile(Lines, '/proc/meminfo') then
+      for Line in Lines do
+      begin
+        Split := Pos(':', Line);
+        if Split = 0 then
+          Continue;
+        Key := Copy(Line, 1, Split - 1);
+        Value := Trim(Copy(Line, Split + 1, MaxInt));
+        Split := Pos(' ', Value);
+        if Split > 0 then
+          SetLength(Value, Split - 1);
+        Bytes := StrToQWordDef(Value, 0) * 1024;
+        if Key = 'MemTotal' then
+          Status.TotalPhys := Bytes
+        else if Key = 'MemAvailable' then
+          Status.AvailPhys := Bytes
+        else if Key = 'SwapTotal' then
+          Status.TotalPageFile := Bytes
+        else if Key = 'SwapFree' then
+          Status.AvailPageFile := Bytes;
+      end;
   finally
     Lines.Free;
   end;
@@ -269,6 +287,14 @@ end;
 
 function GameUserDirectory: UnicodeString;
 begin
+{$IFDEF ANDROID}
+  // Set by the SDL launcher before it loads the Pascal library. Android does
+  // not provide a useful HOME, and shared/external storage is not a save path.
+  Result := UTF8Decode(GetEnvironmentVariable('SR_USER_DIR'));
+  if (Result = '') or (Result[1] <> '/') then
+    raise EInOutError.Create('Android launcher did not provide the private user directory');
+  Exit(IncludeTrailingPathDelimiter(Result));
+{$ENDIF}
 {$IFDEF FPC_WASM_EMSCRIPTEN}
   // OPFS is mounted here before the Pascal runtime starts.
   Exit('/user/');
@@ -344,7 +370,8 @@ begin
     Exit;
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile('/proc/cpuinfo');
+    if not LoadProcFile(Lines, '/proc/cpuinfo') then
+      Exit;
     Format := DefaultFormatSettings;
     Format.DecimalSeparator := '.';
     for Line in Lines do

@@ -50,10 +50,12 @@ type
     CreateMarkerMode: Boolean;
     procedure OnOpen; override;
     procedure OnClose; override;
+    procedure CancelPointerInput; override;
     procedure ProcessCallbackTimers; override;
     procedure SelectMusic; override;
     procedure InitializeLayout; override;
     procedure ExecuteUiCode(Block: TBlockParEC; Key: Cardinal); override;
+    function DeferTouchDrag(Point: TPoint): Boolean; override;
     constructor Create;
     destructor Destroy; override;
     procedure CloseClicked(Sender: TObjectGI);
@@ -804,6 +806,13 @@ begin
   MainPanel.RebuildMessageButtons(False);
 end;
 
+procedure TfGalaxy2.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  // Inspection ends on cancellation too, without a synthetic button release.
+  ShowStarInfo(nil);
+end;
+
 procedure TfGalaxy2.OnClose;
 begin
   inherited OnClose;
@@ -1189,6 +1198,19 @@ procedure TfGalaxy2.MapMouseMove(Sender: TObjectGI; KeyState: Cardinal; Point: T
 begin
   if Sender.IsOccludedAtPoint(Point) then
     Exit;
+end;
+
+function TfGalaxy2.DeferTouchDrag(Point: TPoint): Boolean;
+begin
+  // The fitted galaxy is a destination selector, not a scrolling camera.
+  // Let a finger inspect/adjust the destination until release; never run route
+  // or jump selection callbacks merely because touch slop was crossed.
+  Result :=
+      (ChildLoop = nil)
+          and (MapPanel <> nil)
+          and MapPanel.Active
+          and MapPanel.ContainsPoint(Point)
+          and not MapPanel.IsOccludedAtPoint(Point);
 end;
 
 procedure TfGalaxy2.MapLeftButtonDown(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);

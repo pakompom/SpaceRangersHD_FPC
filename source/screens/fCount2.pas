@@ -28,6 +28,7 @@ type
     FontName: WideString;
     procedure OnOpen; override;
     procedure OnClose; override;
+    procedure CancelPointerInput; override;
     procedure ProcessCallbackTimers; override;
     procedure ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer); override;
     procedure InitializeLayout; override;
@@ -191,6 +192,17 @@ begin
   GetByName('Kind1').SetActive(UnitValue <= 0);
   GetByName('Count2').SetActive(UnitValue <= 0);
   RefreshValue;
+end;
+
+procedure TfCount2.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  Dragging := False;
+  if RepeatTimer <> nil then
+  begin
+    CancelCallbackTimer(RepeatTimer);
+    RepeatTimer := nil;
+  end;
 end;
 
 procedure TfCount2.OnClose;

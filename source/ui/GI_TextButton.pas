@@ -36,6 +36,7 @@ type
     procedure OnMouseLeave; override;
     procedure OnActivate; override;
     procedure OnDeactivate; override;
+    procedure CancelPointerInput; override;
     procedure ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint); override;
     procedure Draw(ClipRect: TRect); override;
@@ -104,6 +105,18 @@ begin
   Hover := False;
   Down := False;
   Invalidate;
+end;
+
+procedure TTextButtonGI.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  // Only normal buttons have a transient press. A latched button's Down state
+  // is its value; keep it, and never dispatch release callbacks on cancellation.
+  if (Kind = 0) and Down then
+  begin
+    Down := False;
+    Invalidate;
+  end;
 end;
 
 procedure TTextButtonGI.OnMouseEnter;

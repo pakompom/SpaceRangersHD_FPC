@@ -6,7 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGETS = ("linux", "macos", "wasm")
+TARGETS = ("linux", "macos", "wasm", "android")
+# Installed Android identity, independent of the Java/JNI class namespace.
+ANDROID_APPLICATION_ID = "io.github.pakompom.spacerangershd"
+# Package versions change for releases, not local rebuilds.
+ANDROID_VERSION_CODE = 28
+ANDROID_VERSION_NAME = "0.1"
+ANDROID_MIN_API = 26
+ANDROID_TARGET_API = 35
+ANDROID_PAGE_SIZE = 16384
 
 
 def add_build_arguments(parser: argparse.ArgumentParser) -> None:
@@ -54,6 +62,8 @@ class BuildConfig:
             directory /= f"linux-{host_cpu()}"
         elif self.target == "wasm":
             directory /= "wasm"
+        elif self.target == "android":
+            directory /= "android-arm64"
         return directory / self.profile
 
     @property
@@ -72,6 +82,8 @@ class BuildConfig:
             return self.work / "Space Rangers HD.app"
         if self.target == "wasm":
             return self.binary_directory / "index.html"
+        if self.target == "android":
+            return self.work / "Rangers.apk"
         return self.binary_directory / "Rangers"
 
     def create_directories(self) -> None:
