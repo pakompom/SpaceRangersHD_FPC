@@ -332,7 +332,6 @@ type
     procedure SetMoney(Value: Integer);
     procedure ProcessBrokenFuelTankLeak;
     procedure RefreshTechKnowledgeAtLocation;
-    procedure DerivedStateCompatibilityHook;
     function GetLocalizedTypeName: WideString;
     function GetFactionNameKey: WideString;
     function GetDefaultHullType: THullType;
@@ -2152,7 +2151,6 @@ begin
     RetainSpaceObject(Graphic, CreateSpaceObjectByName('Ship2', GraphName, Classes.Point(0, 0)));
   RefreshDerivedStats(True);
   RefreshGraphicSize;
-  DerivedStateCompatibilityHook;
 end;
 
 procedure TShip.ResolveLoadedReferences(Galaxy: TGalaxy);
@@ -2652,10 +2650,6 @@ begin
   end;
 end;
 
-procedure EndMarker;
-begin
-end;
-
 procedure TShip.NextDayLogic;
 begin
 
@@ -2667,11 +2661,6 @@ var
 begin
   for I := 1 to WeaponCount do
     Weapons[I].Target := nil;
-end;
-
-procedure TShip.DerivedStateCompatibilityHook;
-begin
-
 end;
 
 function TShip.GetTypeNameKey: WideString;
@@ -8004,7 +7993,6 @@ begin
   end
   else
     MovementSpeed := 0;
-  DerivedStateCompatibilityHook;
 end;
 
 procedure TShip.RefreshGraphicSize;

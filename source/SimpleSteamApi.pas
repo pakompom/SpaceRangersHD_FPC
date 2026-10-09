@@ -42,12 +42,6 @@ type
           MaxValue: Integer
       ); cdecl;
 
-  TSteamSetLeaderboardName = procedure(const Name: AnsiString); cdecl;
-
-  TSteamLeaderboardFound = function: Boolean; cdecl;
-
-  TSteamUploadScore = procedure(Score: Integer); cdecl;
-
   TSteamLocal = function(AppId: Integer): Boolean; cdecl;
 
   TSteamRunCallbacks = procedure; cdecl;
@@ -71,12 +65,6 @@ var
   SteamCreateAchievements: TSteamCreateAchievements;
 
   SteamInitAchievement: TSteamInitAchievement;
-
-  SteamSetLeaderboardName: TSteamSetLeaderboardName;
-
-  SteamLeaderboardFound: TSteamLeaderboardFound;
-
-  SteamUploadScore: TSteamUploadScore;
 
   SteamLocal: TSteamLocal;
 
@@ -137,9 +125,6 @@ begin
   SteamInit := GetProcAddress(Module, 'steamInit');
   SteamCreateAchievements := GetProcAddress(Module, 'createAchievements');
   SteamInitAchievement := GetProcAddress(Module, 'initAchievement');
-  SteamSetLeaderboardName := GetProcAddress(Module, 'steamSetLeaderBoardName');
-  SteamLeaderboardFound := GetProcAddress(Module, 'steamLeaderBoardFound');
-  SteamUploadScore := GetProcAddress(Module, 'steamUploadScore');
   SteamLocal := GetProcAddress(Module, 'steamLocal');
   SteamRunCallbacks := GetProcAddress(Module, 'steamCallBacks');
   SteamResetAchievements := GetProcAddress(Module, 'steamResetAchievements');

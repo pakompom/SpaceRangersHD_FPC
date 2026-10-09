@@ -333,7 +333,6 @@ function TryIntersectRayWithSphere(
 implementation
 
 uses
-  FGInt,
   Math,
   aMyFunction,
   GR_Main;

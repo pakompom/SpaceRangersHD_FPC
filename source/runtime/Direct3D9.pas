@@ -619,23 +619,6 @@ const
 
   D3DERR_DEVICENOTRESET = -2005530519;
 
-type
-
-  TDirect3DCreate9 = function(SDKVersion: Cardinal): Pointer; stdcall;
-
-var
-
-  Direct3DCreate9: TDirect3DCreate9;
-
-function CreateDirect3D9(SDKVersion: Cardinal): IDirect3D9; stdcall;
-
 implementation
-
-function CreateDirect3D9(SDKVersion: Cardinal): IDirect3D9; stdcall;
-begin
-  Result := IDirect3D9(Direct3DCreate9(SDKVersion));
-  if Result <> nil then
-    Result._Release;
-end;
 
 end.

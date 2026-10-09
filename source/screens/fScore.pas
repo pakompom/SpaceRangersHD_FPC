@@ -264,8 +264,6 @@ begin
     GetPlayer.AchievementStats.CheckPacifistVictoryAchievement;
     GetPlayer.AchievementStats.CheckNoLoadVictoryAchievement;
     GetPlayer.AchievementStats.CheckFastVictoryAchievement;
-    if SteamInitialized and SteamLeaderboardFound then
-      SteamUploadScore(TotalScore);
   end;
 end;
 
@@ -1038,13 +1036,10 @@ var
   I, J, Count: Integer;
   Entry, Other: TfScoreUnit;
 begin
-  if SteamInitialized and not SteamLeaderboardFound then
-    SteamSetLeaderboardName('Scores');
   ReloadTable;
   Count := Entries.Count;
   if Count <> 11 then
     RaiseWideMessage('Score sort');
-  Galaxy.AppendIntegritySnapshot;
   Entry := TfScoreUnit.Create;
   Entry.CapturePlayer(Victory);
   for I := 0 to Entries.Count - 1 do
@@ -1296,8 +1291,6 @@ var
   I: Integer;
   Row, Panel, SendPanel: TPanelGI;
 begin
-  if SteamInitialized and not SteamLeaderboardFound then
-    SteamSetLeaderboardName('Scores');
   if MemorySnapshotBuffer <> nil then
     MemorySnapshotBuffer.Free;
   MemorySnapshotBuffer := nil;
@@ -2013,8 +2006,6 @@ var
 begin
   Index := Sender.UserValue;
   Entry := Entries[Index];
-  if SteamInitialized and SteamLeaderboardFound and not Entry.Disqualified then
-    SteamUploadScore(Entry.TotalScore);
   if Index + 1 < 10 then
     FileName := GetGameUserDirectory + 'ToServer0' + WideString(IntToStr(Index + 1)) + '.txt'
   else

@@ -375,7 +375,6 @@ type
     procedure CheckIntegrityChecksum1(ErrorCode: Integer);
     procedure CheckIntegrityChecksum2(ErrorCode: Integer);
     procedure ClearIntegrityStatus;
-    procedure AppendIntegritySnapshot;
     function HasVisibleScoreModFlags: Boolean;
     function GetCheatPoints: Integer;
     procedure SetCheatPoints(Value: Integer);
@@ -850,8 +849,6 @@ uses
   Windows,
 {$ENDIF}
   SE_Garbage,
-  FGInt,
-  FGIntRSA,
   SE_Sputnik,
   aEObjInfo,
   fGov,
@@ -1676,9 +1673,6 @@ var
   Crc: Cardinal;
   Race: TOwnerId;
 
-  procedure CompatibilityHook; { Native no-op with an unused caller-popped static link. }
-  begin
-  end;
 begin
   Stage := 0;
   try
@@ -2538,7 +2532,6 @@ begin
       CustomRules.OldMissileBonuses := False;
     end;
     Stage := 51;
-    CompatibilityHook;
     Event := AddGalaxyEvent('SaveLoaded', Self);
     ShipCount := CountDelimitedPartsW(SelectedMods, ',');
     for I := 0 to ShipCount - 1 do
@@ -2551,7 +2544,6 @@ begin
       Ship := TShip(LoadedShips[I]);
       Ship.RefreshDerivedStats(False);
       Ship.RefreshGraphicSize;
-      Ship.DerivedStateCompatibilityHook;
     end;
     RefreshRangerStrengthStats;
     for I := 0 to LoadedShips.Count - 1 do
@@ -3344,8 +3336,6 @@ begin
     end;
   end;
   Self.ProcessCoalitionDefeat;
-  if Self.CurrentTurn mod 30 = 0 then
-    Self.AppendIntegritySnapshot;
 end;
 
 procedure TGalaxy.TransferShipsInTransit;
@@ -4635,358 +4625,10 @@ begin
 end;
 
 function TGalaxy.ComputeIntegrityChecksum(Mode: Integer): Cardinal;
-var
-  State: Cardinal;
-  I, J, K, L: Integer;
-  Star: TStar;
-  Planet: TPlanet;
-  Good: Byte;
-  Asteroid: TAsteroid;
-  Ship: TShip;
-  Skill: TPilotSkill;
-  RangerQuest: PQuest;
-  Quest: TTextQuest;
-  Parameter: TParameter;
-  Location: TLocation;
-  Change: TParameterDelta;
-  Path: TPath;
-  Storage: PStorageEntry;
-  UnusedNativeFrame:
-      array[0..3] of Byte; // The native frame has four unreferenced bytes; original type unknown.
-
-  procedure AccumulateIntegrityUInt32(Value: Cardinal);
-  begin
-    State := UpdateCrc32(State, @Value, 4);
-  end;
-
-  procedure AccumulateIntegritySingle(Value: Single);
-  begin
-    State := UpdateCrc32(State, @Value, 4);
-  end;
-
-  procedure AccumulateIntegrityDouble(Value: Double);
-  begin
-    State := UpdateCrc32(State, @Value, 8);
-  end;
-
-  procedure AccumulateIntegrityByte(Value: Byte);
-  begin
-    State := UpdateCrc32(State, @Value, 1);
-  end;
-
-  procedure AccumulateIntegrityBoolean(Value: Boolean);
-  begin
-    State := UpdateCrc32(State, @Value, 1);
-  end;
-
-  procedure AccumulateIntegrityWords(Data: PWord; Count: Integer);
-  begin
-    State := UpdateCrc32(State, Data, Count * 2);
-  end;
-
-  procedure AccumulateIntegrityBytes(Data: PByte; Count: Integer);
-  begin
-    State := UpdateCrc32(State, Data, Count);
-  end;
-
-  procedure AccumulateIntegrityObject(
-      Instance: TObject
-  ); { Excludes the VMT pointer; nil contributes nothing. }
-  begin
-    if Instance <> nil then
-      AccumulateIntegrityBytes(
-          PByte(PAnsiChar(Instance) + SizeOf(Pointer)),
-          Instance.InstanceSize - SizeOf(Pointer)
-      );
-  end;
-
-  procedure AccumulateIntegrityItem(
-      Item: TItem
-  ); { Opaque interface avoids the aItem dependency cycle; the nested body uses TItem. Excludes the VMT and temporarily zeros Graphic plus cached action-code state; nil contributes nothing. }
-  var
-    SavedGraphic: TObjectSE;
-    SavedCode: Pointer;
-    SavedInitialized: Boolean;
-    Equipment: TEquipmentWithActCode;
-  begin
-    if Item <> nil then
-    begin
-      SavedGraphic := Item.GraphObject;
-      Item.GraphObject := nil;
-      if Item is TEquipmentWithActCode then
-      begin
-        Equipment := TEquipmentWithActCode(Item);
-        SavedCode := Equipment.ActionCode;
-        SavedInitialized := Equipment.ActCodeInitialized;
-        Equipment.ActionCode := nil;
-        Equipment.ActCodeInitialized := False;
-        AccumulateIntegrityBytes(
-            PByte(PAnsiChar(Item) + SizeOf(Pointer)),
-            Item.InstanceSize - SizeOf(Pointer)
-        );
-        Equipment.ActionCode := SavedCode;
-        Equipment.ActCodeInitialized := SavedInitialized;
-      end
-      else
-        AccumulateIntegrityBytes(
-            PByte(PAnsiChar(Item) + SizeOf(Pointer)),
-            Item.InstanceSize - SizeOf(Pointer)
-        );
-      Item.GraphObject := SavedGraphic;
-    end;
-  end;
-
 begin
+  // The original binary bypasses checksum calculation. Keep the callers' state
+  // transitions and RNG consumption while preserving its constant result.
   Result := 0;
-  Exit; // Native bypass. The dormant checksum body below is retained and matched.
-  State := InitCrc32;
-  AccumulateIntegrityUInt32(GetCheatPoints);
-  AccumulateIntegrityUInt32(PendingEquipmentPurchasePrice);
-  AccumulateIntegrityUInt32(CurrentTurn);
-  AccumulateIntegrityUInt32(AverageRangerCapital);
-  AccumulateIntegrityUInt32(MaxRangerWealth);
-  AccumulateIntegritySingle(AverageRangerStrength);
-  AccumulateIntegritySingle(BestRangerStrength);
-  AccumulateIntegritySingle(ChecksumScalarD0);
-  AccumulateIntegritySingle(ChecksumScalarEC);
-  AccumulateIntegrityUInt32(TechLevel);
-  AccumulateIntegrityUInt32(TerronSeriesResolvedTurn);
-  AccumulateIntegrityUInt32(KellerSeriesResolvedTurn);
-  AccumulateIntegrityUInt32(BlazerSeriesResolvedTurn);
-  AccumulateIntegrityBoolean(GR_Main.CCInterface.GetTamperDetected);
-  AccumulateIntegrityBoolean(GR_Main.CCInterface.GetFlag0A);
-  AccumulateIntegrityUInt32(SaveCount);
-  AccumulateIntegrityUInt32(LoadCount);
-  AccumulateIntegrityBoolean(IronWill);
-  AccumulateIntegrityByte(DominatorModLevel);
-  AccumulateIntegrityByte(TechnicModEnabled);
-  AccumulateIntegrityByte(AmmoModEnabled);
-  AccumulateIntegrityByte(GodModEnabled);
-  AccumulateIntegrityByte(UltraScanModEnabled);
-  AccumulateIntegrityByte(StasisModEnabled);
-  AccumulateIntegrityBoolean(CustomRules.Enabled);
-  AccumulateIntegrityBoolean(GR_Main.CCInterface.GetEditableStateApplied);
-  AccumulateIntegrityBoolean(FinalizationNameEncoded <> '');
-  AccumulateIntegrityBytes(@DifficultyLevels, 8);
-  for I := 0 to Stars.Count - 1 do
-  begin
-    Star := TStar(Stars[I]);
-    if (Mode = 1) and (Star <> PlayerStar) then
-      Continue;
-    if (Mode = 2) and (Star = PlayerStar) then
-      Continue;
-    AccumulateIntegrityObject(Star);
-    for J := 0 to Star.Items.Count - 1 do
-      AccumulateIntegrityItem(Star.Items[J]);
-    if Star.MovingDropItems <> nil then
-      for J := 0 to Star.MovingDropItems.Count - 1 do
-        if PMovingDropItemEntry(Star.MovingDropItems[J]).Payload is TItem then
-          AccumulateIntegrityItem(PMovingDropItemEntry(Star.MovingDropItems[J]).Payload as TItem);
-    for J := 0 to Star.Asteroids.Count - 1 do
-    begin
-      Asteroid := TAsteroid(Star.Asteroids[J]);
-      AccumulateIntegrityUInt32(Asteroid.MineralCount);
-    end;
-    for J := 0 to Star.Missiles.Count - 1 do
-      AccumulateIntegrityObject(TObject(Star.Missiles[J]));
-    for J := 0 to Star.Planets.Count - 1 do
-    begin
-      Planet := TPlanet(Star.Planets[J]);
-      AccumulateIntegrityObject(Planet);
-      for K := 0 to Planet.EquipmentShop.Count - 1 do
-        AccumulateIntegrityItem(Planet.EquipmentShop[K]);
-      if Planet.SurfaceLootEntries <> nil then
-        for K := 0 to Planet.SurfaceLootEntries.Count - 1 do
-          if PPlanetSurfaceLootEntry(Planet.SurfaceLootEntries[K]).Item <> nil then
-            AccumulateIntegrityItem(PPlanetSurfaceLootEntry(Planet.SurfaceLootEntries[K]).Item);
-    end;
-    for J := 0 to Star.Ships.Count - 1 do
-    begin
-      Ship := TShip(Star.Ships[J]);
-      AccumulateIntegrityObject(Ship);
-      for Skill := Low(TPilotSkill) to High(TPilotSkill) do
-        AccumulateIntegrityUInt32(Ship.BaseSkills[Skill]);
-      for K := 0 to Ship.Inventory.Count - 1 do
-        AccumulateIntegrityItem(Ship.Inventory[K]);
-      for K := 0 to Ship.Artefacts.Count - 1 do
-        AccumulateIntegrityItem(Ship.Artefacts[K]);
-      if Ship.GuaranteedDeathDropItems <> nil then
-        for K := 0 to Ship.GuaranteedDeathDropItems.Count - 1 do
-          AccumulateIntegrityItem(Ship.GuaranteedDeathDropItems[K]);
-      if Ship.StatBonuses <> nil then
-        for K := 0 to Ship.StatBonuses.Count - 1 do
-        begin
-          AccumulateIntegrityUInt32(PShipStatBonusEntry(Ship.StatBonuses[K]).BonusValue);
-          AccumulateIntegrityByte(Ord(PShipStatBonusEntry(Ship.StatBonuses[K]).BonusKind));
-        end;
-      if Ship is TRuins then
-        for K := 0 to (Ship as TRuins).EquipmentShop.Count - 1 do
-          AccumulateIntegrityItem(TList((Ship as TRuins).EquipmentShop)[K]);
-      if Ship is TRanger then
-        if (Ship as TRanger).Quests <> nil then
-          for K := 0 to (Ship as TRanger).Quests.Count - 1 do
-          begin
-            RangerQuest := (Ship as TRanger).Quests[K];
-            if RangerQuest <> nil then
-            begin
-              AccumulateIntegrityUInt32(RangerQuest.DeadlineTurn);
-              AccumulateIntegrityUInt32(RangerQuest.RewardMoney);
-            end;
-          end;
-      if Ship is TPlayer then
-      begin
-        for K := 0 to TPlayer(Ship).StorageEntries.Count - 1 do
-        begin
-          Storage := TPlayer(Ship).StorageEntries[K];
-          AccumulateIntegrityItem(Storage.Item);
-        end;
-        for K := 0 to TPlayer(Ship).Satellites.Count - 1 do
-          AccumulateIntegrityItem(TList(TPlayer(Ship).Satellites)[K]);
-      end;
-    end;
-  end;
-  if Mode <> 2 then
-    if GetPlayer <> nil then
-      if GetPlayer.IsOnPlanet or GetPlayer.IsDockedToShip then
-        if TemporaryShopSlots <> nil then
-          for I := 0 to TemporaryShopSlots.Count - 1 do
-            if TShopSlot(TemporaryShopSlots[I]).Item <> nil then
-              AccumulateIntegrityItem(TShopSlot(TemporaryShopSlots[I]).Item);
-  if Mode <> 2 then
-    if GetPlayer <> nil then
-      if CurrentScreenId = screenPlanetQuest then
-      begin
-        AccumulateIntegrityUInt32(PlanetQuestScreen.MoneyLimitComplement);
-        AccumulateIntegrityUInt32(PlanetQuestScreen.DaysElapsed);
-        AccumulateIntegrityUInt32(PlanetQuestScreen.QuestId);
-        Quest := PlanetQuestScreen.Quest;
-        if Quest <> nil then
-        begin
-          for J := 1 to Quest.GetParameterCount do
-          begin
-            Parameter := Quest.GetParameter(J);
-            AccumulateIntegrityUInt32(Parameter.MinValue);
-            AccumulateIntegrityUInt32(Parameter.MaxValue);
-            AccumulateIntegrityUInt32(Parameter.Value);
-            AccumulateIntegrityUInt32(Cardinal(Parameter.CriticalOutcome));
-            AccumulateIntegrityBoolean(Parameter.Hidden);
-            AccumulateIntegrityBoolean(Parameter.ShowWhenZero);
-            AccumulateIntegrityBoolean(Parameter.CriticalAtMinimum);
-            AccumulateIntegrityBoolean(Parameter.Enabled);
-            AccumulateIntegrityBoolean(Parameter.IsMoney);
-          end;
-          for J := 1 to Quest.GetLocationCount do
-          begin
-            Location := Quest.GetLocation(J);
-            AccumulateIntegrityWords(
-                PWord(PWideChar(Location.EventExpression.Text)),
-                Length(Location.EventExpression.Text)
-            );
-            AccumulateIntegrityUInt32(Location.Days);
-            AccumulateIntegrityUInt32(Location.Id);
-            AccumulateIntegrityBoolean(Location.UseEventExpression);
-            AccumulateIntegrityUInt32(Location.NextEventIndex);
-            AccumulateIntegrityBoolean(Location.IsEmpty);
-            AccumulateIntegrityBoolean(Location.IsDeath);
-            AccumulateIntegrityBoolean(Location.IsStart);
-            AccumulateIntegrityBoolean(Location.IsSuccess);
-            AccumulateIntegrityBoolean(Location.IsFailure);
-            AccumulateIntegrityUInt32(Location.VisitLimit);
-            AccumulateIntegrityUInt32(Location.VisitCount);
-            for K := 1 to Location.GetParameterChangeCount do
-            begin
-              Change := Location.GetParameterChange(K);
-              AccumulateIntegrityWords(
-                  PWord(PWideChar(Change.ExpressionText.Text)),
-                  Length(Change.ExpressionText.Text)
-              );
-              for L := 0 to High(Change.ValueConstraint.Values) do
-                AccumulateIntegrityUInt32(Change.ValueConstraint.Values[L]);
-              for L := 0 to High(Change.MultipleConstraint.Values) do
-                AccumulateIntegrityUInt32(Change.MultipleConstraint.Values[L]);
-              AccumulateIntegrityUInt32(Change.MinValue);
-              AccumulateIntegrityUInt32(Change.MaxValue);
-              AccumulateIntegrityUInt32(Change.ChangeValue);
-              AccumulateIntegrityBoolean(Change.ChangeByPercent);
-              AccumulateIntegrityBoolean(Change.SetValue);
-              AccumulateIntegrityBoolean(Change.UseExpression);
-              AccumulateIntegrityUInt32(Cardinal(Change.VisibilityChange));
-            end;
-          end;
-          for J := 1 to Quest.GetPathCount do
-          begin
-            Path := Quest.GetPath(J);
-            AccumulateIntegrityWords(
-                PWord(PWideChar(Path.Caption.Text)),
-                Length(Path.Caption.Text)
-            );
-            AccumulateIntegrityWords(
-                PWord(PWideChar(Path.ConditionExpression.Text)),
-                Length(Path.ConditionExpression.Text)
-            );
-            AccumulateIntegrityDouble(Path.Priority);
-            AccumulateIntegrityBoolean(Path.IsAutomatic);
-            AccumulateIntegrityBoolean(Path.AlwaysShow);
-            AccumulateIntegrityUInt32(Path.Days);
-            AccumulateIntegrityUInt32(Path.DisplayOrder);
-            AccumulateIntegrityUInt32(Path.Id);
-            AccumulateIntegrityUInt32(Path.TraversalLimit);
-            AccumulateIntegrityUInt32(Path.TraversalCount);
-            AccumulateIntegrityUInt32(Path.FromLocationId);
-            AccumulateIntegrityUInt32(Path.ToLocationId);
-            for K := 1 to Path.GetParameterChangeCount do
-            begin
-              Change := Path.GetParameterChange(K);
-              AccumulateIntegrityWords(
-                  PWord(PWideChar(Change.ExpressionText.Text)),
-                  Length(Change.ExpressionText.Text)
-              );
-              for L := 0 to High(Change.ValueConstraint.Values) do
-                AccumulateIntegrityUInt32(Change.ValueConstraint.Values[L]);
-              for L := 0 to High(Change.MultipleConstraint.Values) do
-                AccumulateIntegrityUInt32(Change.MultipleConstraint.Values[L]);
-              AccumulateIntegrityUInt32(Change.MinValue);
-              AccumulateIntegrityUInt32(Change.MaxValue);
-              AccumulateIntegrityUInt32(Change.ChangeValue);
-              AccumulateIntegrityBoolean(Change.ChangeByPercent);
-              AccumulateIntegrityBoolean(Change.SetValue);
-              AccumulateIntegrityBoolean(Change.UseExpression);
-              AccumulateIntegrityUInt32(Cardinal(Change.VisibilityChange));
-            end;
-          end;
-        end;
-      end;
-  if Mode <> 2 then
-  begin
-    AccumulateIntegrityUInt32(Cardinal(ShipScreen.SelectedHoldKind));
-    AccumulateIntegrityUInt32(ShipScreen.SelectedGoodsIndex);
-    AccumulateIntegrityUInt32(ShipScreen.SelectedGoodsQuantity);
-    AccumulateIntegrityUInt32(ShipScreen.SelectedGoodsCost);
-    if GetInnermostScreenLoop = ShipScreen then
-      if ShipScreen.SelectedHoldKind in [phkEquipment, phkArtefact] then
-        if ShipScreen.SelectedHoldItem <> nil then
-          AccumulateIntegrityItem(Pointer(ShipScreen.SelectedHoldItem));
-    AccumulateIntegrityUInt32(GoodsShopScreen.PartnerCargoLimit);
-    AccumulateIntegrityUInt32(GoodsShopScreen.PartnerMoneyLimit);
-    for Good := Low(TGoodsIndex) to High(TGoodsIndex) do
-    begin
-      AccumulateIntegrityUInt32(GoodsShopScreen.TradeRows[Good].Count);
-      AccumulateIntegritySingle(GoodsShopScreen.TradeRows[Good].MaximumPrice);
-      AccumulateIntegrityUInt32(GoodsShopScreen.TradeRows[Good].PurchasePrice);
-      AccumulateIntegrityUInt32(GoodsShopScreen.TradeRows[Good].BaseSalePrice);
-    end;
-    AccumulateIntegrityUInt32(GovernmentScreen.QuestOffer.DeadlineTurn);
-    AccumulateIntegrityUInt32(GovernmentScreen.QuestOffer.RewardMoney);
-    AccumulateIntegrityUInt32(GovernmentScreen.QuestNegotiationLevel);
-    AccumulateIntegrityUInt32(GovernmentScreen.QuestRewardStep);
-    AccumulateIntegrityUInt32(GovernmentScreen.QuestDurationStep);
-  end;
-  if Mode <> 1 then
-    AccumulateIntegrityBytes(
-        @IntegrityDataBegin,
-        PtrUInt(@IntegrityDataEnd) - PtrUInt(@IntegrityDataBegin)
-    );
-  Result := FinishCrc32(State);
 end;
 
 procedure TGalaxy.PrimeIntegrityChecksum(StatusCode: Integer);
@@ -5121,180 +4763,6 @@ procedure TGalaxy.ClearIntegrityStatus;
 begin
   if GR_Main.CCInterface.GetIntegrityError = 0 then
     GR_Main.CCInterface.SetIntegrityStatus(0);
-end;
-
-procedure TGalaxy.AppendIntegritySnapshot;
-type
-  // Four DWORDs precede the encrypted payload. Size includes this header;
-  // Crc32 covers the compressed buffer before encryption. The last word is unresolved.
-  TSnapshotHeader = packed record
-    Kind: Integer;
-    Size: Integer;
-    Crc32: Cardinal;
-    Unknown0C: Cardinal;
-  end;
-  PSnapshotHeader = ^TSnapshotHeader;
-var
-  Size, StartOffset, Count, I: Integer;
-  Partner: TShip;
-  OldQuest: PPlayerOldQuest;
-  CompletedDeliveries,
-  CompletedAssassinations,
-  CompletedTextQuests,
-  CompletedSystemDefenses,
-  CompletedShipDefenses: Word;
-  Buffer: TBufEC;
-  Crc: Cardinal;
-  Exponent, Modulus: TFGInt;
-  Bytes: AnsiString;
-  Good: Byte;
-begin
-  Exit; // Native unconditional bypass; retain the dormant serializer below.
-  if GetPlayer = nil then
-  begin
-  end;
-  GR_Main.CCInterface.Buffer.SetPosition(GR_Main.CCInterface.Buffer.DataSize);
-  StartOffset := GR_Main.CCInterface.Buffer.Position;
-  GR_Main.CCInterface.Buffer.AddIntegerValue(13);
-  GR_Main.CCInterface.Buffer.AddIntegerValue(0);
-  GR_Main.CCInterface.Buffer.AddDWord(0);
-  GR_Main.CCInterface.Buffer.AddDWord(0);
-  Buffer := TBufEC.Create;
-  Buffer.AddIntegerValue(CurrentTurn);
-  Buffer.AddBoolean(GR_Main.CCInterface.GetFlag0A);
-  Buffer.AddIntegerValue(MaxRangerWealth);
-  Buffer.AddSingle(BestRangerStrength);
-  Buffer.AddIntegerValue(GetPlayer.Money);
-  Buffer.AddIntegerValue(GetPlayer.Wealth);
-  Buffer.AddSingle(GetPlayer.Strength);
-  Buffer.AddIntegerValue(GetPlayer.NodeReserve);
-  Buffer.AddIntegerValue(GetPlayer.TotalExperience);
-  Buffer.AddIntegerValue(GetPlayer.ExperienceByDominators);
-  Buffer.AddIntegerValue(GetPlayer.ExperienceByPirates);
-  Buffer.AddIntegerValue(GetPlayer.ExperienceByNormals);
-  Buffer.AddIntegerValue(GetPlayer.ExperienceByTraderCareer);
-  Buffer.AddIntegerValue(GetPlayer.FreeExperience);
-  Buffer.AddIntegerValue(GetPlayer.CargoFreeSpace);
-  Buffer.AddIntegerValue(GetPlayer.Speed);
-  Buffer.AddSingle(GetPlayer.DefenseDamageFactor);
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.BaseSkills[psAccuracy]));
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.BaseSkills[psManeuverability]));
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.BaseSkills[psTechnical]));
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.BaseSkills[psTrading]));
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.BaseSkills[psCharisma]));
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.BaseSkills[psLeadership]));
-  Buffer.AddWideChar(WideChar(GetPlayer.PlaceInRating));
-  Buffer.AddIntegerValue(GetPlayer.TotalShipKillCount);
-  Buffer.AddIntegerValue(GetPlayer.PirateKillCount);
-  Buffer.AddIntegerValue(GetPlayer.DominatorKillCount);
-  Buffer.AddIntegerValue(GetPlayer.LiberatedSystemCount);
-  Buffer.AddWideChar(WideChar(GetPlayer.CurrentSystemKills.Dominator));
-  Buffer.AddWideChar(WideChar(GetPlayer.CurrentSystemKills.Pirate));
-  Buffer.AddWideChar(WideChar(GetPlayer.CurrentSystemKills.Normal));
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.Rank));
-  Buffer.AddWideChar(WideChar(GetPlayer.RankPoints));
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.PirateClanReal));
-  Buffer.AddAnsiChar(AnsiChar(Ord(GetPlayer.OwnerId = oiPirate)));
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.PirateRank));
-  Buffer.AddWideChar(WideChar(GetPlayer.PirateRankPoints));
-  Buffer.AddIntegerValue(GetPlayer.HyperspaceKillCount);
-  Buffer.AddIntegerValue(GetPlayer.BlackHoleKillCount);
-  if GetPlayer.AwardIds = nil then
-    Buffer.AddAnsiChar(#0)
-  else
-    Buffer.AddAnsiChar(AnsiChar(GetPlayer.AwardIds.Count));
-  Buffer.AddAnsiStringZ('TESTBUILD');
-  Buffer.AddByte(CountFactionStars(sfCoalition));
-  Buffer.AddByte(CountFactionStars(sfPirates));
-  Count := 0;
-  for I := 0 to Rangers.Count - 1 do
-  begin
-    Partner := Rangers[I];
-    if (Partner.PartnerShip = GetPlayer) and (Partner.OwnerId in PlanetOwnerMasks.Coalition) then
-      Inc(Count);
-  end;
-  Buffer.AddAnsiChar(AnsiChar(Count));
-  Buffer.AddIntegerValue(GetCheatPoints);
-  Buffer.AddIntegerValue(LoadCount);
-  CompletedDeliveries := 0;
-  CompletedAssassinations := 0;
-  CompletedTextQuests := 0;
-  CompletedSystemDefenses := 0;
-  CompletedShipDefenses := 0;
-  if PlayerOldQuests <> nil then
-    for I := 0 to PlayerOldQuests.Count - 1 do
-    begin
-      OldQuest := PlayerOldQuests[I];
-      if OldQuest.Successful then
-      begin
-        if OldQuest.QuestType = qtSendLetter then
-          Inc(CompletedDeliveries)
-        else if OldQuest.QuestType = qtKillShip then
-          Inc(CompletedAssassinations)
-        else if OldQuest.QuestType = qtPlanetQuest then
-          Inc(CompletedTextQuests)
-        else if OldQuest.QuestType = qtDefendSystem then
-          Inc(CompletedSystemDefenses)
-        else if OldQuest.QuestType = qtDefendShip then
-          Inc(CompletedShipDefenses);
-      end;
-    end;
-  Buffer.AddAnsiChar(AnsiChar(CompletedDeliveries));
-  Buffer.AddAnsiChar(AnsiChar(CompletedAssassinations));
-  Buffer.AddAnsiChar(AnsiChar(CompletedTextQuests));
-  Buffer.AddAnsiChar(AnsiChar(CompletedSystemDefenses));
-  Buffer.AddAnsiChar(AnsiChar(CompletedShipDefenses));
-  if GR_Main.CCInterface.GetIntegrityError <> 0 then
-  begin
-    Buffer.AddIntegerValue(GR_Main.CCInterface.GetValue10);
-    Buffer.AddIntegerValue(GR_Main.CCInterface.GetIntegrityStatus);
-    Buffer.AddIntegerValue(GR_Main.CCInterface.GetIntegrityError);
-  end
-  else
-  begin
-    Buffer.AddIntegerValue(0);
-    Buffer.AddIntegerValue(0);
-    Buffer.AddIntegerValue(0);
-  end;
-  GR_Main.CCInterface.SetValue10(0);
-  GR_Main.CCInterface.SetIntegrityStatus(0);
-  GR_Main.CCInterface.SetIntegrityError(0);
-  Buffer.AddAnsiChar(AnsiChar(GetPlayer.PlanetBattles));
-  Buffer.AddAnsiChar(AnsiChar((High(GetPlayer.PlanetBattleHistory) + 1)));
-  Buffer.AddWideChar(WideChar(GetPlayer.GetHull.Weight));
-  Buffer.AddWideChar(WideChar(GetPlayer.DiseaseContractionCount));
-  Buffer.AddWideChar(WideChar(GetPlayer.StimulantPurchaseCount));
-  Buffer.AddWideChar(WideChar(GetPlayer.PrisonStaysCompleted));
-  Buffer.AddIntegerValue(GetPlayer.SatelliteTilesExplored);
-  Buffer.AddWideChar(WideChar(GetPlayer.NationalityChangeCount));
-  Buffer.AddWideChar(WideChar(GetPlayer.SideChangeCount));
-  Buffer.AddIntegerValue(GetPlayer.UnknownF4);
-  for I := 0 to 7 do
-    Buffer.AddAnsiChar(AnsiChar(DifficultyLevels[Byte(I)]));
-  Buffer.AddBoolean(GR_Main.CCInterface.GetEditableStateApplied);
-  Buffer.AddWideStringZ(FinalizationNameEncoded);
-  Buffer.AddBoolean(CustomRules.Enabled);
-  for Good := 0 to 7 do
-    Buffer.AddIntegerValue(GetPlayer.DominatorKillsByType[TKlingType(Good)]);
-  Buffer.AddAnsiChar(AnsiChar(TechLevel));
-  Buffer.CompressZlibPayloadInPlace(False);
-  Crc := Buffer.ComputeCrc32;
-  FGIntDecodeBase64('HjwH94fmhClFC1prPy', Bytes);
-  FGIntFromBytes(Bytes, Modulus);
-  FGIntDecodeBase64('DjAVRGx=', Bytes);
-  FGIntFromBytes(Bytes, Exponent);
-  SetLength(Bytes, Buffer.DataSize);
-  System.Move(Pointer(Buffer.Data)^, Pointer(PAnsiChar(Bytes))^, Buffer.DataSize);
-  FGIntEncodeBlocks(Bytes, Exponent, Modulus, Bytes);
-  GR_Main.CCInterface.Buffer.AddBytes(PAnsiChar(Bytes), Length(Bytes));
-  Size := GR_Main.CCInterface.Buffer.Position - StartOffset;
-  PInteger(@PSnapshotHeader(PAnsiChar(GR_Main.CCInterface.Buffer.Data) + StartOffset).Size)^ :=
-      Size;
-  PCardinal(@PSnapshotHeader(PAnsiChar(GR_Main.CCInterface.Buffer.Data) + StartOffset).Crc32)^ :=
-      Crc;
-  Buffer.Free;
-  FGIntClear(Modulus);
-  FGIntClear(Exponent);
 end;
 
 function TGalaxy.HasVisibleScoreModFlags: Boolean;

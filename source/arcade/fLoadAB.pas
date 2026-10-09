@@ -50,7 +50,6 @@ type
     procedure SelectCategory(Sender: TObjectGI);
     procedure StartSelectedArena(Sender: TObjectGI);
     procedure ShowSelectedArenaDetails;
-    procedure PrepareCatalog;
     function GetCatalogSummary: WideString;
   end;
 
@@ -269,7 +268,6 @@ var
 begin
   Panel := GetByName('PanelSlot') as TPanelScrollBarGI;
   Panel.FreeOwnedChildren;
-  PrepareCatalog;
   Entries := nil;
   List := LanguageDataConfig.GetBlockByPath('ABMap');
   Count := List.GetBlockCount;
@@ -529,10 +527,6 @@ begin
     VerticalScrollBar.SetLargeChange(ClientSize.Y);
     VerticalScrollBar.SetPageSize(ClientSize.Y);
   end;
-end;
-
-procedure TfLoadAB.PrepareCatalog;
-begin
 end;
 
 function TfLoadAB.GetCatalogSummary: WideString;

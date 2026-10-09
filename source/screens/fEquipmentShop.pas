@@ -113,8 +113,6 @@ var
 
   TemporaryShopStation: TRuins = nil;
 
-procedure TemporaryShopStockHook(Argument: Pointer);
-
 procedure BuildTemporaryShopSlotGrid;
 
 procedure RestoreTemporaryShopStock;
@@ -160,10 +158,6 @@ uses
   Globals,
   GlobalsV;
 
-procedure TemporaryShopStockHook(Argument: Pointer);
-begin
-end;
-
 procedure BuildTemporaryShopSlotGrid;
 var
   X, Y, EmptyCount, I, J: Integer;
@@ -172,7 +166,6 @@ var
   ItemOrder, OtherOrder: Integer;
   Station: TRuins;
 begin
-  TemporaryShopStockHook(nil);
   ClearTemporaryShopSlotGrid;
   TemporaryShopSlots := TList.Create;
   if GetPlayer.CurrentPlanet <> nil then

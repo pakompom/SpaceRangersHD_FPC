@@ -4,48 +4,16 @@ unit ExceptionInfo;
 
 interface
 
-uses
-  SysUtils;
-
-type
-
-  TRaiseExceptionCallback =
-      procedure(Code: Cardinal; Flags: Cardinal; ArgumentCount: Cardinal; Arguments: Pointer);
-      stdcall;
-
 const
 
   ExportHexDigits: array[0..15] of WideChar =
       ('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F');
 
-var
-
-  ReportingException: Boolean = False;
-
-  PreviousRaiseException: TRaiseExceptionCallback = nil;
-
 function HexDigit(Value: Byte): WideChar;
 
 function ByteToHexText(Value: Byte): WideString;
 
-function ExceptionLogTimestamp: AnsiString;
-
-procedure ReportUnhandledException(E: Exception; var Handled: Boolean);
-
-procedure RaiseExceptionWithLogging(
-    Code: Cardinal;
-    Flags: Cardinal;
-    ArgumentCount: Cardinal;
-    Arguments: Pointer
-); stdcall;
-
 implementation
-
-uses
-  GameSystem,
-  GR_Main,
-  BlockParException,
-  BreakMessageGIException;
 
 function HexDigit(Value: Byte): WideChar;
 begin
@@ -63,80 +31,5 @@ begin
   Result[1] := HexDigitAt(Value, 1);
   Result[2] := HexDigitAt(Value, 0);
 end;
-
-function ExceptionLogTimestamp: AnsiString;
-var
-  Time: TDateTime;
-  Text: AnsiString;
-begin
-  Time := Now;
-  DateTimeToString(Text, 'yyyy.mm.dd hh.nn.ss.zzz', Time);
-  Result := Text;
-end;
-
-procedure ReportUnhandledException(E: Exception; var Handled: Boolean);
-var
-  TargetName, SourceName: WideString;
-begin
-  if E is EBreakMessageGI then
-    Handled := False
-  else
-  begin
-    if E is EBlockPar then
-      if not (E as EBlockPar).IsReportable then
-        Handled := False;
-    AppendLogLineThreadSafe('Exception ' + E.ClassName + ' with message ' + E.Message);
-    Handled := False;
-    if SuppressExceptionLogCopy then
-      SuppressExceptionLogCopy := False
-    else
-    begin
-      CreateDir(NativeGamePath(AnsiString(GetGameUserDirectory + 'Errors')));
-      TargetName := GetGameUserDirectory + 'Errors\' + WideString(ExceptionLogTimestamp) + '.log';
-      SourceName := GetGameUserDirectory + '########.log';
-      CopyGameFile(SourceName, TargetName);
-    end;
-  end;
-end;
-
-procedure RaiseExceptionWithLogging(
-    Code, Flags, ArgumentCount: Cardinal;
-    Arguments: Pointer
-); stdcall;
-var
-  Handled: Boolean;
-begin
-  if Assigned(PreviousRaiseException) then
-  begin
-    if ReportingException then
-      PreviousRaiseException(Code, Flags, ArgumentCount, Arguments)
-    else
-    begin
-      ReportingException := True;
-      try
-        try
-          PreviousRaiseException(Code, Flags, ArgumentCount, Arguments);
-        except
-          on E: Exception do
-          begin
-            Handled := False;
-            ReportUnhandledException(E, Handled);
-            if not Handled then
-              raise;
-          end;
-        end;
-      finally
-        ReportingException := False;
-      end;
-    end;
-  end;
-end;
-
-// Native initializer $877884 saves and replaces the RTL raise hook.
-
-initialization
-
-  // FPC raises language exceptions through a different RTL path. The main
-  // loop and worker boundary report them explicitly.
 
 end.

@@ -241,8 +241,6 @@ uses
   SE_Sputnik,
   SE_Asteroid,
   fFilmFile,
-  FGInt,
-  FGIntRSA,
   SE_Ruins,
   aRuins,
   fShip2,
@@ -300,21 +298,9 @@ uses
   aGalaxy,
   aMyFunction,
   EC_OKGF,
-  GR_AMStream,
   DirectSound,
   BreakMessageGIException,
   aGalaxyStruct,
-  GI_PolyFill,
-  ab_ShipWall,
-  fGalaxy,
-  GI_CountBox,
-  GI_Track,
-  fRating,
-  DirectDraw,
-  PrintGameState,
-  ab_Fast,
-  sb_W01,
-  GR_RectEx,
   GI_PSWeapon17Kafacitor;
 
 type
@@ -654,7 +640,6 @@ begin
           LoadLanguageAndPackages;
           if SteamInitialized then
           begin
-            SteamSetLeaderboardName('Scores');
             InitializeSteamAchievements;
             SteamInitialized := SteamLocal(214730);
           end;

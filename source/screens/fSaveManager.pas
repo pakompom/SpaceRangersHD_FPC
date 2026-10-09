@@ -1174,18 +1174,15 @@ begin
             FileObject.SetFileName(Slot.FileName);
             if not FileObject.TryAcquireReadHandle(True) then
             begin
-              SuppressExceptionLogCopy := True;
               raise EAbort.Create('Err');
             end;
             if FileObject.ReadWideString <> 'RSG' then
             begin
-              SuppressExceptionLogCopy := True;
               raise EAbort.Create('Err');
             end;
             I := ExtractDigitsToIntW(FileObject.ReadWideString);
             if (I < 13) or (I > CurrentSaveVersion) then
             begin
-              SuppressExceptionLogCopy := True;
               raise EAbort.Create('Err');
             end;
             if (Slot.FileName = AutoPath) or RunningUnderWine then
@@ -1198,7 +1195,6 @@ begin
             Slot.RaceName := FileObject.ReadWideString;
             if FileObject.ReadWideString <> 'EZ' then
             begin
-              SuppressExceptionLogCopy := True;
               raise EAbort.Create('Err');
             end;
             FileObject.ReleaseHandle;

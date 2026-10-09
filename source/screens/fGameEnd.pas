@@ -59,7 +59,6 @@ uses
   fAbout,
   fSaveManager,
   ThreadCalc,
-  SimpleSteamApi,
   Achievements;
 
 procedure TfGameEnd.InitializeLayout;
@@ -211,8 +210,6 @@ var
   CustomWin, CustomLoss, DefaultLoss: Boolean;
 begin
   WaitForTurnCalculation;
-  if SteamInitialized and not SteamLeaderboardFound then
-    SteamSetLeaderboardName('Scores');
   CustomText := '';
   CustomPicture := '';
   CustomWin := False;

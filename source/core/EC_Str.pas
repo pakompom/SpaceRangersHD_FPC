@@ -166,13 +166,6 @@ function ExtractFileExtNoDotW(const Path: WideString): WideString;
 
 function ExtractFileDirW(const Path: WideString): WideString;
 
-procedure WriteRegistryStringLegacy(
-    RootKey: Cardinal;
-    KeyPath: WideString;
-    ValueName: WideString;
-    Value: WideString
-);
-
 function DecodeTextW(Text: WideString): WideString;
 
 function EncodeTextW(Text: WideString): WideString;
@@ -184,9 +177,6 @@ function CopyWideStringUnchecked(Text: WideString; Index: Integer; Count: Intege
 implementation
 
 uses
-{$IFDEF MSWINDOWS}
-  Windows,
-{$ENDIF}
   EC_Mem,
   GR_Main,
   SysUtils,
@@ -1201,47 +1191,6 @@ begin
   end;
   Result := ExtractDelimitedRangeW(Path, 0, Count - 2, '\/');
 end;
-
-procedure WriteRegistryStringLegacy(RootKey: Cardinal; KeyPath, ValueName, Value: WideString);
-{$IFDEF MSWINDOWS}
-var
-  Key: HKEY;
-  Disposition: Cardinal;
-  AnsiValue: AnsiString;
-begin
-  if Windows.RegCreateKeyExW(
-          RootKey,
-          PWideChar(KeyPath),
-          0,
-          nil,
-          0,
-          KEY_WRITE,
-          nil,
-          Key,
-          @Disposition)
-      <> ERROR_SUCCESS then
-    Exit;
-  AnsiValue := Value;
-  if Windows.RegSetValueExW(
-          Key,
-          PWideChar(ValueName),
-          0,
-          REG_SZ,
-          PAnsiChar(AnsiValue),
-          Length(AnsiValue) + 1)
-      <> ERROR_SUCCESS then
-  begin
-    Windows.RegCloseKey(Key);
-    Exit;
-  end;
-  Windows.RegCloseKey(Key);
-end;
-
-{$ELSE}
-begin
-  // Only used by the original Windows file-association setup.
-end;
-{$ENDIF}
 
 function DecodeTextW(Text: WideString): WideString;
 var

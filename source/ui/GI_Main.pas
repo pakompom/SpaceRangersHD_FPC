@@ -367,7 +367,6 @@ end;
 
 procedure BreakUiMessage;
 begin
-  SuppressExceptionLogCopy := True;
   raise EBreakMessageGI.Create('No error');
 end;
 

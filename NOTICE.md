@@ -8,8 +8,6 @@ It is not affiliated with the game's developers or publisher.
 - Publisher: Fulqrum Publishing.
 - Original game notices: © 2013 Fulqrum Publishing Ltd.; © 2024 СНК-Games.
 - Decompilation: [SpaceRangersHD_decomp](https://github.com/pakompom/SpaceRangersHD_decomp).
-- FGInt and FGIntRSA: Walied Othman; original license headers are retained in
-  [FGInt.pas](source/runtime/FGInt.pas) and [FGIntRSA.pas](source/runtime/FGIntRSA.pas).
 - Software renderer: [OKGF](https://github.com/pakompom/okgf), under its
   [MIT license](vendor/okgf/LICENSE); bundled SoftFloat has its own
   [BSD 3-Clause license](vendor/okgf/vendor/softfloat/COPYING.txt).

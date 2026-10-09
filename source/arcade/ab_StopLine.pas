@@ -111,8 +111,6 @@ procedure ab_StopLine_UpdateColors;
 
 procedure ab_StopLine_ClearSegments(Line: PabStopLine);
 
-procedure ab_StopLine_PrepareCollision(Line: PabStopLine);
-
 procedure ab_StopLine_BuildCollisionList;
 
 function ab_StopLine_ReflectMovement(
@@ -462,10 +460,6 @@ begin
     end;
 end;
 
-procedure ab_StopLine_PrepareCollision(Line: PabStopLine);
-begin
-end;
-
 procedure ab_StopLine_BuildCollisionList;
 var
   Line, Previous: PabStopLine;
@@ -475,7 +469,6 @@ begin
   Line := FirstStopLine;
   while Line <> nil do
   begin
-    ab_StopLine_PrepareCollision(Line);
     Line.NextCollision := nil;
     if Line.Collidable then
     begin
@@ -608,8 +601,6 @@ begin
       Movement.Y := (Normal.Y * Factor * 2 + Movement.Y) * 0.8;
       Result := True;
       Break;
-      // The native compiler retained this unreachable list advance after Break.
-      Line := Line.NextCollision;
     end;
     if Result then
     begin

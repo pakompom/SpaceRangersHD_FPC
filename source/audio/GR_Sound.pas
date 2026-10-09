@@ -859,14 +859,12 @@ begin
       Status := DirectSoundCreate(nil, DirectSound, nil);
       if (Status <> DS_OK) and (Status <> DS_INCOMPLETE) then
       begin
-        SuppressExceptionLogCopy := True;
         AppendLogLineThreadSafe('Error in TSoundControl.Create 1');
         raise Exception.Create(SoundErrorText(Status));
       end;
       Status := DirectSound.SetCooperativeLevel(MainWindowHandle, DSSCL_PRIORITY);
       if (Status <> DS_OK) and (Status <> DS_INCOMPLETE) then
       begin
-        SuppressExceptionLogCopy := True;
         AppendLogLineThreadSafe('Error in TSoundControl.Create 2');
         raise Exception.Create(SoundErrorText(Status));
       end;

@@ -2,6 +2,14 @@
 
 This changelog records game-source changes for Free Pascal compatibility.
 
+- Remove empty placeholder units, the unused VFW unit, inactive Delphi exception
+  hook and unused registry/Direct3D helpers. Drop empty nonvirtual compatibility
+  hooks and statements after unconditional returns or breaks, preserving RNG
+  calls, save layouts, and virtual overrides.
+- Remove the disabled integrity-snapshot routine and its FGInt/RSA dependency,
+  the unreachable checksum implementation, and Steam leaderboard hooks. Keep
+  the checksum's constant-zero result, active integrity state, save layouts,
+  local scores, and score-file export so existing RNG consumption is preserved.
 - Report audio mixer failures through the main-thread worker-error path, retaining
   their backtraces. Join the mixer before closing its device, including on failure.
 - Report pending save-worker failures on the main thread and during normal

@@ -4661,8 +4661,6 @@ begin
         FormatScriptError(0, Compiler.First.SourceStart, ErrorText);
       Compiler.Free;
       Exit;
-      // The original O- build retains this unreachable raise.
-      raise ExceptionExpressionEC.Create('Unknown error');
     end;
     if (Item.Kind = cuCall) or (Item.Kind = cuIndex) then
     begin
@@ -4681,8 +4679,6 @@ begin
         Clear;
         RejectExpression(Compiler, Item.SourceStart, ErrorText);
         Exit;
-        // The original O- build retains this unreachable raise.
-        raise ExceptionExpressionEC.Create('Unknown error');
       end;
       ResultSlot := AddVariable;
       if Item.Kind = cuCall then

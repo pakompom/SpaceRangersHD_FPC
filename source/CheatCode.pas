@@ -270,8 +270,6 @@ var
 begin
   PreviousPoints := Galaxy.GetCheatPoints;
   Galaxy.SetCheatPoints(PreviousPoints + Points);
-  if (PreviousPoints = 0) and (Points > 0) then
-    Galaxy.AppendIntegritySnapshot;
 end;
 
 procedure ReportCheat(Points: Integer; const Name: WideString);

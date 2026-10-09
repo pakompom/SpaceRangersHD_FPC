@@ -737,7 +737,6 @@ begin
     if IsStopRequested then
       Exit;
     Galaxy.RunConfigOnStartHandlers;
-    Galaxy.AppendIntegritySnapshot;
     NewGameGenerationStage := 6;
     Stage := 17;
     if IsStopRequested or ExitScreenLoop then

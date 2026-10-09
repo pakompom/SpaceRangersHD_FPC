@@ -1213,8 +1213,6 @@ var
 
   DebugCommandMessage: Cardinal;
 
-  SuppressExceptionLogCopy: Boolean;
-
   BlendPixel16: TBlendPixel16;
 
   TriangleRasterizer16: TTriangleRasterizer16;
@@ -1265,8 +1263,6 @@ var
 procedure LogMemoryUsage;
 
 function Ex_OKGF_MulTable256x256: Pointer;
-
-function Ex_OKGF_DXVersion: Cardinal;
 
 function BeginImageRead(
     Source: Pointer;
@@ -2751,15 +2747,6 @@ begin
     Result := OKGF_MulTable256x256;
   except
     raise Exception.Create('Error in OKGF_MulTable256x256');
-  end;
-end;
-
-function Ex_OKGF_DXVersion: Cardinal;
-begin
-  try
-    Result := OKGF_DXVersion;
-  except
-    raise Exception.Create('Error in OKGF_DXVersion');
   end;
 end;
 

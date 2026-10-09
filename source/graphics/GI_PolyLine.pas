@@ -467,23 +467,6 @@ begin
     end;
     Segment := Segment.Next;
   end;
-  Exit;
-  // Retained native dormant background capture after the unconditional exit.
-  Segment := FirstSegment;
-  while Segment <> nil do
-  begin
-    if Segment.Visible then
-      Ex_OKGR_Line_CopyToBuf_WORD(
-          Segment.SavedPixels,
-          ScreenRenderBuffer.GetPixels,
-          ScreenRenderBuffer.PitchBytes,
-          Segment.PixelFirst.X,
-          Segment.PixelFirst.Y,
-          Segment.PixelLast.X,
-          Segment.PixelLast.Y
-      );
-    Segment := Segment.Next;
-  end;
 end;
 
 procedure TPolyLineGI.DrawUpdateRects(ClipRect: TRect);

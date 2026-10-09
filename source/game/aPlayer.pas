@@ -192,7 +192,6 @@ type
     function GetSatelliteExplorationTurns(Satellite: TSatellite): Integer;
     function CanAccessSurfaceLootItem(Item: TItem): Boolean;
     procedure ReportIdleSatellites(Star: TStar);
-    procedure BeginStorageTurn;
     function CanAccessHoldGoods(Good: Byte): Boolean;
     function CanAccessStoredItem(Item: TItem): Boolean;
     function CountStoredItemUnits(Location: TObject; ItemType: TItemType): Integer;
@@ -1799,7 +1798,6 @@ var
 begin
   Stage := 0;
   try
-    BeginStorageTurn;
     if (Galaxy.CurrentTurn <= LastProcessedTurn) and (Galaxy.StasisModEnabled <> 1) then
       Exit;
     begin
@@ -2897,10 +2895,6 @@ begin
       if Planets[3] <> nil then
         Targets[2].PlanetId := Planets[3].Id;
     end;
-end;
-
-procedure TPlayer.BeginStorageTurn;
-begin
 end;
 
 function TPlayer.CanAccessHoldGoods(Good: Byte): Boolean;
