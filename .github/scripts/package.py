@@ -22,12 +22,14 @@ def package(target: str) -> None:
     if target == "linux" and host_cpu() != "x86_64":
         raise ValueError("Linux releases require an x86_64 build host")
     config = BuildConfig(target, release=True, root=ROOT)
-    platform = "linux-x86_64" if target == "linux" else "android-arm64"
+    platform = "Linux-x86_64" if target == "linux" else "Android-arm64"
     commit = git("rev-parse", "HEAD")
-    name = f"SpaceRangersHD-{platform}-{commit[:12]}"
+    name = f"SpaceRangersHD-{platform}"
     destination = ROOT / "build/release"
     destination.mkdir(parents=True, exist_ok=True)
-    info = destination / f"{name}-build.txt"
+    diagnostics = ROOT / "build/diagnostics" / platform
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    info = diagnostics / "build.txt"
     info.write_text(
         f"Commit: {commit}\n"
         f"Subject: {git('show', '-s', '--format=%s', 'HEAD')}\n"
@@ -41,7 +43,7 @@ def package(target: str) -> None:
         symbols = ROOT / "build/android-symbols"
         if not any(symbols.glob("*/*.so")):
             raise FileNotFoundError("Android release symbols are missing")
-        with tarfile.open(destination / f"{name}-symbols.tar.gz", "w:gz") as archive:
+        with tarfile.open(diagnostics / f"{name}-symbols.tar.gz", "w:gz") as archive:
             archive.add(symbols, arcname="symbols")
         return
 

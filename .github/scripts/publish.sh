@@ -10,27 +10,17 @@ directory=build/release
 
 # Require every platform before exposing a release. Never upload staging trees.
 assets=(
-  "$directory/SpaceRangersHD-linux-x86_64-$short.tar.gz"
-  "$directory/SpaceRangersHD-linux-x86_64-$short-build.txt"
-  "$directory/SpaceRangersHD-android-arm64-$short.apk"
-  "$directory/SpaceRangersHD-android-arm64-$short-symbols.tar.gz"
-  "$directory/SpaceRangersHD-android-arm64-$short-build.txt"
+  "$directory/SpaceRangersHD-Linux-x86_64.tar.gz"
+  "$directory/SpaceRangersHD-Android-arm64.apk"
 )
 for asset in "${assets[@]}"; do
   test -s "$asset"
 done
-(cd "$directory" && sha256sum ./*.apk ./*.tar.gz ./*-build.txt > SHA256SUMS)
-assets+=("$directory/SHA256SUMS")
-
 notes=build/release-notes.md
 {
   git show -s --format=%s HEAD
   echo
-  printf 'Commit: [%s](%s/%s/commit/%s) · [Build log](%s/%s/actions/runs/%s)\n\n' "$short" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$revision" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
-  echo '- **Linux x86_64:** Ubuntu 24.04 / glibc 2.39+; x86-64-v2 CPU. Extract the archive and follow README.txt.'
-  echo '- **Android ARM64:** Android 8.0+. Install the APK, then select your game folder in the launcher. AVI cinematics are not supported.'
-  echo
-  echo 'Original game data is required and is not included. Symbol archives are for crash diagnostics; build.txt files identify the source and compiler revisions. SHA256SUMS covers all downloads.'
+  printf '[Commit %s](%s/%s/commit/%s) · [Build](%s/%s/actions/runs/%s)\n' "$short" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$revision" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
 } > "$notes"
 
 # Reruns leave published releases intact and can finish an interrupted draft.
