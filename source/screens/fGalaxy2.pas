@@ -1995,6 +1995,16 @@ begin
       SetWordWrapEnabled(False);
       SetTextAlignX(taxCenter);
       SetTextAlignY(tayCenterEx);
+      // Preserve Rangers.exe 2026-08-11's stack initialization: ShowStarInfo
+      // ($676DB8) executes MOV ECX,$24 followed by two PUSH 0 instructions
+      // per iteration at $676DBB..$676DC5. The $120-byte zeroed block includes
+      // SummaryLines at [EBP-$3C], whose address is passed at $678A0A.
+      // AppendLine increments the supplied count at $6798CD; it does not reset
+      // it. The caller multiplies that count by RowHeight at $678A32. FPC does
+      // not guarantee this local is zero, so Prolonger's extended radar popup
+      // can otherwise acquire an arbitrary height. Initialize it here to keep
+      // BuildStarShipSummary's original accumulating var-parameter behavior.
+      SummaryLines := 0;
       SetText(BuildStarShipSummary(Star, SummaryLines));
       SetSize(Classes.Point(NameWidth + DetailWidth, RowHeight * SummaryLines));
     end;
@@ -2317,7 +2327,14 @@ begin
   for Series := dsBlazer to dsTerron do
     for DominatorIndex := Ord(Low(TKlingType)) to Ord(High(TKlingType)) do
       DominatorCounts[Series, TKlingType(DominatorIndex)] := 0;
-  for Role := 0 to 10 do
+  // In the same original binary, BuildStarShipSummary ($6798E0) first saves
+  // ECX at $6798E3, then pushes $4C pairs of zero dwords at $6798E4..$6798EE.
+  // This clears [EBP-$264] through [EBP-$05], including RoleCounts[0..13]
+  // at [EBP-$C0]..[EBP-$89]. The explicit loop at $6799BC..$6799E1 only clears
+  // 0..10 again; pirate counters 11, 12 and 13 at [EBP-$94], [EBP-$90] and
+  // [EBP-$8C] are already zero from the prologue. Initialize the whole array
+  // explicitly in FPC to preserve those counts instead of reading stack data.
+  for Role := Low(RoleCounts) to High(RoleCounts) do
     RoleCounts[Role] := 0;
   for I := 0 to Star.Ships.Count - 1 do
   begin
