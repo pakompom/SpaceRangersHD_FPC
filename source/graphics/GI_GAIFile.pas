@@ -510,7 +510,7 @@ end;
 procedure TGAIFileGI.UpdateAutoGeometry;
 begin
   if AutoUpdateFlags and agfPosition = agfPosition then
-    SetPosition(Parent.ToLocalPoint(GetContentOrigin));
+    SetPosition(Parent.LogicalToLocalPoint(GetContentOrigin));
   if AutoUpdateFlags and agfSize = agfSize then
     SetSize(GetContentSize);
 end;

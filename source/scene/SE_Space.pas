@@ -749,18 +749,12 @@ begin
 end;
 
 procedure TSpaceSE.CreateMinimapViewport;
-var
-  Width, Height: Integer;
 begin
   FreeMinimapViewport;
   MinimapViewportFrame := TFrameGI.Create(SpaceObjectUiLoop.ContentPanel);
   MinimapViewportFrame.SetDepth(-99999);
   MinimapViewportFrame.SetKind(fkRect);
   MinimapViewportFrame.SetColor(CurrentPixelFormat.PackRgbBytes(255, 255, 255));
-  Width := Round(MapPanel.ClientSize.X * MinimapScale);
-  Height := Round(MapPanel.ClientSize.Y * MinimapScale);
-  MinimapViewportFrame.SetSize(Classes.Point(Width, Height));
-  MinimapViewportFrame.SetOrigin(Classes.Point(Width div 2, Height div 2));
   MapPanel.ScrollChangedCallback := MapScrollChanged;
   MapScrollChanged(nil);
 end;
@@ -775,16 +769,27 @@ begin
 end;
 
 procedure TSpaceSE.MapScrollChanged(Sender: TObjectGI);
+var
+  ViewSize: TPoint;
 begin
   if Sender = MapPanel then
     FilmCameraFollow := False;
   if MinimapViewportFrame <> nil then
+  begin
+    ViewSize :=
+        Classes.Point(
+            Round(MapPanel.ClientSize.X * MinimapScale / MapPanel.ChildWorldScale),
+            Round(MapPanel.ClientSize.Y * MinimapScale / MapPanel.ChildWorldScale)
+        );
+    MinimapViewportFrame.SetSize(ViewSize);
+    MinimapViewportFrame.SetOrigin(Classes.Point(ViewSize.X div 2, ViewSize.Y div 2));
     MinimapViewportFrame.SetPosition(
         Classes.Point(
             Round(MapPanel.ScrollOffset.X * MinimapScale),
             Round(MapPanel.ScrollOffset.Y * MinimapScale)
         )
     );
+  end;
   if StarField <> nil then
     StarField.SetViewPosition(PointToPointF(MapPanel.ScrollOffset));
   if Wind >= 1 then

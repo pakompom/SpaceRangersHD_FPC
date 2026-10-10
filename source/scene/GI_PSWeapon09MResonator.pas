@@ -93,6 +93,7 @@ procedure LoadMResonatorPalettes;
 implementation
 
 uses
+  GI_Main,
   GlobalsV,
   SysUtils,
   Classes,
@@ -138,10 +139,7 @@ end;
 
 procedure TPSWeapon09BranchGI.UpdateHitTestBounds;
 begin
-  HitTestBounds.Left := 0;
-  HitTestBounds.Top := 0;
-  HitTestBounds.Right := GameScreenWidth;
-  HitTestBounds.Bottom := GameScreenHeight;
+  HitTestBounds := ControlViewportBounds(Self);
 end;
 
 procedure TPSWeapon09BranchGI.ClearParticles;
@@ -395,10 +393,7 @@ end;
 
 procedure TPSWeapon09MResonator.UpdateHitTestBounds;
 begin
-  HitTestBounds.Left := 0;
-  HitTestBounds.Top := 0;
-  HitTestBounds.Right := GameScreenWidth;
-  HitTestBounds.Bottom := GameScreenHeight;
+  HitTestBounds := ControlViewportBounds(Self);
 end;
 
 procedure TPSWeapon09MResonator.ClearParticles;

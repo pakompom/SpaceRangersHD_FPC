@@ -753,15 +753,11 @@ end;
 
 procedure TShip2SE.AdvanceAnimation(Timer: PCallbackTimerGI; UserData: PtrInt);
 begin
-  with Image.HitTestBounds do
-    if (Cardinal(GameScreenWidth) * -0.1 > Right)
-        or (Cardinal(GameScreenWidth) * 1.1 < Left)
-        or (Cardinal(GameScreenHeight) * -0.1 > Bottom)
-        or (Cardinal(GameScreenHeight) * 1.1 < Top) then
-    begin
-      SetTailsEmitting(False);
-      Exit;
-    end;
+  if not ControlIntersectsViewport(Image, 0.1) then
+  begin
+    SetTailsEmitting(False);
+    Exit;
+  end;
   SetTailsEmitting(True);
   Inc(CurrentFrameIndex);
   if CurrentAnimation.FrameCount > CurrentFrameIndex then

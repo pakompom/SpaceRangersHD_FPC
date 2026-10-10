@@ -106,6 +106,7 @@ implementation
 uses
   GI_GI,
   GI_Main,
+  GI_Inspection,
   aCalc,
   Classes,
   SysUtils,
@@ -203,6 +204,10 @@ begin
   end;
   PanelSlideStartX := GiScalePixels(100);
   PanelSlideEndX := GetByName('PanelRight').LocalPosition.X;
+  FitMobileControl(
+      GetByName('PanelRight').Parent.Parent,
+      Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12)
+  );
 end;
 
 procedure TfScaner.OnOpen;
@@ -607,6 +612,8 @@ end;
 
 procedure TfScaner.RewardMouseLeave(Sender: TObjectGI);
 begin
+  if (Sender <> nil) and DeferMobileTooltipLeave(RewardWindow, RewardMouseLeave) then
+    Exit;
   HideRewardInfo;
 end;
 
@@ -615,6 +622,7 @@ var
   CursorPoint: TPoint;
   Path: WideString;
 begin
+  CancelMobileTooltipLeave(RewardWindow);
   if HoveredRewardId = AwardId then
     Exit;
   HoveredRewardId := AwardId;
@@ -669,6 +677,7 @@ begin
         )
     );
   RefreshRewardHint(nil, 0);
+  FitMobileTooltip(RewardWindow, GameScreenRect, CursorPoint);
 end;
 
 procedure TfScaner.HideRewardInfo;
@@ -984,6 +993,7 @@ begin
       )
     else
       Window.SetPosition(Position);
+    FitMobileTooltip(Window, GameScreenRect, GetCursorPoint);
     if PropertyHintTimer <> nil then
     begin
       CancelCallbackTimer(PropertyHintTimer);
@@ -994,6 +1004,9 @@ end;
 
 procedure TfScaner.HidePropertyInfo(Sender: TObjectGI);
 begin
+  if (Sender <> nil)
+      and DeferMobileTooltipLeave(GetByName('RankWnd') as TWindowGI, HidePropertyInfo) then
+    Exit;
   GetByName('RankWnd').SetActive(False);
 end;
 
@@ -1388,6 +1401,8 @@ var
   Window: TWindowGI;
   Position, AnchorSize: TPoint;
 begin
+  if KeepMobileTooltipVisible(ItemInfoWindow, HideItemTimer) then
+    Exit;
   Found := False;
   Animation := nil;
   Position := Classes.Point(0, 0);
@@ -1497,6 +1512,7 @@ begin
     end
     else
       Window.SetPosition(Classes.Point(10, 10));
+    FitMobileTooltip(Window, GameScreenRect, GetCursorPoint);
   end;
   if not Found and (HideItemTimer = nil) then
     ShowItemInfo(nil);
@@ -1526,6 +1542,8 @@ end;
 
 procedure TfScaner.HideItemInfo(Timer: PCallbackTimerGI; UserData: PtrInt);
 begin
+  if (Timer <> nil) and KeepMobileTooltipVisible(ItemInfoWindow, HideItemTimer) then
+    Exit;
   HoveredItem := nil;
   if HideItemTimer <> nil then
   begin

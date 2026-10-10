@@ -66,6 +66,7 @@ procedure LoadAVisionPalettes;
 implementation
 
 uses
+  GI_Main,
   GlobalsV,
   SysUtils,
   Math,
@@ -113,10 +114,7 @@ end;
 
 procedure TPSWeapon10AVision.UpdateHitTestBounds;
 begin
-  HitTestBounds.Left := 0;
-  HitTestBounds.Top := 0;
-  HitTestBounds.Right := GameScreenWidth;
-  HitTestBounds.Bottom := GameScreenHeight;
+  HitTestBounds := ControlViewportBounds(Self);
 end;
 
 procedure TPSWeapon10AVision.ClearParticles;

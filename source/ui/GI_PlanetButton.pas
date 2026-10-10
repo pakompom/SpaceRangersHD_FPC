@@ -35,6 +35,7 @@ implementation
 constructor TPlanetButtonGI.Create(Owner: TObjectGI);
 begin
   inherited Create(Owner);
+  TouchInteraction := tiTap;
   NormalPlanet := TPlanetGI.Create(Self);
   NormalPlanet.SetDepth(2);
   HoverPlanet := TPlanetGI.Create(Self);
@@ -73,6 +74,8 @@ end;
 
 procedure TPlanetButtonGI.ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint);
 begin
+  if not AllowsTouchActivation then
+    Exit;
   inherited ProcessLeftButtonDown(KeyState, Point);
   DispatchNamedEvent(1, Point.X, Point.Y);
 end;

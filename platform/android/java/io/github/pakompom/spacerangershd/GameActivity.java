@@ -21,11 +21,23 @@ public final class GameActivity extends SDLActivity {
     static native void nativeCancelTouch();
     private static native void nativeInputMode(int flags);
     private static native void nativeScroll(int direction);
+    private static native void nativeDensityChanged(int densityDpi);
+    static native void nativeArcadeInput(int controls, int axes, int buttons);
     private final HashSet<Integer> heldKeys = new HashSet<>();
     private boolean right, hover;
-    private LinearLayout panel;
+    private LinearLayout panel, tools;
     private Context textContext;
     private GameFiles files;
+    private int densityDpi;
+    private ArcadeControls arcadeControls;
+
+    // Called on SDL's game thread; Android views belong to the UI thread.
+    public void setArcadeControls(int controls) {
+        runOnUiThread(() -> {
+            if (arcadeControls != null)
+                arcadeControls.setControls(controls);
+        });
+    }
 
     @Override
     public void loadLibraries() {
@@ -57,14 +69,19 @@ public final class GameActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle state) {
-        Configuration configuration = new Configuration(getResources().getConfiguration());
-        configuration.setLocale(
-            new Locale("english".equals(getIntent().getStringExtra("language")) ? "en" : "ru"));
-        textContext = createConfigurationContext(configuration);
+        densityDpi = getResources().getDisplayMetrics().densityDpi;
+        updateTextContext();
         super.onCreate(state);
         setTitle(textContext.getString(R.string.app_name));
         if (!mBrokenLibraries)
             createControls();
+    }
+
+    private void updateTextContext() {
+        Configuration configuration = new Configuration(getResources().getConfiguration());
+        configuration.setLocale(
+            new Locale("english".equals(getIntent().getStringExtra("language")) ? "en" : "ru"));
+        textContext = createConfigurationContext(configuration);
     }
 
     private static void closeFiles(GameFiles files) {
@@ -105,12 +122,38 @@ public final class GameActivity extends SDLActivity {
             "--game-dir",   new File(getFilesDir(), "game").toString(),
             "--user-dir",   user.toString(),
             "--language",   language == null ? "russian" : language,
+            "--ui-density", Float.toString(getResources().getDisplayMetrics().density),
             "--touch-slop", Integer.toString(ViewConfiguration.get(this).getScaledTouchSlop())};
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        updateTextContext();
+        int density = getResources().getDisplayMetrics().densityDpi;
+        if (density != densityDpi) {
+            densityDpi = density;
+            if (!mBrokenLibraries)
+                nativeDensityChanged(density);
+        }
+        // The native bitmap UI does not use Android font preferences. Recreate
+        // only its Java tools so font/locale/theme changes preserve the session.
+        if (tools != null && !mBrokenLibraries) {
+            releaseControls();
+            mLayout.removeView(tools);
+            createTools();
+            arcadeControls.refreshLayout();
+        }
     }
 
     private void createControls() {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        LinearLayout tools = new LinearLayout(this);
+        arcadeControls = new ArcadeControls(textContext, mLayout);
+        createTools();
+    }
+
+    private void createTools() {
+        tools = new LinearLayout(textContext);
         tools.setOrientation(LinearLayout.VERTICAL);
         RelativeLayout.LayoutParams position = new RelativeLayout.LayoutParams(-2, -2);
         position.addRule(RelativeLayout.ALIGN_PARENT_LEFT);
@@ -125,9 +168,9 @@ public final class GameActivity extends SDLActivity {
         panel.setBackgroundColor(0xee18202a);
         ScrollView scroll = new ScrollView(this);
         scroll.addView(panel);
-        tools.addView(scroll,
-                      new LinearLayout.LayoutParams(
-                          -2, Math.round(280 * getResources().getDisplayMetrics().density)));
+        // Let the panel scroll within the space left below its toggle, including
+        // after rotation or when the keyboard reduces the available height.
+        tools.addView(scroll, new LinearLayout.LayoutParams(-2, -2, 1));
         scroll.setVisibility(View.GONE);
         toggle.setOnClickListener(v -> {
             nativeCancelTouch();
@@ -135,6 +178,8 @@ public final class GameActivity extends SDLActivity {
         });
         LinearLayout row = row();
         Button mouse = button(row, R.string.controls_right_click);
+        if (right)
+            mouse.setText(textContext.getString(R.string.controls_right_click_on));
         mouse.setOnClickListener(v -> {
             right = !right;
             nativeInputMode((right ? 1 : 0) | (hover ? 2 : 0));
@@ -145,6 +190,8 @@ public final class GameActivity extends SDLActivity {
             .setOnClickListener(v -> showTextInput(0, 0, 400, 40));
         row = row();
         Button inspect = button(row, R.string.controls_hover);
+        if (hover)
+            inspect.setText(textContext.getString(R.string.controls_hover_on));
         inspect.setOnClickListener(v -> {
             hover = !hover;
             nativeInputMode((right ? 1 : 0) | (hover ? 2 : 0));
@@ -208,22 +255,30 @@ public final class GameActivity extends SDLActivity {
         // Navigation gestures can reach this callback without hardware key
         // events. SDL's trapped-back default would simply discard them.
         if (!mBrokenLibraries) {
-            nativeCancelTouch();
             onNativeKeyDown(KeyEvent.KEYCODE_ESCAPE);
             onNativeKeyUp(KeyEvent.KEYCODE_ESCAPE);
+            // Let Escape dismiss a pinned inspection before cancellation clears
+            // it. The same press must not also leave the screen.
+            nativeCancelTouch();
         } else {
             finish();
         }
     }
 
-    @Override
-    protected void onPause() {
+    private void releaseControls() {
         if (!mBrokenLibraries) {
+            if (arcadeControls != null)
+                arcadeControls.cancelInput();
             nativeCancelTouch();
             for (int key : heldKeys)
                 onNativeKeyUp(key);
             heldKeys.clear();
         }
+    }
+
+    @Override
+    protected void onPause() {
+        releaseControls();
         super.onPause();
     }
     @Override

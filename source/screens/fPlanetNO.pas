@@ -138,6 +138,8 @@ uses
   aScript,
   aMyFunction,
   GI_Main,
+  GI_Inspection,
+  GameWindow,
   GI_Panel,
   Globals,
   GlobalsV,
@@ -218,9 +220,12 @@ begin
           )
       );
     with FindByNameRecursive('ButResearch').Parent do
+    begin
+      SetName('PanelPlanetNO');
       SetPosition(
           Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y + ExtraScreenHeight)
       );
+    end;
     with FindByNameRecursive('PanelInfo') do
       SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
     with FindByNameRecursive('QuestInfo') do
@@ -262,6 +267,7 @@ begin
   ItemInfoSizeLabel := GetByName('InfoSize') as TLabelGI;
   ItemInfoCostLabel := GetByName('InfoPrice') as TLabelGI;
   ItemInfoRaceIcon := GetByName('EmRace') as TImageGI;
+  MainPanel.FitContent(GetByName('PanelResearch'));
 end;
 
 procedure TfPlanetNO.OnOpen;
@@ -459,6 +465,8 @@ begin
             .Point(Window.ClientSize.X - LocalPosition.X - Window.WorkSubRect.Right, ClientSize.Y)
     );
   Window.SetPosition(Classes.Point(GameScreenWidth - 10 - Window.ClientSize.X, 10));
+  FitMobileTooltip(Window, MainPanel.ContentBounds, Classes.Point(GameScreenWidth, 0));
+  Window.SetActive(not GameMobileUiEnabled or not ResearchPanelVisible);
 end;
 
 procedure TfPlanetNO.RefreshTextQuestPrompt;
@@ -567,8 +575,13 @@ begin
     Window.SetPosition(
         Classes.Point(
             GameScreenWidth - 10 - Window.ClientSize.X,
-            GameScreenHeight - GiScalePixels(90) - Window.ClientSize.Y
+            MainPanel.ContentLayoutHeight - GiScalePixels(90) - Window.ClientSize.Y
         )
+    );
+    FitMobileTooltip(
+        Window,
+        MainPanel.ContentBounds,
+        Classes.Point(GameScreenWidth, MainPanel.ContentBounds.Bottom)
     );
   end;
 end;
@@ -657,6 +670,8 @@ begin
   GetPlayer.AssignSatelliteIndicesFromHoldOrder;
   Galaxy.PrimeIntegrityChecksum(118);
   ResearchPanelVisible := True;
+  if GameMobileUiEnabled then
+    GetByName('PanelInfo').SetActive(False);
   for I := 0 to 5 do
     if TrajectoryPointCounts[I] = 0 then
       BuildTrajectory(I);
@@ -726,6 +741,8 @@ begin
   HoveringSurfaceLoot := False;
   HideItemInfoPopup(nil, 0);
   ResearchPanelVisible := False;
+  if GameMobileUiEnabled then
+    GetByName('PanelInfo').SetActive(True);
 end;
 
 procedure TfPlanetNO.BuildTrajectory(TrajectoryIndex: Integer);
@@ -1946,6 +1963,7 @@ begin
           ItemInfoWindow.ClientSize.Y + ShipScreen.ItemRaceImagePosition.Y
       )
   );
+  FitMobileTooltip(ItemInfoWindow, MainPanel.ContentBounds, GetCursorPoint);
 end;
 
 procedure TfPlanetNO.ShowGoodsInfoPopup(Item: TGoods);
@@ -1990,6 +2008,7 @@ begin
           ItemInfoWindow.ClientSize.Y + ShipScreen.ItemRaceImagePosition.Y
       )
   );
+  FitMobileTooltip(ItemInfoWindow, MainPanel.ContentBounds, GetCursorPoint);
 end;
 
 procedure TfPlanetNO.HideItemInfoPopup(Timer: PCallbackTimerGI; UserData: PtrInt);

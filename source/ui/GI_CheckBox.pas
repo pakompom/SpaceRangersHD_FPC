@@ -41,6 +41,7 @@ uses
 constructor TCheckBoxGI.Create(Owner: TObjectGI);
 begin
   inherited Create(Owner);
+  TouchInteraction := tiTap;
   CheckedImage := TTransImageGI.Create(Self);
   CheckedImage.SetImageKindX(ikxCenter);
   CheckedImage.SetImageKindY(ikyCenter);
@@ -110,6 +111,8 @@ end;
 
 procedure TCheckBoxGI.ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint);
 begin
+  if not AllowsTouchActivation then
+    Exit;
   inherited ProcessLeftButtonDown(KeyState, Point);
   if Checked = True then
   begin

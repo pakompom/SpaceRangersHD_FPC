@@ -117,6 +117,8 @@ type
     TurnRightKeyDown: Boolean;
     PrimaryFireKeyDown: Boolean;
     SecondaryFireKeyDown: Boolean;
+    MobileAxisX, MobileAxisY: Integer;
+    MobileButtons: Cardinal;
     GridLines: TList;
     MapState2C8: Integer;
     Text2CC: WideString;
@@ -143,11 +145,20 @@ type
     ListedObjects: TList;
     LoadPanel: TfPanelLoad;
     SelectedMapName: WideString;
+    MobileHudScale: Single;
+    MobileShipStatusPanel: TPanelGI;
+    MobileShipStatusBottom: Integer;
     procedure DrawFrame; override;
+    procedure UpdateMobileControls;
+    procedure ApplyMobileSteering;
+    procedure CancelPointerInput; override;
+    procedure ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer); override;
     procedure OnOpen; override;
     procedure OnClose; override;
     procedure SelectMusic; override;
     procedure InitializeLayout; override;
+    procedure FitMobileLayout;
+    procedure FitMobileResultPanel(Panel: TPanelGI);
     constructor Create;
     destructor Destroy; override;
     procedure RequestExit(Sender: TObjectGI);
@@ -313,6 +324,9 @@ procedure TfAB.InitializeLayout;
 var
   Index: Integer;
 begin
+  MobileShipStatusPanel := nil;
+  MobileHudScale := 1;
+  MobileShipStatusBottom := 0;
   inherited InitializeLayout;
   AppendLogTextThreadSafe('ab_MainForm... ');
   ViewportRect := Classes.Rect(0, 0, GameScreenWidth, GameScreenHeight);
@@ -443,6 +457,132 @@ begin
   PauseButton := GetByName('ButPause') as TGraphButtonGI;
   PauseButton.UpCallback := TogglePause;
   SelectedMapName := '';
+  FitMobileLayout;
+end;
+
+procedure TfAB.FitMobileLayout;
+var
+  Panel, Help: TObjectGI;
+  Scale, WeaponScale: Single;
+  Margin, WeaponTop, TouchBand, ControlsBottom: Integer;
+  FirstButton, LastButton: TObjectGI;
+
+  procedure Anchor(Control: TObjectGI; X, Y: Integer);
+  var
+    Bounds: TRect;
+    Position: TPoint;
+  begin
+    Control.DisplayScale := Scale;
+    Control.UpdateAbsolutePosition;
+    Control.UpdateSubtreeHitBounds;
+    Bounds := Control.HitTestBounds;
+    Position := Control.LocalPosition;
+    Inc(Position.X, Round(X / Scale) - Bounds.Left);
+    Inc(Position.Y, Round(Y / Scale) - Bounds.Top);
+    Control.SetPosition(Position);
+  end;
+
+begin
+  if not GameMobileUiEnabled or not HardwareRenderingEnabled then
+    Exit;
+  Margin := 12;
+  ItemPanel.SetSize(Classes.Point(GiScalePixels(64) * 4, GiScalePixels(64) * 2));
+  FitMobileControl(
+      ItemPanel,
+      Classes.Rect(Margin, Margin, GameScreenWidth - Margin, GameScreenHeight - Margin),
+      0,
+      1.15
+  );
+  MobileHudScale := ItemPanel.DisplayScale;
+  Panel := GetByName('PanelWeapon');
+  FitMobileControl(
+      Panel,
+      Classes.Rect(Margin, Margin, GameScreenWidth - Margin, GameScreenHeight - Margin),
+      MobileHudScale * 0.8,
+      0.76
+  );
+  Scale := Panel.DisplayScale;
+  WeaponScale := Scale;
+  WeaponTop := GameScreenHeight - Margin - Ceil(Panel.ClientSize.Y * Scale);
+  Anchor(Panel, (GameScreenWidth - Round(Panel.ClientSize.X * Scale)) div 2, WeaponTop);
+  TouchBand := Ceil(GameScreenHeight * 0.45);
+  MobileShipStatusBottom := Floor(GameScreenHeight * 0.72) - Margin;
+  FirstButton := WeaponButtons[0];
+  LastButton := GetByName('ButShip');
+  if (FirstButton.LogicalToScreenPoint(FirstButton.HitTestBounds.TopLeft).X < TouchBand)
+      or (LastButton.LogicalToScreenPoint(LastButton.HitTestBounds.BottomRight).X
+          > GameScreenWidth - TouchBand) then
+  begin
+    // On narrower displays, retain large targets above the corner controls.
+    Dec(WeaponTop, TouchBand);
+    Anchor(Panel, (GameScreenWidth - Round(Panel.ClientSize.X * Scale)) div 2, WeaponTop);
+    MobileShipStatusBottom := Min(MobileShipStatusBottom, WeaponTop - Margin);
+  end;
+
+  // Keep the larger status controls separate from the weapon strip. Reserve
+  // the right side for ship portraits and health rings, above the fire buttons.
+  Panel := GetByName('PRight');
+  Help := GetByName('LHelp');
+  // The Android Controls toggle occupies the upper-left corner (about 48 dp).
+  ControlsBottom := Ceil(56 * GetGameMobileUiScale);
+  Scale :=
+      Min(
+          MobileHudScale,
+          Min(
+              (GameScreenWidth - Margin * 4)
+                  / (Panel.ClientSize.X + ItemPanel.ClientSize.X + GiScalePixels(64) * 4),
+              Min(
+                  (WeaponTop - Margin * 3 - Ceil(Help.ClientSize.Y * WeaponScale))
+                      / ItemPanel.ClientSize.Y,
+                  (WeaponTop - ControlsBottom - Margin * 2 - Ceil(Help.ClientSize.Y * WeaponScale))
+                      / Panel.ClientSize.Y
+              )
+          )
+      );
+  Anchor(Panel, Margin, ControlsBottom);
+  Anchor(ItemPanel, Margin * 2 + Ceil(Panel.ClientSize.X * Scale), Margin);
+  MobileShipStatusPanel := TPanelGI.Create(MapPanel);
+  MobileShipStatusPanel.SetDepth(0);
+  Scale := WeaponScale;
+  Help.SetSize(Classes.Point(Floor((GameScreenWidth - Margin * 2) / Scale), Help.ClientSize.Y));
+  Anchor(Help, Margin, WeaponTop - Margin - Ceil(Help.ClientSize.Y * Scale));
+  FitMobileResultPanel(VictoryPanel);
+  FitMobileResultPanel(DefeatPanel);
+end;
+
+procedure TfAB.FitMobileResultPanel(Panel: TPanelGI);
+var
+  Content, Title, Items, Shade: TObjectGI;
+  Width: Integer;
+begin
+  if not GameMobileUiEnabled or not HardwareRenderingEnabled then
+    Exit;
+  if Panel = VictoryPanel then
+  begin
+    Content := GetByName('PanelWinHide');
+    Title := GetByName('WinText');
+    Items := GetByName('WinItem');
+    Shade := GetByName('WinShr');
+  end
+  else
+  begin
+    Content := GetByName('PanelLoseHide');
+    Title := GetByName('PanelLose');
+    Items := GetByName('LoseKeyPress');
+    Shade := GetByName('LoseShr');
+  end;
+  Width := Floor((GameScreenWidth - 24) / MobileHudScale);
+  Panel.SetSize(Classes.Point(Width, Panel.ClientSize.Y));
+  Content.SetSize(Panel.ClientSize);
+  Title.SetSize(Classes.Point(Width, Title.ClientSize.Y));
+  Items.SetSize(Classes.Point(Width - 4, Items.ClientSize.Y));
+  Shade.SetSize(Panel.ClientSize);
+  FitMobileControl(
+      Panel,
+      Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12),
+      0,
+      1.15
+  );
 end;
 
 procedure TfAB.OnOpen;
@@ -819,6 +959,7 @@ procedure TfAB.OnClose;
 var
   Index: Integer;
 begin
+  CancelPointerInput;
   LoadPanel.OnClose;
   SelectedMapName := '';
   ClearShipPath;
@@ -1202,6 +1343,11 @@ var
   Obj: TObject;
   EnemyCount: Integer;
 begin
+  if GameWindowIsMobile and (VictoryPanel.Active or DefeatPanel.Active) then
+  begin
+    BattleKeyDown(Sender, VK_SPACE);
+    Exit;
+  end;
   if (ArcadeViewMode = 2)
       and (NextArcadeSpace = nil)
       and (HoveredArcadeSpace <> nil)
@@ -1715,7 +1861,8 @@ end;
 
 procedure TfAB.UpdateWeaponHighlights(Force: Boolean);
 var
-  Index, Top, Height, Slot: Integer;
+  Index, Top, Height, Slot, BonusIndex, BonusWidth: Integer;
+  Position: TPoint;
   Button: TGraphButtonGI;
   Icon: TImageGI;
   Ring: TgaiGI;
@@ -1751,6 +1898,9 @@ begin
       Inc(Index);
     end;
     Height := GiScalePixels(64);
+    BonusWidth := ItemPanel.ClientSize.X;
+    if GameMobileUiEnabled and HardwareRenderingEnabled then
+      BonusWidth := Height;
     for Index := 0 to 7 do
     begin
       if PlayerArcadeShip.BonusTicks[Index] <= 0 then
@@ -1771,12 +1921,12 @@ begin
           BonusIcons[Index] := TImageGI.Create(ItemPanel);
           Icon := BonusIcons[Index];
           Icon.SetImagePath('GI,Bm.ABItem.' + GiResourceSuffix + '_0' + IntToStr(Index) + '_i');
-          Icon.SetSize(Classes.Point(ItemPanel.ClientSize.X, Height));
+          Icon.SetSize(Classes.Point(BonusWidth, Height));
           Icon.SetDepth(0);
           BonusRings[Index] := TgaiGI.Create(ItemPanel);
           Ring := BonusRings[Index];
           Ring.SetImagePath('Bm.ABItem.' + GiResourceSuffix + '_Ring');
-          Ring.SetSize(Classes.Point(ItemPanel.ClientSize.X, Height));
+          Ring.SetSize(Classes.Point(BonusWidth, Height));
           Ring.SequenceIndex := 0;
           Ring.UpdateAutoGeometry;
           Ring.SetMouseViewUpdates(True);
@@ -1806,11 +1956,16 @@ begin
       end;
     end;
     Top := ItemPanel.ClientSize.Y - Height;
+    BonusIndex := 0;
     for Index := Low(BonusIcons) to High(BonusIcons) do
       if PlayerArcadeShip.BonusTicks[Index] > 0 then
       begin
-        BonusIcons[Index].SetPosition(Classes.Point(0, Top));
-        BonusRings[Index].SetPosition(Classes.Point(0, Top));
+        if GameMobileUiEnabled and HardwareRenderingEnabled then
+          Position := Classes.Point((BonusIndex mod 4) * Height, (BonusIndex div 4) * Height)
+        else
+          Position := Classes.Point(0, Top);
+        BonusIcons[Index].SetPosition(Position);
+        BonusRings[Index].SetPosition(Position);
         BonusRings[Index]
             .SetSequenceFrame(
                 Round(
@@ -1818,6 +1973,7 @@ begin
                         * BonusRings[Index].SequenceFrameCount
                 ));
         Dec(Top, Height);
+        Inc(BonusIndex);
       end;
   end;
 end;
@@ -1915,6 +2071,12 @@ end;
 
 procedure TfAB.TogglePause(Sender: TObjectGI);
 begin
+  if GameWindowIsMobile and (ArcadeViewMode = 0) then
+  begin
+    SimulationPaused := not SimulationPaused;
+    UpdateMobileControls;
+    Exit;
+  end;
   HideObjectInfo;
   ArcadePauseWithShift := IsVirtualKeyDown(VK_SHIFT);
   ArcadePaused := Sender = PlayButton;
@@ -2498,6 +2660,9 @@ end;
 
 procedure TfAB.ResetBattleControls;
 begin
+  MobileAxisX := 0;
+  MobileAxisY := 0;
+  MobileButtons := 0;
   CloseVictory(nil, 0);
   ListedObjects.Clear;
   SimulationPaused := False;
@@ -3033,6 +3198,9 @@ begin
     Stage := 1;
     if ArcadeViewMode = 0 then
     begin
+      // A held touch control sends no repeat events. It is still active input.
+      if (MobileAxisX <> 0) or (MobileAxisY <> 0) or (MobileButtons <> 0) then
+        ArcadeLastInputTick := ArcadeTickCount;
       if not ArcadeAutopilotEnabled
           and not ArcadeEnemiesDefeated
           and not DisableAutoPilot
@@ -3114,6 +3282,7 @@ begin
             )
         );
         GetByName('PanelLoseHide').SetActive(True);
+        FitMobileResultPanel(DefeatPanel);
       end;
       if DefeatCountdownTicks <= -500 then
       begin
@@ -3367,11 +3536,13 @@ begin
         end
         else
           PlayerArcadeShip.SetTurnInput(0);
+        if (MobileAxisX <> 0) or (MobileAxisY <> 0) then
+          ApplyMobileSteering;
         Stage := 19;
-        if PrimaryFireKeyDown then
+        if PrimaryFireKeyDown or (MobileButtons and 1 <> 0) then
           PlayerArcadeShip.FirePrimary;
         Stage := 20;
-        if SecondaryFireKeyDown then
+        if SecondaryFireKeyDown or (MobileButtons and 2 <> 0) then
           PlayerArcadeShip.FireSecondary;
       end;
       Stage := 21;
@@ -3668,16 +3839,19 @@ begin
       Dec(Position.Y, ScrollStep);
     if ReverseKeyDown then
       Inc(Position.Y, ScrollStep);
-    CursorX := GetCursorPoint.X;
-    CursorY := GetCursorPoint.Y;
-    if CursorX < ScrollSense then
-      Dec(Position.X, ScrollStep);
-    if GameScreenWidth - ScrollSense - 1 < CursorX then
-      Inc(Position.X, ScrollStep);
-    if CursorY < ScrollSense then
-      Dec(Position.Y, ScrollStep);
-    if GameScreenHeight - ScrollSense - 1 < CursorY then
-      Inc(Position.Y, ScrollStep);
+    if GamePointerAllowsEdgeScroll then
+    begin
+      CursorX := GetCursorPoint.X;
+      CursorY := GetCursorPoint.Y;
+      if CursorX < ScrollSense then
+        Dec(Position.X, ScrollStep);
+      if GameScreenWidth - ScrollSense - 1 < CursorX then
+        Inc(Position.X, ScrollStep);
+      if CursorY < ScrollSense then
+        Dec(Position.Y, ScrollStep);
+      if GameScreenHeight - ScrollSense - 1 < CursorY then
+        Inc(Position.Y, ScrollStep);
+    end;
     if (PreviousPosition.X <> Position.X) or (PreviousPosition.Y <> Position.Y) then
     begin
       ArcadeMapViewPosition := Position;
@@ -3975,6 +4149,9 @@ end;
 procedure TfAB.UpdateShipStatusIcons;
 var
   PosX, PosY, RingWidth, RingHeight, Index, OffsetX, OffsetY, IconWidth, IconHeight: Integer;
+  StatusOwner: TObjectGI;
+  VisibleCount, StatusIndex, Columns, Rows, RowHeight: Integer;
+  StatusScale: Single;
   Ship: TabShipAI;
   Item: TItem;
   UnusedRecord: record
@@ -3993,6 +4170,9 @@ begin
   end
   else
   begin
+    StatusOwner := MapPanel;
+    if MobileShipStatusPanel <> nil then
+      StatusOwner := MobileShipStatusPanel;
     RingWidth := GiScalePixels(64);
     RingHeight := GiScalePixels(64);
     IconWidth := Round(RingWidth * 0.75);
@@ -4012,7 +4192,7 @@ begin
           begin
             if Ship.Visual is TShip2SE then
             begin
-              EnemyIcons[Index] := TRotateImage5GI.Create(MapPanel);
+              EnemyIcons[Index] := TRotateImage5GI.Create(StatusOwner);
               (EnemyIcons[Index] as TRotateImage5GI)
                   .SetImage(
                       (Ship.Visual as TShip2SE).GetImagePath,
@@ -4021,7 +4201,7 @@ begin
             end
             else if Ship.Visual is TRuinsSE then
             begin
-              EnemyIcons[Index] := TGraphBufGI.Create(MapPanel, False);
+              EnemyIcons[Index] := TGraphBufGI.Create(StatusOwner, False);
               with EnemyIcons[Index] as TGraphBufGI do
               begin
                 SourceHasPerPixelAlpha := True;
@@ -4047,7 +4227,7 @@ begin
           end;
           if EnemyHealthRings[Index] = nil then
           begin
-            EnemyHealthRings[Index] := TgaiGI.Create(MapPanel);
+            EnemyHealthRings[Index] := TgaiGI.Create(StatusOwner);
             with EnemyHealthRings[Index] do
             begin
               SetImagePath('Bm.ABItem.' + GiResourceSuffix + '_Ring');
@@ -4072,14 +4252,14 @@ begin
               and (GetPlayer.CountActiveArtefacts(t_ArtefactAnalyzer) > 0)
               and (EnemyRewardIcons[Index] = nil) then
           begin
-            EnemyRewardBackdrops[Index] := TImageGI.Create(MapPanel);
+            EnemyRewardBackdrops[Index] := TImageGI.Create(StatusOwner);
             with EnemyRewardBackdrops[Index] as TImageGI do
             begin
               SetImagePath('GI,Bm.Items.' + GiResourceSuffix + 'ABArtSlot');
               SetSize(GetContentSize);
               SetOrigin(HalfPoint(ClientSize));
             end;
-            EnemyRewardIcons[Index] := TImageGI.Create(MapPanel);
+            EnemyRewardIcons[Index] := TImageGI.Create(StatusOwner);
             with EnemyRewardIcons[Index] as TImageGI do
             begin
               Item := TabShipAI(PlayerArcadeShip.InitialEnemies[Index]).GetRewardItem(True);
@@ -4124,7 +4304,7 @@ begin
           begin
             if Ship.Visual is TShip2SE then
             begin
-              TrackedShipIcons[Index] := TRotateImage5GI.Create(MapPanel);
+              TrackedShipIcons[Index] := TRotateImage5GI.Create(StatusOwner);
               (TrackedShipIcons[Index] as TRotateImage5GI)
                   .SetImage(
                       (Ship.Visual as TShip2SE).GetImagePath,
@@ -4133,7 +4313,7 @@ begin
             end
             else if Ship.Visual is TRuinsSE then
             begin
-              TrackedShipIcons[Index] := TGraphBufGI.Create(MapPanel, False);
+              TrackedShipIcons[Index] := TGraphBufGI.Create(StatusOwner, False);
               with TrackedShipIcons[Index] as TGraphBufGI do
               begin
                 SourceHasPerPixelAlpha := True;
@@ -4159,7 +4339,7 @@ begin
           end;
           if TrackedShipHealthRings[Index] = nil then
           begin
-            TrackedShipHealthRings[Index] := TgaiGI.Create(MapPanel);
+            TrackedShipHealthRings[Index] := TgaiGI.Create(StatusOwner);
             with TrackedShipHealthRings[Index] do
             begin
               SetImagePath('Bm.ABItem.' + GiResourceSuffix + '_Ring');
@@ -4175,6 +4355,36 @@ begin
         end;
       end;
     end;
+    StatusIndex := 0;
+    Columns := 1;
+    RowHeight := RingHeight + GiScalePixels(16);
+    if MobileShipStatusPanel <> nil then
+    begin
+      VisibleCount := 0;
+      for Index := 0 to 7 do
+      begin
+        if (EnemyIcons[Index] <> nil) and (EnemyHealthRings[Index] <> nil) then
+          Inc(VisibleCount);
+        if (TrackedShipIcons[Index] <> nil) and (TrackedShipHealthRings[Index] <> nil) then
+          Inc(VisibleCount);
+      end;
+      Columns := Max(1, Min(4, VisibleCount));
+      Rows := Max(1, (VisibleCount + Columns - 1) div Columns);
+      // Leave the lower-right quarter free for the fire controls. Large groups
+      // use more rows, reducing only the status grid's scale when necessary.
+      StatusScale :=
+          Min(ItemPanel.DisplayScale, (MobileShipStatusBottom - 12) / (Rows * RowHeight));
+      MobileShipStatusPanel.DisplayScale := StatusScale;
+      MobileShipStatusPanel.SetSize(Classes.Point(Columns * RingWidth, Rows * RowHeight));
+      MobileShipStatusPanel.SetPosition(
+          Classes.Point(
+              Round((GameScreenWidth - 12) / StatusScale)
+                  - MobileShipStatusPanel.ClientSize.X
+                  - MapPanel.AbsolutePosition.X,
+              Round(12 / StatusScale) - MapPanel.AbsolutePosition.Y
+          )
+      );
+    end;
     PosX := 5;
     PosY := 5;
     OffsetX := Round((RingWidth - IconWidth) / 2);
@@ -4186,6 +4396,12 @@ begin
         Ship := PlayerArcadeShip.InitialEnemies[Index];
         if (Ship <> nil) and (EnemyIcons[Index] <> nil) and (EnemyHealthRings[Index] <> nil) then
         begin
+          if MobileShipStatusPanel <> nil then
+          begin
+            PosX := (StatusIndex mod Columns) * RingWidth;
+            PosY := (StatusIndex div Columns) * RowHeight;
+            Inc(StatusIndex);
+          end;
           if EnemyIcons[Index] is TRotateImage5GI then
             EnemyIcons[Index]
                 .SetPosition(Classes.Point(PosX + IconWidth + OffsetX, PosY + IconHeight + OffsetY))
@@ -4265,6 +4481,12 @@ begin
             and (TrackedShipIcons[Index] <> nil)
             and (TrackedShipHealthRings[Index] <> nil) then
         begin
+          if MobileShipStatusPanel <> nil then
+          begin
+            PosX := (StatusIndex mod Columns) * RingWidth;
+            PosY := (StatusIndex div Columns) * RowHeight;
+            Inc(StatusIndex);
+          end;
           if TrackedShipIcons[Index] is TRotateImage5GI then
             TrackedShipIcons[Index]
                 .SetPosition(Classes.Point(PosX + IconWidth + OffsetX, PosY + IconHeight + OffsetY))
@@ -4284,12 +4506,126 @@ begin
   end;
 end;
 
+procedure TfAB.ApplyMobileSteering;
+var
+  Position: TVector3D;
+  Target: TSphericalBearingState;
+  Bearing: TSphericalBearingDistance;
+  Point: TPoint;
+  Magnitude: Double;
+begin
+  Magnitude := Sqrt(Sqr(MobileAxisX) + Sqr(MobileAxisY));
+  if Magnitude = 0 then
+    Exit;
+  // Interpret the stick as a direction on the screen. Unproject a nearby
+  // point to get its bearing on the sphere, including the camera's rotation.
+  // Raw stick X must not become degrees per tick: even a tiny offset would
+  // otherwise saturate the ship's turn rate and keep it spinning.
+  Position := PlayerArcadeShip.GetProjectedPosition;
+  Point :=
+      WorldPanel.ToAbsolutePoint(
+          Classes.Point(
+              Round(Position.X + 64 * MobileAxisX / Magnitude),
+              Round(Position.Y - 64 * MobileAxisY / Magnitude)
+          )
+      );
+  Target := PlayerArcadeShip.State;
+  if not ScreenPointToSphere(Point, Target.LongitudeDegrees, Target.PolarAngleDegrees) then
+    Exit;
+  Bearing := GetSphericalBearingAndDistance(PlayerArcadeShip.State, Target);
+  PlayerArcadeShip.SetTurnInput(Bearing.BearingDeltaDegrees);
+  // Retain the game's turn-speed and inertia rules. Build thrust as the ship
+  // faces the requested direction, proportional to stick displacement.
+  PlayerArcadeShip.StartThrust;
+  PlayerArcadeShip.Thrust :=
+      PlayerArcadeShip.Thrust
+          * Min(1, Magnitude / 100)
+          * Max(0, Cos(HeadingDegreesToRadians(Bearing.BearingDeltaDegrees)));
+end;
+
+procedure TfAB.UpdateMobileControls;
+var
+  Flags, Index: Integer;
+begin
+  if not GameWindowIsMobile then
+    Exit;
+  Flags := 0;
+  if (ExitCode = 0)
+      and GameWindowFocused
+      and (MessageLoopStack <> nil)
+      and (MessageLoopStack.Count > 0)
+      and (MessageLoopStack[MessageLoopStack.Count - 1] = Self)
+      and (ArcadeViewMode = 0)
+      and not SimulationPaused
+      and not VictoryPanel.Active
+      and not DefeatPanel.Active
+      and (PlayerArcadeShip <> nil)
+      and (PlayerArcadeShip.Health > 0) then
+  begin
+    Flags := 1;
+    for Index := 0 to PlayerArcadeShip.WeaponCount - 1 do
+      if PlayerArcadeShip.Weapons[Index].SlotData and EquipmentSecondaryFireFlag = 0 then
+        Flags := Flags or 2
+      else
+        Flags := Flags or 4;
+  end;
+  if Flags = 0 then
+  begin
+    MobileAxisX := 0;
+    MobileAxisY := 0;
+    MobileButtons := 0;
+  end;
+  SetGameArcadeControls(Flags);
+  if ArcadeViewMode = 0 then
+  begin
+    PlayButton.SetActive(not SimulationPaused);
+    PauseButton.SetActive(SimulationPaused);
+  end;
+end;
+
+procedure TfAB.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  MobileAxisX := 0;
+  MobileAxisY := 0;
+  MobileButtons := 0;
+  SetGameArcadeControls(0);
+end;
+
+procedure TfAB.ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer);
+begin
+  if Message <> WM_GAME_ARCADE_INPUT then
+  begin
+    inherited ProcessWindowMessage(Message, WParam, LParam);
+    Exit;
+  end;
+  if (ExitCode <> 0)
+      or (ArcadeViewMode <> 0)
+      or SimulationPaused
+      or VictoryPanel.Active
+      or DefeatPanel.Active
+      or (PlayerArcadeShip = nil)
+      or (PlayerArcadeShip.Health <= 0) then
+    Exit;
+  MobileAxisX := EnsureRange(Integer(SmallInt(LParam)), -100, 100);
+  MobileAxisY := EnsureRange(Integer(SmallInt(LParam shr 16)), -100, 100);
+  MobileButtons := WParam and 3;
+  if (MobileAxisX <> 0) or (MobileAxisY <> 0) or (MobileButtons <> 0) then
+  begin
+    CancelCargoPickup;
+    ArcadeLastInputTick := ArcadeTickCount;
+    ArcadeAutopilotEnabled := False;
+    UpdateAutopilotButtons;
+  end;
+end;
+
 procedure TfAB.DrawFrame;
 var
   Rect: TRectGR;
   Background: TStarFieldGI;
   PreviousSkipRestore: Boolean;
 begin
+  UpdateMobileControls;
   if ExitCode <> 0 then
     Exit;
   Inc(ArcadeFrameCount);
@@ -5496,6 +5832,7 @@ begin
       )
   );
   GetByName('PanelWinHide').SetActive(True);
+  FitMobileResultPanel(VictoryPanel);
   if (GetPlayer <> nil) and (PlayerArcadeShip <> nil) and not PlayerArcadeShip.HasFiredWeapon then
   begin
     Galaxy.CheckIntegrityChecksum1(630);

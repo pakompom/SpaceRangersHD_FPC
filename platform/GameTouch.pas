@@ -19,7 +19,10 @@ type
     end;
     Queue: array of TGameMessage;
     Gesture: TTouchGesture;
-    Start, Last, Anchor: TPoint;
+    Start, Anchor: TPoint;
+    LastX, LastY: Double;
+    PinchDistance: Double;
+    Pinching: Boolean;
     Button: Cardinal;
     Hover: Boolean;
     LastTap: TPoint;
@@ -56,6 +59,9 @@ begin
   Queue[N].Message := Kind;
   Queue[N].WParam := Keys;
   Queue[N].LParam := PackGamePoint(X, Y);
+  Queue[N].Source := gisTouch;
+  if Hover then
+    Queue[N].Source := gisTouchHover;
 end;
 
 procedure TGameTouch.EmitPan(Kind: Cardinal; DX, DY: Double; Point: TPoint);
@@ -83,6 +89,7 @@ procedure TGameTouch.Feed(
 var
   I, N: Integer;
   Point: TPoint;
+  CenterX, CenterY, Distance: Double;
   DownMessage, UpMessage: Cardinal;
 begin
   if IsNan(X) or IsNan(Y) or IsInfinite(X) or IsInfinite(Y) then
@@ -110,31 +117,63 @@ begin
     begin
       Gesture := tgPending;
       Start := Point;
-      Last := Point;
+      LastX := X;
+      LastY := Y;
       Button := MK_LBUTTON;
       if Mode and 1 <> 0 then
         Button := MK_RBUTTON;
       Hover := Mode and 2 <> 0;
       Emit(WM_MOUSEMOVE, 0, Point.X, Point.Y);
+      if not Hover then
+        Emit(WM_GAME_TOUCH_BEGIN, Button, Point.X, Point.Y);
     end
-    else if (N = 1) and (Gesture = tgPending) then
+    else if (N = 1) and (Gesture in [tgPending, tgDrag]) then
     begin
       Gesture := tgPan;
       LastTapTick := 0;
       Anchor := Center;
-      Last := Anchor;
+      LastX := (Fingers[0].X + Fingers[1].X) / 2;
+      LastY := (Fingers[0].Y + Fingers[1].Y) / 2;
+      PinchDistance := Hypot(Fingers[0].X - Fingers[1].X, Fingers[0].Y - Fingers[1].Y);
+      Pinching := False;
       Emit(WM_GAME_PAN_BEGIN, 0, Anchor.X, Anchor.Y);
     end;
     Exit;
   end;
   if (Gesture = tgPan) and (I < 2) then
   begin
-    Point := Center;
-    EmitPan(WM_GAME_PAN, Last.X - Point.X, Last.Y - Point.Y, Anchor);
-    Last := Point;
+    CenterX := (Fingers[0].X + Fingers[1].X) / 2;
+    CenterY := (Fingers[0].Y + Fingers[1].Y) / 2;
+    EmitPan(WM_GAME_PAN, LastX - CenterX, LastY - CenterY, Anchor);
+    LastX := CenterX;
+    LastY := CenterY;
+    if Phase = tpMove then
+    begin
+      Distance := Hypot(Fingers[0].X - Fingers[1].X, Fingers[0].Y - Fingers[1].Y);
+      // Ignore contact jitter until the span changes deliberately. Contacts
+      // starting together need a usable baseline before any division.
+      if (PinchDistance < 2 * Slop) or (Distance < 2 * Slop) then
+      begin
+        PinchDistance := Distance;
+        Pinching := False;
+      end
+      else if Pinching or (Abs(Distance - PinchDistance) > Slop) then
+      begin
+        Emit(
+            WM_GAME_PINCH,
+            Round(EnsureRange(Distance / PinchDistance, 0.01, 100.0) * 65536),
+            Round(CenterX),
+            Round(CenterY)
+        );
+        PinchDistance := Distance;
+        Pinching := True;
+      end;
+    end;
   end
   else if I = 0 then
   begin
+    if not Hover then
+      Emit(WM_GAME_TOUCH_MOVE, Button, Point.X, Point.Y);
     if (Gesture = tgPending) and (Sqr(X - Start.X) + Sqr(Y - Start.Y) > Sqr(Slop)) then
     begin
       Gesture := tgDrag;
@@ -147,14 +186,19 @@ begin
       if Hover then
         Emit(WM_MOUSEMOVE, 0, Point.X, Point.Y)
       else
-        EmitPan(WM_GAME_TOUCH_DRAG_MOVE, Last.X - Point.X, Last.Y - Point.Y, Point);
-      Last := Point;
+        EmitPan(WM_GAME_TOUCH_DRAG_MOVE, LastX - X, LastY - Y, Point);
+      LastX := X;
+      LastY := Y;
     end
     else if Gesture = tgPending then
       Emit(WM_MOUSEMOVE, 0, Point.X, Point.Y);
   end;
   if Phase <> tpUp then
     Exit;
+  if (Gesture = tgPan) and (I < 2) then
+    Emit(WM_GAME_PAN_END, 0, Center.X, Center.Y);
+  if (I = 0) and not Hover then
+    Emit(WM_GAME_TOUCH_END, Button, Point.X, Point.Y);
   if (I = 0) and (Gesture = tgPending) and not Hover then
   begin
     DownMessage := WM_LBUTTONDOWN;
@@ -200,6 +244,7 @@ begin
   SetLength(Queue, 0);
   Gesture := tgIdle;
   LastTapTick := 0;
+  Pinching := False;
 end;
 
 function TGameTouch.Poll(out Message: TGameMessage): Boolean;

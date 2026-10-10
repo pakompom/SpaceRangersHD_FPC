@@ -78,6 +78,7 @@ begin
     Result := ContainsPoint(Point)
   else if Kind = zkCircle then
   begin
+    Point := ScreenToLogicalPoint(Point);
     if HitTestBounds.Right - HitTestBounds.Left < HitTestBounds.Bottom - HitTestBounds.Top then
       Diameter := HitTestBounds.Right - HitTestBounds.Left
     else

@@ -6,6 +6,18 @@ interface
 uses
   Direct3D9;
 function CreateGameGraphics: IDirect3D9;
+// Native raster copy for frozen backgrounds; surface locks still expose logical pixels.
+function CaptureGameGraphicsSurface(Source: IDirect3DSurface9): IDirect3DTexture9;
+type
+  TGameGraphicsTransform = record
+    ScaleX, ScaleY, OffsetX, OffsetY: Single;
+    PixelAligned: Boolean;
+  end;
+const
+  GameGraphicsIdentityTransform: TGameGraphicsTransform =
+      (ScaleX: 1; ScaleY: 1; OffsetX: 0; OffsetY: 0; PixelAligned: False);
+var
+  GameGraphicsTransform: TGameGraphicsTransform;
 implementation
 uses
   GameGraphicsBase,
@@ -25,10 +37,13 @@ type
   TSDLStorage = class(TInterfacedObject, ISDLImage)
     Desc: TD3DSurfaceDesc;
     Pitch: Integer;
+    RasterWidth, RasterHeight: Integer;
+    RequestedRasterWidth, RequestedRasterHeight: Integer;
+    RasterScaleX, RasterScaleY: Single;
     Pixels: Pointer;
-    Handle: PSDL_Texture;
+    Handle, UploadTexture: PSDL_Texture;
     TextureFormat: Cardinal;
-    Generation: LongInt;
+    Generation, DisplayGeneration: LongInt;
     Dirty, Locked, ReadOnly, Screen, Target: Boolean;
     constructor Create(
         W, H: Integer;
@@ -39,7 +54,12 @@ type
     destructor Destroy; override;
     function Storage: TSDLStorage;
     procedure Realize;
+    function UpdateScreenRaster: Boolean;
+    function RasterTransform(ApplyTransform: Boolean): TGameGraphicsTransform;
+    function RasterRect(const Rect: TRect; ApplyTransform: Boolean = False): TSDL_Rect;
+    function RasterClipRect(const Rect: TRect): TSDL_Rect;
     procedure ReadPixels(Dest: Pointer; DestPitch: Integer; DestFormat: Cardinal);
+    procedure ReadRasterPixels(Dest: Pointer; DestPitch: Integer; DestFormat: Cardinal);
     procedure Upload;
     procedure Lock(out Data: TD3DLockedRect; Rect: PRect; Flags: Cardinal);
     procedure Unlock;
@@ -91,6 +111,7 @@ type
     GammaPixels: array of Cardinal;
     GammaTexture: PSDL_Texture;
     TargetGeneration: LongInt;
+    procedure RebindRenderTarget;
     constructor Create(var Parameters: TD3DPresentParameters);
     destructor Destroy; override;
     function TestCooperativeLevel: LongInt; stdcall; override;
@@ -208,18 +229,37 @@ begin
   Result.A := Color shr 24;
 end;
 
-function SDLRect(Rect: TRect): TSDL_Rect;
-begin
-  Result.X := Rect.Left;
-  Result.Y := Rect.Top;
-  Result.W := Rect.Right - Rect.Left;
-  Result.H := Rect.Bottom - Rect.Top;
-end;
-
 procedure Check(Value: Integer);
 begin
   if Value < 0 then
     raise Exception.Create('SDL renderer: ' + string(SDL_GetError));
+end;
+
+procedure SetTextureSampling(Texture: PSDL_Texture; Mode: Integer);
+var
+  Previous: Integer;
+  Info: TSDL_RendererInfo;
+  OpenGL: Boolean;
+begin
+  Check(SDL_GetTextureScaleMode(Texture, Previous));
+  if Previous = Mode then
+    Exit;
+  // SDL2 queues geometry without capturing its sampling mode. Finish those
+  // draws before changing the texture; unchanged sampling retains batching.
+  Check(SDL_RenderFlush(GameSDLRenderer));
+  Check(SDL_GetRendererInfo(GameSDLRenderer, Info));
+  OpenGL := Pos('opengl', string(Info.Name)) = 1;
+  if OpenGL then
+    // The public bind/unbind API activates the context and repairs SDL2's GL
+    // binding cache, including native texture wrappers. SetScaleMode alone does
+    // neither reliably on GLES2. Other renderers do not expose GL textures.
+    Check(SDL_GL_BindTexture(Texture, nil, nil));
+  try
+    Check(SDL_SetTextureScaleMode(Texture, Mode));
+  finally
+    if OpenGL then
+      Check(SDL_GL_UnbindTexture(Texture));
+  end;
 end;
 procedure Require(Condition: Boolean; const Operation: string);
 begin
@@ -257,6 +297,70 @@ begin
   Screen := IsScreen;
   Target := IsTarget;
   Dirty := not Target;
+  RasterWidth := W;
+  RasterHeight := H;
+  RasterScaleX := 1;
+  RasterScaleY := 1;
+  RequestedRasterWidth := W;
+  RequestedRasterHeight := H;
+  if Screen and GameWindowUsesNativeRaster then
+    UpdateScreenRaster;
+end;
+
+function TSDLStorage.UpdateScreenRaster: Boolean;
+var
+  Width, Height: Integer;
+  Viewport: TRect;
+  Info: TSDL_RendererInfo;
+  Scale: Double;
+begin
+  Result := False;
+  // Display events advance this revision before polling. Only query the output
+  // at a frame boundary, and only when the display has actually changed.
+  if DisplayGeneration = GameDisplayGeneration then
+    Exit;
+  DisplayGeneration := GameDisplayGeneration;
+  Width := Desc.Width;
+  Height := Desc.Height;
+  if Screen and GameWindowUsesNativeRaster then
+  begin
+    Check(SDL_GetRendererInfo(GameSDLRenderer, Info));
+    Viewport := GetGamePresentationRect(Desc.Width, Desc.Height);
+    if Info.Flags and SDL_RENDERER_ACCELERATED <> 0 then
+    begin
+      // Allocation, presentation and input all use this integer viewport. A
+      // matching native target is copied one pixel for one pixel, without SDL's
+      // separate logical-size rounding losing a final row or column.
+      Width := Viewport.Right - Viewport.Left;
+      Height := Viewport.Bottom - Viewport.Top;
+      Scale := 1;
+      if Info.MaxTextureWidth > 0 then
+        Scale := Min(Scale, Info.MaxTextureWidth / Width);
+      if Info.MaxTextureHeight > 0 then
+        Scale := Min(Scale, Info.MaxTextureHeight / Height);
+      // At most 64 MiB for the RGBA screen texture, including explicit oversized
+      // resolutions. Ordinary textures and the software fallback stay unchanged.
+      Scale := Min(Scale, Sqrt((16.0 * 1024 * 1024) / (Double(Width) * Height)));
+      Width := Max(1, Floor(Width * Scale));
+      Height := Max(1, Floor(Height * Scale));
+    end;
+  end;
+  Result := (Width <> RequestedRasterWidth) or (Height <> RequestedRasterHeight);
+  if not Result then
+    Exit;
+  RequestedRasterWidth := Width;
+  RequestedRasterHeight := Height;
+  // Keep the storage object alive: retained surfaces and modal snapshots can
+  // still reference it while the output changes independently of game layout.
+  SDL_DestroyTexture(Handle);
+  Handle := nil;
+  SDL_DestroyTexture(UploadTexture);
+  UploadTexture := nil;
+  RasterWidth := Width;
+  RasterHeight := Height;
+  RasterScaleX := Width / Desc.Width;
+  RasterScaleY := Height / Desc.Height;
+  Dirty := not Target;
 end;
 destructor TSDLStorage.Destroy;
 begin
@@ -264,6 +368,8 @@ begin
   // the renderer thread, even though their Pascal pixel storage can be freed here.
   if Handle <> nil then
     RetiredTextures.Add(Handle);
+  if UploadTexture <> nil then
+    RetiredTextures.Add(UploadTexture);
   FreeMem(Pixels);
   inherited Destroy;
 end;
@@ -284,6 +390,8 @@ begin
   begin
     SDL_DestroyTexture(Handle);
     Handle := nil;
+    SDL_DestroyTexture(UploadTexture);
+    UploadTexture := nil;
     // Ordinary textures have authoritative CPU pixels. Render targets do not:
     // discard any old readback and let the game redraw their lost contents.
     if Target then
@@ -298,7 +406,17 @@ begin
   TextureFormat := PixelFormat(Desc.Format);
   if Target then
     TextureFormat := SDL_PIXELFORMAT_ARGB8888;
-  Handle := SDL_CreateTexture(GameSDLRenderer, TextureFormat, Access, Desc.Width, Desc.Height);
+  Handle := SDL_CreateTexture(GameSDLRenderer, TextureFormat, Access, RasterWidth, RasterHeight);
+  if (Handle = nil)
+      and ((RasterWidth > Integer(Desc.Width)) or (RasterHeight > Integer(Desc.Height))) then
+  begin
+    // A device can run out of target memory even below its advertised limits.
+    RasterWidth := Desc.Width;
+    RasterHeight := Desc.Height;
+    RasterScaleX := 1;
+    RasterScaleY := 1;
+    Handle := SDL_CreateTexture(GameSDLRenderer, TextureFormat, Access, RasterWidth, RasterHeight);
+  end;
   Require(Handle <> nil, string(SDL_GetError));
   Generation := CurrentGeneration;
 end;
@@ -306,13 +424,29 @@ end;
 procedure TSDLStorage.Upload;
 var
   Converted: array of Cardinal;
+  Texture, Previous: PSDL_Texture;
 begin
   Require(not Locked, 'drawing a locked texture');
   Realize;
   if Dirty then
   begin
+    Texture := Handle;
+    if (RasterWidth <> Integer(Desc.Width)) or (RasterHeight <> Integer(Desc.Height)) then
+    begin
+      if UploadTexture = nil then
+        UploadTexture :=
+            SDL_CreateTexture(
+                GameSDLRenderer,
+                TextureFormat,
+                SDL_TEXTUREACCESS_STATIC,
+                Desc.Width,
+                Desc.Height
+            );
+      Require(UploadTexture <> nil, string(SDL_GetError));
+      Texture := UploadTexture;
+    end;
     if PixelFormat(Desc.Format) = TextureFormat then
-      Check(SDL_UpdateTexture(Handle, nil, Pixels, Pitch))
+      Check(SDL_UpdateTexture(Texture, nil, Pixels, Pitch))
     else
     begin
       SetLength(Converted, SizeUInt(Desc.Width) * Desc.Height);
@@ -328,13 +462,83 @@ begin
               Desc.Width * 4
           )
       );
-      Check(SDL_UpdateTexture(Handle, nil, @Converted[0], Desc.Width * 4));
+      Check(SDL_UpdateTexture(Texture, nil, @Converted[0], Desc.Width * 4));
+    end;
+    if Texture <> Handle then
+    begin
+      Previous := SDL_GetRenderTarget(GameSDLRenderer);
+      Check(SDL_SetRenderTarget(GameSDLRenderer, Handle));
+      try
+        Check(SDL_RenderSetLogicalSize(GameSDLRenderer, 0, 0));
+        Check(SDL_RenderSetClipRect(GameSDLRenderer, nil));
+        Check(SDL_SetTextureBlendMode(Texture, SDL_BLENDMODE_NONE));
+        SetTextureSampling(Texture, SDL_ScaleModeNearest);
+        Check(SDL_RenderCopy(GameSDLRenderer, Texture, nil, nil));
+      finally
+        Check(SDL_SetRenderTarget(GameSDLRenderer, Previous));
+      end;
     end;
     Dirty := False;
   end;
 end;
 
-procedure TSDLStorage.ReadPixels(Dest: Pointer; DestPitch: Integer; DestFormat: Cardinal);
+function TSDLStorage.RasterTransform(ApplyTransform: Boolean): TGameGraphicsTransform;
+begin
+  Result := GameGraphicsIdentityTransform;
+  Result.ScaleX := RasterScaleX;
+  Result.ScaleY := RasterScaleY;
+  if not (Screen and ApplyTransform) then
+    Exit;
+  Result.ScaleX := Result.ScaleX * GameGraphicsTransform.ScaleX;
+  Result.ScaleY := Result.ScaleY * GameGraphicsTransform.ScaleY;
+  Result.OffsetX := GameGraphicsTransform.OffsetX * RasterScaleX;
+  Result.OffsetY := GameGraphicsTransform.OffsetY * RasterScaleY;
+  // Never adjust the rendering transform independently of hit testing. Nearest
+  // sampling is valid only when this supplied mapping is already pixel-aligned.
+  Result.PixelAligned :=
+      GameGraphicsTransform.PixelAligned
+          and (Result.ScaleX >= 1)
+          and (Result.ScaleY >= 1)
+          and (Result.ScaleX = Round(Result.ScaleX))
+          and (Result.ScaleY = Round(Result.ScaleY))
+          and (Result.OffsetX = Round(Result.OffsetX))
+          and (Result.OffsetY = Round(Result.OffsetY));
+end;
+
+function TSDLStorage.RasterRect(const Rect: TRect; ApplyTransform: Boolean): TSDL_Rect;
+var
+  Transform: TGameGraphicsTransform;
+begin
+  Transform := RasterTransform(ApplyTransform);
+  Result.X := Round(Rect.Left * Transform.ScaleX + Transform.OffsetX);
+  Result.Y := Round(Rect.Top * Transform.ScaleY + Transform.OffsetY);
+  Result.W := Round(Rect.Right * Transform.ScaleX + Transform.OffsetX) - Result.X;
+  Result.H := Round(Rect.Bottom * Transform.ScaleY + Transform.OffsetY) - Result.Y;
+end;
+
+function TSDLStorage.RasterClipRect(const Rect: TRect): TSDL_Rect;
+var
+  Transform: TGameGraphicsTransform;
+
+  function PixelEdge(Coordinate: Integer; Scale, Offset: Single): Integer;
+  var
+    Edge: Single;
+  begin
+    // Match the float vertices and half-open pixel-center coverage. Round's
+    // ties-to-even rule can clip away a shared edge and leave a one-pixel gap.
+    Edge := Coordinate * Scale + Offset;
+    Result := Ceil(Edge - 0.5);
+  end;
+
+begin
+  Transform := RasterTransform(True);
+  Result.X := PixelEdge(Rect.Left, Transform.ScaleX, Transform.OffsetX);
+  Result.Y := PixelEdge(Rect.Top, Transform.ScaleY, Transform.OffsetY);
+  Result.W := PixelEdge(Rect.Right, Transform.ScaleX, Transform.OffsetX) - Result.X;
+  Result.H := PixelEdge(Rect.Bottom, Transform.ScaleY, Transform.OffsetY) - Result.Y;
+end;
+
+procedure TSDLStorage.ReadRasterPixels(Dest: Pointer; DestPitch: Integer; DestFormat: Cardinal);
 var
   Previous: PSDL_Texture;
 begin
@@ -345,6 +549,42 @@ begin
     Check(SDL_RenderReadPixels(GameSDLRenderer, nil, PixelFormat(DestFormat), Dest, DestPitch));
   finally
     Check(SDL_SetRenderTarget(GameSDLRenderer, Previous));
+  end;
+end;
+
+procedure TSDLStorage.ReadPixels(Dest: Pointer; DestPitch: Integer; DestFormat: Cardinal);
+var
+  Previous, Readback: PSDL_Texture;
+begin
+  if (RasterWidth = Integer(Desc.Width)) and (RasterHeight = Integer(Desc.Height)) then
+  begin
+    ReadRasterPixels(Dest, DestPitch, DestFormat);
+    Exit;
+  end;
+  Realize;
+  // D3D locks, screenshots and screen copies still expose logical pixels.
+  // Resize on the GPU before reading into their original logical-size buffers.
+  Readback :=
+      SDL_CreateTexture(
+          GameSDLRenderer,
+          SDL_PIXELFORMAT_ARGB8888,
+          SDL_TEXTUREACCESS_TARGET,
+          Desc.Width,
+          Desc.Height
+      );
+  Require(Readback <> nil, string(SDL_GetError));
+  Previous := SDL_GetRenderTarget(GameSDLRenderer);
+  try
+    Check(SDL_SetRenderTarget(GameSDLRenderer, Readback));
+    Check(SDL_RenderSetLogicalSize(GameSDLRenderer, 0, 0));
+    Check(SDL_RenderSetClipRect(GameSDLRenderer, nil));
+    Check(SDL_SetTextureBlendMode(Handle, SDL_BLENDMODE_NONE));
+    SetTextureSampling(Handle, SDL_ScaleModeLinear);
+    Check(SDL_RenderCopy(GameSDLRenderer, Handle, nil, nil));
+    Check(SDL_RenderReadPixels(GameSDLRenderer, nil, PixelFormat(DestFormat), Dest, DestPitch));
+  finally
+    Check(SDL_SetRenderTarget(GameSDLRenderer, Previous));
+    SDL_DestroyTexture(Readback);
   end;
 end;
 
@@ -427,6 +667,42 @@ begin
   Require(Level = 0, 'mip level');
   Desc := Storage.Desc;
   Result := 0
+end;
+
+function CaptureGameGraphicsSurface(Source: IDirect3DSurface9): IDirect3DTexture9;
+var
+  Surface, Snapshot: TSDLStorage;
+  Image: ISDLImage;
+  Pixel: PCardinal;
+  Count: SizeUInt;
+begin
+  Result := nil;
+  if not GameWindowUsesNativeRaster then
+    Exit;
+  Surface := ImageOf(Source);
+  if not Surface.Screen then
+    Exit;
+  Surface.Upload;
+  if (Surface.RasterWidth = Integer(Surface.Desc.Width))
+      and (Surface.RasterHeight = Integer(Surface.Desc.Height)) then
+    Exit;
+  Image :=
+      TSDLStorage.Create(
+          Surface.RasterWidth,
+          Surface.RasterHeight,
+          D3DFMT_A8R8G8B8,
+          D3DPOOL_MANAGED,
+          False
+      );
+  Snapshot := Image.Storage;
+  Surface.ReadRasterPixels(Snapshot.Pixels, Snapshot.Pitch, Snapshot.Desc.Format);
+  Pixel := Snapshot.Pixels;
+  for Count := 1 to SizeUInt(Snapshot.Desc.Width) * Snapshot.Desc.Height do
+  begin
+    Pixel^ := Pixel^ or $FF000000;
+    Inc(Pixel);
+  end;
+  Result := TSDLTexture.Create(Image);
 end;
 function TSDLTexture.GetSurfaceLevel(Level: Cardinal; out Surface: IDirect3DSurface9): LongInt;
 begin
@@ -524,14 +800,15 @@ var
 begin
   if GameSDLRenderer <> nil then
     TestCooperativeLevel;
+  GameGraphicsTransform := GameGraphicsIdentityTransform;
   Move(Parameters, Params, SizeOf(Params));
   // Direct3D accepts zero back-buffer dimensions in windowed mode and takes
   // the client size. The game sets that size before creating/resetting the device.
-  // A browser canvas follows CSS independently of the requested game size.
+  // Browser and Android surfaces resize independently of the requested layout.
   if Params.Windowed and ((Params.BackBufferWidth = 0) or (Params.BackBufferHeight = 0)) then
   begin
     Require(GameSDLWindow <> nil, 'window for automatic back-buffer size');
-    if GameWindowUsesCanvas then
+    if GameWindowUsesRenderResolution then
       GetGameWindowLogicalSize(WindowWidth, WindowHeight)
     else
       SDL_GetWindowSize(GameSDLWindow, WindowWidth, WindowHeight);
@@ -565,19 +842,23 @@ begin
   Move(Params, Parameters, SizeOf(Params));
 end;
 
+procedure TSDLDevice.RebindRenderTarget;
+begin
+  Check(SDL_SetRenderTarget(GameSDLRenderer, nil));
+  SDL_DestroyTexture(GammaTexture);
+  GammaTexture := nil;
+  if CurrentTarget <> nil then
+    SetRenderTarget(0, CurrentTarget);
+  TargetGeneration := GameTargetGeneration;
+end;
+
 function TSDLDevice.TestCooperativeLevel: LongInt;
 begin
+  // Device loss must be handled before any draw, including after Present.
+  // An ordinary resize can wait; replacing the raster here discards drawings
+  // halfway through a frame or while a modal captures its background.
   if TargetGeneration <> GameTargetGeneration then
-  begin
-    // SDL has already recreated its device. Rebind through Realize rather than
-    // resetting the window again, which can itself trigger another SDL reset.
-    Check(SDL_SetRenderTarget(GameSDLRenderer, nil));
-    SDL_DestroyTexture(GammaTexture);
-    GammaTexture := nil;
-    if CurrentTarget <> nil then
-      SetRenderTarget(0, CurrentTarget);
-    TargetGeneration := GameTargetGeneration;
-  end;
+    RebindRenderTarget;
   Result := 0;
 end;
 function TSDLDevice.GetBackBuffer(
@@ -704,6 +985,10 @@ begin
 end;
 function TSDLDevice.BeginScene: LongInt;
 begin
+  if (ScreenSurface <> nil)
+      and GameWindowUsesNativeRaster
+      and ImageOf(ScreenSurface).UpdateScreenRaster then
+    RebindRenderTarget;
   Result := TestCooperativeLevel;
 end;
 function TSDLDevice.EndScene: LongInt;
@@ -727,6 +1012,9 @@ var
   Color: Cardinal;
   OutputWidth, OutputHeight, Filter: Integer;
   Scale: Double;
+  Viewport: TRect;
+  Destination: TSDL_Rect;
+  DestinationPtr: PSDL_Rect;
 begin
   TestCooperativeLevel;
   Screen := ImageOf(ScreenSurface);
@@ -734,8 +1022,8 @@ begin
   Texture := Screen.Handle;
   if GammaEnabled then
   begin
-    SetLength(GammaPixels, SizeUInt(Screen.Desc.Width) * Screen.Desc.Height);
-    Screen.ReadPixels(@GammaPixels[0], Screen.Desc.Width * 4, D3DFMT_A8R8G8B8);
+    SetLength(GammaPixels, SizeUInt(Screen.RasterWidth) * Screen.RasterHeight);
+    Screen.ReadRasterPixels(@GammaPixels[0], Screen.RasterWidth * 4, D3DFMT_A8R8G8B8);
     for Index := 0 to High(GammaPixels) do
     begin
       Color := GammaPixels[Index];
@@ -746,36 +1034,57 @@ begin
               or (Gamma.Blue[Color and $FF] shr 8);
     end;
     if GammaTexture = nil then
+    begin
       GammaTexture :=
           SDL_CreateTexture(
               GameSDLRenderer,
               SDL_PIXELFORMAT_ARGB8888,
               SDL_TEXTUREACCESS_STREAMING,
-              Screen.Desc.Width,
-              Screen.Desc.Height
+              Screen.RasterWidth,
+              Screen.RasterHeight
           );
+    end;
     Require(GammaTexture <> nil, string(SDL_GetError));
-    Check(SDL_UpdateTexture(GammaTexture, nil, @GammaPixels[0], Screen.Desc.Width * 4));
+    Check(SDL_UpdateTexture(GammaTexture, nil, @GammaPixels[0], Screen.RasterWidth * 4));
     Texture := GammaTexture;
   end;
   Check(SDL_SetRenderTarget(GameSDLRenderer, nil));
-  // Use the same SDL logical view that transforms mouse events. Manual scaling
-  // in physical pixels would give SDL2-compat's Retina events a different scale.
-  Check(SDL_RenderSetLogicalSize(GameSDLRenderer, Screen.Desc.Width, Screen.Desc.Height));
+  DestinationPtr := nil;
+  if GameWindowUsesNativeRaster then
+  begin
+    Check(SDL_RenderSetLogicalSize(GameSDLRenderer, 0, 0));
+    Viewport := GetGamePresentationRect(Screen.Desc.Width, Screen.Desc.Height);
+    Destination.X := Viewport.Left;
+    Destination.Y := Viewport.Top;
+    Destination.W := Viewport.Right - Viewport.Left;
+    Destination.H := Viewport.Bottom - Viewport.Top;
+    DestinationPtr := @Destination;
+  end
+  else
+    // Desktop SDL transforms Retina mouse events through this logical view.
+    Check(SDL_RenderSetLogicalSize(GameSDLRenderer, Screen.Desc.Width, Screen.Desc.Height));
   Check(SDL_RenderSetClipRect(GameSDLRenderer, nil));
   Check(SDL_SetRenderDrawColor(GameSDLRenderer, 0, 0, 0, 255));
   Check(SDL_RenderClear(GameSDLRenderer));
   Check(SDL_SetTextureBlendMode(Texture, SDL_BLENDMODE_NONE));
-  // Sampling the final image is independent of the game's sprite filters.
-  // Preserve exact pixel multiples; interpolate fractional scaling (including
-  // downscaling) so adjacent source pixels do not acquire unequal screen sizes.
-  Check(SDL_GetRendererOutputSize(GameSDLRenderer, OutputWidth, OutputHeight));
-  Scale := Min(OutputWidth / Screen.Desc.Width, OutputHeight / Screen.Desc.Height);
+  // The native raster target already matches the fitted output. Interpolate only
+  // when a resized surface or a smaller fallback target needs fractional scaling.
   Filter := SDL_ScaleModeLinear;
-  if (Scale >= 1) and (Scale = Trunc(Scale)) then
-    Filter := SDL_ScaleModeNearest;
-  Check(SDL_SetTextureScaleMode(Texture, Filter));
-  Check(SDL_RenderCopy(GameSDLRenderer, Texture, nil, nil));
+  if GameWindowUsesNativeRaster then
+  begin
+    if (Destination.W mod Screen.RasterWidth = 0)
+        and (Destination.H mod Screen.RasterHeight = 0) then
+      Filter := SDL_ScaleModeNearest;
+  end
+  else
+  begin
+    Check(SDL_GetRendererOutputSize(GameSDLRenderer, OutputWidth, OutputHeight));
+    Scale := Min(OutputWidth / Screen.RasterWidth, OutputHeight / Screen.RasterHeight);
+    if (Scale >= 1) and (Scale = Round(Scale)) then
+      Filter := SDL_ScaleModeNearest;
+  end;
+  SetTextureSampling(Texture, Filter);
+  Check(SDL_RenderCopy(GameSDLRenderer, Texture, nil, DestinationPtr));
 {$IFDEF FPC_WASM_EMSCRIPTEN}
   // Submit drawing before waiting; the browser presents the completed buffer
   // at its own refresh cadence, which need not be 60 Hz.
@@ -855,7 +1164,7 @@ var
 begin
   Require(Rect <> nil, 'nil scissor');
   Clip := Rect^;
-  Value := SDLRect(Clip);
+  Value := ImageOf(CurrentTarget).RasterClipRect(Clip);
   Check(SDL_RenderSetClipRect(GameSDLRenderer, @Value));
   Result := 0;
 end;
@@ -872,6 +1181,7 @@ begin
   Previous := CurrentTarget;
   SetRenderTarget(0, Surface);
   try
+    Check(SDL_RenderSetClipRect(GameSDLRenderer, nil));
     Check(SDL_SetRenderDrawBlendMode(GameSDLRenderer, SDL_BLENDMODE_NONE));
     Check(
         SDL_SetRenderDrawColor(
@@ -886,7 +1196,7 @@ begin
       Check(SDL_RenderClear(GameSDLRenderer))
     else
     begin
-      Value := SDLRect(Rect^);
+      Value := ImageOf(Surface).RasterRect(Rect^, True);
       Check(SDL_RenderFillRect(GameSDLRenderer, @Value));
     end;
   finally
@@ -914,19 +1224,22 @@ begin
   SetRenderTarget(0, Dest);
   try
     PA := nil;
-    PB := nil;
     if SourceRect <> nil then
     begin
-      A := SDLRect(SourceRect^);
+      A := Image.RasterRect(SourceRect^);
       PA := @A;
     end;
     if DestRect <> nil then
-    begin
-      B := SDLRect(DestRect^);
-      PB := @B;
-    end;
+      B := ImageOf(Dest).RasterRect(DestRect^, True)
+    else
+      B :=
+          ImageOf(Dest)
+              .RasterRect(
+                  Types.Rect(0, 0, ImageOf(Dest).Desc.Width, ImageOf(Dest).Desc.Height),
+                  True);
+    PB := @B;
     Check(SDL_SetTextureBlendMode(Image.Handle, SDL_BLENDMODE_NONE));
-    Check(SDL_SetTextureScaleMode(Image.Handle, Ord(Filter = D3DTEXF_LINEAR)));
+    SetTextureSampling(Image.Handle, Ord(Filter = D3DTEXF_LINEAR));
     Check(SDL_RenderSetClipRect(GameSDLRenderer, nil));
     Check(SDL_RenderCopy(GameSDLRenderer, Image.Handle, PA, PB));
   finally
@@ -949,7 +1262,7 @@ type
   end;
   PGameVertex = ^TGameVertex;
 var
-  Image: TSDLStorage;
+  Image, Target: TSDLStorage;
   Texture: PSDL_Texture;
   Vertices: array of TSDL_Vertex;
   Indices: array of Integer;
@@ -957,6 +1270,29 @@ var
   Source: PGameVertex;
   Value: TSDL_Rect;
   Color: TSDL_Color;
+  Transform: TGameGraphicsTransform;
+
+  function IsPixelAlignedQuad: Boolean;
+  var
+    I, Next: Integer;
+  begin
+    Result := False;
+    if not Transform.PixelAligned or (PrimitiveType <> D3DPT_TRIANGLEFAN) or (Count <> 4) then
+      Exit;
+    // Integer control scaling only preserves texel edges for aligned rectangles.
+    // Rotated sprites and skewed geometry must retain the requested filtering.
+    for I := 0 to 3 do
+    begin
+      if (Vertices[I].Position.X <> Round(Vertices[I].Position.X))
+          or (Vertices[I].Position.Y <> Round(Vertices[I].Position.Y)) then
+        Exit;
+      Next := (I + 1) mod 4;
+      if (Vertices[I].Position.X <> Vertices[Next].Position.X)
+          and (Vertices[I].Position.Y <> Vertices[Next].Position.Y) then
+        Exit;
+    end;
+    Result := True;
+  end;
 
   procedure DrawEdge(First, Last: Integer);
   const
@@ -969,7 +1305,10 @@ var
     DX := Vertices[Last].Position.X - Vertices[First].Position.X;
     DY := Vertices[Last].Position.Y - Vertices[First].Position.Y;
     Distance := Sqrt(DX * DX + DY * DY);
-    if CompareMem(@Color, @Vertices[Last].Color, SizeOf(Color)) or (Distance = 0) then
+    if (Distance = 0)
+        or (CompareMem(@Color, @Vertices[Last].Color, SizeOf(Color))
+            and (Transform.ScaleX = 1)
+            and (Transform.ScaleY = 1)) then
     begin
       Check(SDL_SetRenderDrawColor(GameSDLRenderer, Color.R, Color.G, Color.B, Color.A));
       Check(
@@ -983,10 +1322,13 @@ var
       );
       Exit;
     end;
-    // SDL's line primitive has one color. A one-pixel strip retains the game's
-    // interpolated endpoint colors and alpha, including wireframe triangle edges.
-    NX := -DY * 0.5 / Distance;
-    NY := DX * 0.5 / Distance;
+    // SDL's line primitive has one color and a one-physical-pixel width. A strip
+    // retains interpolated colors and the game's logical one-pixel thickness.
+    DX := DX / Transform.ScaleX;
+    DY := DY / Transform.ScaleY;
+    Distance := Sqrt(DX * DX + DY * DY);
+    NX := -DY * 0.5 * Transform.ScaleX / Distance;
+    NY := DX * 0.5 * Transform.ScaleY / Distance;
     Line[0] := Vertices[First];
     Line[1] := Vertices[Last];
     Line[2] := Vertices[Last];
@@ -1016,12 +1358,14 @@ begin
     raise Exception.Create('Unsupported primitive type');
   end;
   SetLength(Vertices, Count);
+  Target := ImageOf(CurrentTarget);
+  Transform := Target.RasterTransform(True);
   for Index := 0 to Count - 1 do
   begin
     Source := PGameVertex(PByte(Data) + SizeUInt(Index) * Stride);
     // D3D9 addresses pixel centers at integers; SDL uses half-integers.
-    Vertices[Index].Position.X := Source.X + 0.5;
-    Vertices[Index].Position.Y := Source.Y + 0.5;
+    Vertices[Index].Position.X := (Source.X + 0.5) * Transform.ScaleX + Transform.OffsetX;
+    Vertices[Index].Position.Y := (Source.Y + 0.5) * Transform.ScaleY + Transform.OffsetY;
     Vertices[Index].Color := ColorValue(Source.Color);
     Vertices[Index].TexCoord.X := Source.U;
     Vertices[Index].TexCoord.Y := Source.V;
@@ -1033,9 +1377,9 @@ begin
     Image.Upload;
     Texture := Image.Handle;
     Check(SDL_SetTextureBlendMode(Texture, SDL_BLENDMODE_BLEND));
-    Check(SDL_SetTextureScaleMode(Texture, Ord(LinearFilter)));
+    SetTextureSampling(Texture, Ord(LinearFilter and not IsPixelAlignedQuad));
   end;
-  Value := SDLRect(Clip);
+  Value := Target.RasterClipRect(Clip);
   Check(SDL_RenderSetClipRect(GameSDLRenderer, @Value));
   Check(SDL_SetRenderDrawBlendMode(GameSDLRenderer, SDL_BLENDMODE_BLEND));
   if PrimitiveType = D3DPT_POINTLIST then
@@ -1043,13 +1387,22 @@ begin
     begin
       Color := Vertices[Index].Color;
       Check(SDL_SetRenderDrawColor(GameSDLRenderer, Color.R, Color.G, Color.B, Color.A));
-      Check(
-          SDL_RenderDrawPointF(
-              GameSDLRenderer,
-              Vertices[Index].Position.X,
-              Vertices[Index].Position.Y
-          )
-      );
+      if (Transform.ScaleX = 1) and (Transform.ScaleY = 1) then
+        Check(
+            SDL_RenderDrawPointF(
+                GameSDLRenderer,
+                Vertices[Index].Position.X,
+                Vertices[Index].Position.Y
+            )
+        )
+      else
+      begin
+        Value.X := Round(Vertices[Index].Position.X - Transform.ScaleX * 0.5);
+        Value.Y := Round(Vertices[Index].Position.Y - Transform.ScaleY * 0.5);
+        Value.W := Max(1, Round(Vertices[Index].Position.X + Transform.ScaleX * 0.5) - Value.X);
+        Value.H := Max(1, Round(Vertices[Index].Position.Y + Transform.ScaleY * 0.5) - Value.Y);
+        Check(SDL_RenderFillRect(GameSDLRenderer, @Value));
+      end;
     end
   else if PrimitiveType = D3DPT_LINESTRIP then
     for Index := 0 to Count - 2 do
@@ -1099,8 +1452,8 @@ end;
 type
   TSDLGraphics = class(TInterfacedObject, IDirect3D9)
   private
-    CanvasModes: array of TSDL_DisplayMode;
-    procedure BuildCanvasModes;
+    RenderModes: array of TSDL_DisplayMode;
+    procedure BuildRenderModes;
     function DesktopMode(out Value: TSDL_DisplayMode): Integer;
   public
     function RegisterSoftwareDevice(InitializeFunction: Pointer): LongInt; stdcall;
@@ -1192,10 +1545,25 @@ function TSDLGraphics.DesktopMode(out Value: TSDL_DisplayMode): Integer;
 var
   Bounds: TSDL_Rect;
   Caps: TD3DCaps9;
-  MaxWidth, MaxHeight: Integer;
+  Width, Height, MaxWidth, MaxHeight: Integer;
   Scale: Double;
 begin
+  Value := Default(TSDL_DisplayMode);
   Result := SDL_GetCurrentDisplayMode(0, Value);
+  if GameWindowIsMobile then
+  begin
+    GetGameAutomaticLayoutSize(1024, 768, Width, Height);
+    GetDeviceCaps(0, D3DDEVTYPE_HAL, Caps);
+    MaxWidth := Min(7680, Caps.MaxTextureWidth);
+    MaxHeight := Min(7680, Caps.MaxTextureHeight);
+    // Android density controls physical UI size, subject to the game's minimum
+    // complete layout. On phones that minimum usually determines enlargement;
+    // a denser display then improves presentation instead of shrinking controls.
+    Scale := Min(1.0, Min(MaxWidth / Width, MaxHeight / Height));
+    Value.W := EnsureRange(Round(Width * Scale), Min(1024, MaxWidth), MaxWidth);
+    Value.H := EnsureRange(Round(Height * Scale), Min(768, MaxHeight), MaxHeight);
+    Exit(0);
+  end;
   if not GameWindowUsesCanvas then
     Exit;
   // Browser display modes describe the whole screen in CSS pixels. Auto must
@@ -1217,7 +1585,7 @@ begin
     end;
 end;
 
-procedure TSDLGraphics.BuildCanvasModes;
+procedure TSDLGraphics.BuildRenderModes;
 const
   Presets: array[0..13] of TPoint = (
       (X: 1024; Y: 768),
@@ -1242,6 +1610,7 @@ var
   DPI: Single;
   Density: Double;
   W, H, I, J: Integer;
+  Mobile, Portrait: Boolean;
 
   procedure Add(Width, Height: Integer);
   var
@@ -1250,37 +1619,48 @@ var
     if (Width < 1024)
         or (Height < 720)
         or (Width > 7680)
-        or (Height > 4320)
+        or (Height > 7680)
+        or ((Height > 4320) and not Mobile)
         or (Cardinal(Width) > Caps.MaxTextureWidth)
         or (Cardinal(Height) > Caps.MaxTextureHeight) then
       Exit;
-    for Index := 0 to High(CanvasModes) do
-      if (CanvasModes[Index].W = Width) and (CanvasModes[Index].H = Height) then
+    for Index := 0 to High(RenderModes) do
+      if (RenderModes[Index].W = Width) and (RenderModes[Index].H = Height) then
         Exit;
-    Index := Length(CanvasModes);
-    SetLength(CanvasModes, Index + 1);
-    CanvasModes[Index].W := Width;
-    CanvasModes[Index].H := Height;
+    Index := Length(RenderModes);
+    SetLength(RenderModes, Index + 1);
+    RenderModes[Index].W := Width;
+    RenderModes[Index].H := Height;
   end;
 
 begin
-  // These are render resolutions, not hardware display-switch requests. SDL's
-  // browser driver exposes only one screen mode, although any canvas size works.
-  CanvasModes := nil;
+  // These layouts are scaled into the host surface, not physical display modes.
+  RenderModes := nil;
+  Mobile := GameWindowIsMobile;
+  Portrait := False;
   GetDeviceCaps(0, D3DDEVTYPE_HAL, Caps);
-  for I := 0 to High(Presets) do
-    Add(Presets[I].X, Presets[I].Y);
   if DesktopMode(Mode) = 0 then
-    Add(Mode.W, Mode.H);
-  Density := 1;
-  if SDL_GetDisplayDPI(0, @DPI, nil, nil) = 0 then
-    // The browser SDL driver reports 96 DPI times devicePixelRatio.
-    if (DPI > 0) and not IsNan(DPI) and not IsInfinite(DPI) then
-      Density := DPI / 96.0;
-  if SDL_GetDisplayUsableBounds(0, Bounds) = 0 then
   begin
-    Add(Bounds.W, Bounds.H);
-    Add(Round(Bounds.W * Density), Round(Bounds.H * Density));
+    Add(Mode.W, Mode.H);
+    Portrait := Mobile and (Mode.H > Mode.W);
+  end;
+  for I := 0 to High(Presets) do
+    if Portrait then
+      Add(Presets[I].Y, Presets[I].X)
+    else
+      Add(Presets[I].X, Presets[I].Y);
+  Density := 1;
+  if not Mobile then
+  begin
+    if SDL_GetDisplayDPI(0, @DPI, nil, nil) = 0 then
+      // The browser SDL driver reports 96 DPI times devicePixelRatio.
+      if (DPI > 0) and not IsNan(DPI) and not IsInfinite(DPI) then
+        Density := DPI / 96.0;
+    if SDL_GetDisplayUsableBounds(0, Bounds) = 0 then
+    begin
+      Add(Bounds.W, Bounds.H);
+      Add(Round(Bounds.W * Density), Round(Bounds.H * Density));
+    end;
   end;
   if SDL_GetCurrentDisplayMode(0, Mode) = 0 then
   begin
@@ -1294,17 +1674,17 @@ begin
     Add(W, H);
   end;
   // Keep this snapshot stable while the game enumerates its indexed choices.
-  for I := 1 to High(CanvasModes) do
+  for I := 1 to High(RenderModes) do
   begin
     J := I;
     while (J > 0)
-        and ((CanvasModes[J].W < CanvasModes[J - 1].W)
-            or ((CanvasModes[J].W = CanvasModes[J - 1].W)
-                and (CanvasModes[J].H < CanvasModes[J - 1].H))) do
+        and ((RenderModes[J].W < RenderModes[J - 1].W)
+            or ((RenderModes[J].W = RenderModes[J - 1].W)
+                and (RenderModes[J].H < RenderModes[J - 1].H))) do
     begin
-      Swap := CanvasModes[J];
-      CanvasModes[J] := CanvasModes[J - 1];
-      CanvasModes[J - 1] := Swap;
+      Swap := RenderModes[J];
+      RenderModes[J] := RenderModes[J - 1];
+      RenderModes[J - 1] := Swap;
       Dec(J);
     end;
   end;
@@ -1312,10 +1692,10 @@ end;
 
 function TSDLGraphics.GetAdapterModeCount(Adapter, Format: Cardinal): Cardinal;
 begin
-  if GameWindowUsesCanvas then
+  if GameWindowUsesRenderResolution then
   begin
-    BuildCanvasModes;
-    Exit(Length(CanvasModes));
+    BuildRenderModes;
+    Exit(Length(RenderModes));
   end;
   Result := Max(0, SDL_GetNumDisplayModes(0));
 end;
@@ -1324,11 +1704,11 @@ var
   Value: TSDL_DisplayMode;
   Data: array[0..3] of Cardinal;
 begin
-  if GameWindowUsesCanvas then
+  if GameWindowUsesRenderResolution then
   begin
-    if Mode >= Cardinal(Length(CanvasModes)) then
+    if Mode >= Cardinal(Length(RenderModes)) then
       Exit(-1);
-    Value := CanvasModes[Mode];
+    Value := RenderModes[Mode];
     Result := 0;
   end
   else
@@ -1459,6 +1839,7 @@ begin
 end;
 
 initialization
+  GameGraphicsTransform := GameGraphicsIdentityTransform;
   RetiredTextures := TThreadList.Create;
 finalization
   CollectTextures;

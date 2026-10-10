@@ -1,12 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 project(rangers_native LANGUAGES C)
+get_filename_component(RANGERS_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." REALPATH)
+add_compile_options("-ffile-prefix-map=${RANGERS_SOURCE_ROOT}=."
+                    "-ffile-prefix-map=${CMAKE_BINARY_DIR}=./build")
 if(ANDROID OR EMSCRIPTEN)
   include(FetchContent)
   if(ANDROID)
     enable_language(CXX)
-    # Android uses unmodified upstream SDL sources.
-    set(SDL_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-android-src")
-    set(SDL_PATCH_COMMAND "")
+    # SDL resize callbacks must not bind the game's EGL context on Android's UI thread.
+    set(SDL_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/sdl2-android.patch")
     set(SDL_SHARED
         ON
         CACHE BOOL "" FORCE)
@@ -18,10 +20,6 @@ if(ANDROID OR EMSCRIPTEN)
     # SDL's browser backend needs explicit WebGL proxying for a blocking game loop on an application
     # pthread.
     set(SDL_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/sdl2-wasm.patch")
-    # A changed browser patch needs pristine sources in existing build trees.
-    file(SHA256 "${SDL_PATCH}" SDL_PATCH_HASH)
-    set(SDL_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-${SDL_PATCH_HASH}-src")
-    set(SDL_PATCH_COMMAND patch -p1 -i "${SDL_PATCH}")
     set(SDL_SHARED
         OFF
         CACHE BOOL "" FORCE)
@@ -35,13 +33,16 @@ if(ANDROID OR EMSCRIPTEN)
         ON
         CACHE BOOL "" FORCE)
   endif()
+  # A changed platform patch needs pristine sources in existing build trees.
+  file(SHA256 "${SDL_PATCH}" SDL_PATCH_HASH)
+  set(SDL_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-${SDL_PATCH_HASH}-src")
   FetchContent_Declare(
     SDL2
     SOURCE_DIR "${SDL_SOURCE_DIR}"
     URL https://codeload.github.com/libsdl-org/SDL/zip/refs/tags/release-2.32.10
     URL_HASH
       SHA512=001738b610b42a8f8badfd6af3402f0a1a8601034adef0b8c702dd2b1951dc1b71b733a6779d97499b6f7314d226ec0c8dcffeb753f35a5c51e995ca20bdd459
-    PATCH_COMMAND ${SDL_PATCH_COMMAND})
+    PATCH_COMMAND patch -p1 -i "${SDL_PATCH}")
   set(SDL_TEST
       OFF
       CACHE BOOL "" FORCE)

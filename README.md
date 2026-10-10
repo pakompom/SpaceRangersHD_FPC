@@ -12,9 +12,21 @@ Supported platforms:
 
 See [BUILDING.md](BUILDING.md) for dependencies and build/run instructions.
 
+On Android, automatic resolution sizes the interface for the display density and
+fits the complete view in landscape. The shared bottom panel and radar
+scale independently of the world, with rendering at the display's pixel resolution.
+Settings → Graphics → Mobile UI offers Automatic, Yes and No on every platform.
+Automatic enables it on Android. Applying a change reloads the interface.
+
 The source was generated from
 [SpaceRangersHD_decomp at `7342a10`](https://github.com/pakompom/SpaceRangersHD_decomp/tree/7342a10dc1a0dcaa242ea4bc8c33e29c0eb6bdc0),
 which reconstructs the **2026-08-11 prerelease** build.
+
+## Known issues
+
+- Some Android screens and controls look rough or out of place. The original UI
+  uses fixed desktop layouts and bitmap artwork, and adapting them for smaller
+  touchscreens is still in progress.
 
 ## Layout
 

@@ -397,7 +397,7 @@ begin
   Window.SetPosition(
       Classes.Point(
           GameScreenWidth - 10 - Window.ClientSize.X,
-          GameScreenHeight - GiScalePixels(90) - Window.ClientSize.Y
+          MainPanel.ContentLayoutHeight - GiScalePixels(90) - Window.ClientSize.Y
       )
   );
 end;

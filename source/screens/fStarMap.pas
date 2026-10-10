@@ -48,6 +48,19 @@ type
   end;
 
   TfStarMap = class(TMessageLoopGIWithMainPanel)
+  private
+    AppliedSpaceZoomPercent: Integer;
+    PinchZoomSavePending: Boolean;
+    TouchItem: TItem;
+    TouchItemId, TouchItemTurn: Integer;
+    TouchItemStar: TStar;
+    TouchItemWasPickupTarget: Boolean;
+    procedure ApplySpaceZoom(Scale: Double);
+    procedure UpdateSpaceZoom;
+    function TouchItemInspectionEnabled: Boolean;
+    function TouchItemSelectionValid: Boolean;
+    procedure ClearTouchItem;
+  public
     LoadPanel: TfPanelLoad;
     Mode: TStarMapMode;
     ResumeMode: TStarMapResumeMode;
@@ -160,10 +173,13 @@ type
     procedure OnOpen; override;
     procedure OnClose; override;
     procedure CancelPointerInput; override;
+    procedure ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer); override;
     procedure SelectMusic; override;
     procedure ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer); override;
     function CanPanGesture(Point: TPoint): Boolean; override;
     procedure ProcessPanGesture(DX, DY: Double; Point: TPoint); override;
+    procedure ProcessPinchGesture(Factor: Double; Point: TPoint); override;
+    procedure EndPinchGesture; override;
     procedure InitializeLayout; override;
     procedure UpdateActionCursor(CanTake: Boolean); override;
     procedure ExecuteUiCode(Block: TBlockParEC; Key: Cardinal); override;
@@ -309,9 +325,12 @@ implementation
 
 uses
   GameWindow,
+  GameGraphics,
+  GameSystem,
   EC_Cache,
   GI_GI,
   GI_Main,
+  GI_Inspection,
   EC_CacheBitmap,
   Globals,
   GlobalsV,
@@ -367,6 +386,72 @@ uses
   aTranclucator,
   ab_MainForm;
 
+type
+  // A marker follows a world point, but its child draws in enlarged UI pixels.
+  // Scaling the image directly would also scale its position and camera offset.
+  TSpaceMarkerGI = class(TObjectGI)
+    ScreenOffset: TPoint;
+    function GetChildAbsolutePosition(LocalPosition: TPoint; ModeW: Boolean): TPoint; override;
+    procedure UpdateAutoGeometry; override;
+  end;
+
+function SpaceMarkerScale: Single;
+begin
+  Result := 1;
+  if HardwareRenderingEnabled then
+    Result := Max(1, GetGameMobileUiScale);
+end;
+
+function TSpaceMarkerGI.GetChildAbsolutePosition(LocalPosition: TPoint; ModeW: Boolean): TPoint;
+begin
+  Result := ScaledChildPosition(AbsolutePosition, LocalPosition, FirstChild.DisplayScale);
+end;
+
+procedure TSpaceMarkerGI.UpdateAutoGeometry;
+var
+  Scale: Single;
+begin
+  FirstChild.DisplayScale := SpaceMarkerScale / GetDisplayScale;
+  FirstChild.SetPosition(
+      Classes
+          .Point(Round(ScreenOffset.X / SpaceMarkerScale), Round(ScreenOffset.Y / SpaceMarkerScale))
+  );
+  Scale := FirstChild.DisplayScale;
+  SetSize(
+      Classes.Point(Ceil(FirstChild.ClientSize.X * Scale), Ceil(FirstChild.ClientSize.Y * Scale))
+  );
+  SetOrigin(
+      Classes.Point(
+          Round((FirstChild.OriginPoint.X - FirstChild.LocalPosition.X) * Scale),
+          Round((FirstChild.OriginPoint.Y - FirstChild.LocalPosition.Y) * Scale)
+      )
+  );
+end;
+
+procedure ScaleSpaceMarker(Control: TObjectGI; OffsetX: Integer = 0; OffsetY: Integer = 0);
+var
+  Marker: TSpaceMarkerGI;
+  Scale: Single;
+begin
+  Scale := SpaceMarkerScale;
+  if not HardwareRenderingEnabled then
+    Exit;
+  Marker := TSpaceMarkerGI.Create(Control.Parent);
+  Marker.SetDepth(Control.Depth);
+  Marker.SetPositionModeW(Control.PositionModeW);
+  Marker.ScreenOffset := Classes.Point(OffsetX, OffsetY);
+  Marker.SetPosition(SubtractPoints(Control.LocalPosition, Marker.ScreenOffset));
+  Marker.UserValue := Control.UserValue;
+  Marker.UserIndex := Control.UserIndex;
+  Control.Reparent(Marker);
+  Control.DisplayScale := Scale;
+  Control.SetPositionModeW(False);
+  Control.SetPosition(Classes.Point(0, 0));
+  Marker.UpdateAutoGeometry;
+  Marker.UpdateAbsolutePosition;
+  Marker.UpdateSubtreeHitBounds;
+end;
+
 constructor TfStarMap.Create;
 begin
   inherited Create;
@@ -404,6 +489,7 @@ end;
 
 procedure TfStarMap.SetMapCenterManually(Point: TPoint);
 begin
+  ClearTouchItem;
   if MapControls = nil then
     MapControls := GetByName('MainPanel') as TPanelGI;
   MapControls.SetScrollOffset(Point);
@@ -421,6 +507,75 @@ begin
     SpaceProcess.Space.MapScrollChanged(nil);
 end;
 
+procedure TfStarMap.ApplySpaceZoom(Scale: Double);
+var
+  Control: TObjectGI;
+  Size, Center: TPoint;
+
+  procedure FitBackground(const Name: WideString);
+  var
+    Background: TObjectGI;
+  begin
+    Background := GetByName(Name);
+    Background.DisplayScale := Scale;
+    // These layers project their own parallax; they do not use world scrolling.
+    Background.SetPosition(
+        Classes.Point(
+            Center.X - MapControls.AbsolutePosition.X,
+            Center.Y - MapControls.AbsolutePosition.Y
+        )
+    );
+    Background.SetOrigin(Center);
+    Background.SetSize(Size);
+    Background.UpdateAbsolutePosition;
+    Background.UpdateSubtreeHitBounds;
+  end;
+
+begin
+  if MapControls = nil then
+    Exit;
+  if not HardwareRenderingEnabled then
+    Scale := 1;
+  MapControls.ChildWorldScale := Scale;
+  Size := Classes.Point(Ceil(GameScreenWidth / Scale), Ceil(GameScreenHeight / Scale));
+  Center :=
+      Classes.Point(
+          Round(MapControls.AbsolutePosition.X / Scale),
+          Round(MapControls.AbsolutePosition.Y / Scale)
+      );
+  FitBackground('StarField');
+  FitBackground('SpaceImg');
+  StarField.MarkViewDirty;
+  (GetByName('SpaceImg') as TSpaceImgGI).ProjectImages;
+  Control := MapControls.FirstChild;
+  while Control <> nil do
+  begin
+    if Control is TSpaceMarkerGI then
+      Control.UpdateAutoGeometry;
+    Control := Control.NextSibling;
+  end;
+  MapControls.UpdateAbsolutePosition;
+  MapControls.UpdateSubtreeHitBounds;
+  if (SpaceProcess <> nil)
+      and SpaceProcess.IsSpaceOpen
+      and (SpaceProcess.Space.MapPanel = MapControls) then
+  begin
+    SpaceProcess.Space.MapScrollChanged(nil);
+    if (Mode = smmOrders) and (GetPlayer <> nil) then
+      RefreshActionRanges;
+  end;
+  FullFrameRedrawRequested := True;
+  InvalidateViewport;
+end;
+
+procedure TfStarMap.UpdateSpaceZoom;
+begin
+  if AppliedSpaceZoomPercent = SpaceZoomPercent then
+    Exit;
+  AppliedSpaceZoomPercent := SpaceZoomPercent;
+  ApplySpaceZoom(SpaceZoomPercent / 100);
+end;
+
 procedure TfStarMap.CenterMapForTalk(Position: TPointF);
 var
   Offset: TPoint;
@@ -434,8 +589,35 @@ begin
 end;
 
 procedure TfStarMap.InitializeLayout;
+var
+  HudSize, HudOffset: TPoint;
+  HudExtraWidth, HudExtraHeight: Integer;
+  HudScale: Single;
+
+  procedure PlaceHud(Control: TObjectGI; X, Y: Integer);
+  begin
+    // HUD geometry stays in its own logical coordinates; the world keeps the
+    // normal viewport and its original click, pan and camera coordinates.
+    Control.SetPosition(
+        Classes.Point(
+            Control.LocalPosition.X + HudOffset.X + X,
+            Control.LocalPosition.Y + HudOffset.Y + Y
+        )
+    );
+    Control.DisplayScale := HudScale;
+  end;
+
 begin
   inherited InitializeLayout;
+  HudSize := GetMobileHudLayoutSize;
+  HudScale := Min(GameScreenWidth / HudSize.X, GameScreenHeight / HudSize.Y);
+  HudOffset :=
+      Classes.Point(
+          (HudSize.X shr 1) - (GameScreenWidth shr 1),
+          (HudSize.Y shr 1) - (GameScreenHeight shr 1)
+      );
+  HudExtraWidth := HudSize.X - 1024;
+  HudExtraHeight := HudSize.Y - 768;
   MainPanel.InitializeLayout(Self);
   LoadPanel.InitializeLayout(Self);
   AppendLogTextThreadSafe('fStarMap... ');
@@ -451,63 +633,33 @@ begin
       SetSize(Classes.Point(GameScreenWidth, GameScreenHeight));
       SetPosition(Classes.Point(-(GameScreenWidth shr 1), -(GameScreenHeight shr 1)));
     end;
-    with FindByNameRecursive('LargeHelp') do
-      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y - ExtraScreenHeight div 2));
-    with FindByNameRecursive('MapPanel') do
-      SetPosition(
-          Classes.Point(
-              LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y - ExtraScreenHeight div 2
-          )
-      );
-    with FindByNameRecursive('CenterShip') do
-      SetPosition(
-          Classes.Point(
-              LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y - ExtraScreenHeight div 2
-          )
-      );
-    with FindByNameRecursive('MapPanelA') do
+    PlaceHud(FindByNameRecursive('LargeHelp'), 0, -HudExtraHeight div 2);
+    PlaceHud(FindByNameRecursive('MapPanel'), HudExtraWidth div 2, -HudExtraHeight div 2);
+    PlaceHud(FindByNameRecursive('CenterShip'), HudExtraWidth div 2, -HudExtraHeight div 2);
+    PlaceHud(FindByNameRecursive('MapPanelA'), HudExtraWidth div 2, -HudExtraHeight div 2);
+    PlaceHud(
+        FindByNameRecursive('MapPanelA').NextSibling,
+        HudExtraWidth div 2,
+        -HudExtraHeight div 2
+    );
+    PlaceHud(FindByNameRecursive('FPS'), 0, -HudExtraHeight div 2);
+    PlaceHud(FindByNameRecursive('Mods'), 0, -HudExtraHeight div 2);
+    with FindByNameRecursive('PanelMain') do
     begin
-      SetPosition(
-          Classes.Point(
-              LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y - ExtraScreenHeight div 2
-          )
-      );
-      with NextSibling do
-        SetPosition(
-            Classes.Point(
-                LocalPosition.X + ExtraScreenWidth div 2,
-                LocalPosition.Y - ExtraScreenHeight div 2
-            )
-        );
+      SetPosition(Classes.Point(-(GameScreenWidth shr 1), -(GameScreenHeight shr 1)));
+      DisplayScale := HudScale;
     end;
-    with FindByNameRecursive('FPS') do
-      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y - ExtraScreenHeight div 2));
-    with FindByNameRecursive('Mods') do
-      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y - ExtraScreenHeight div 2));
-    FindByNameRecursive('PanelMain')
-        .SetPosition(Classes.Point(-(GameScreenWidth shr 1), -(GameScreenHeight shr 1)));
-    with FindByNameRecursive('PanelSpace') do
-      SetPosition(
-          Classes.Point(
-              LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
-          )
-      );
+    PlaceHud(FindByNameRecursive('PanelSpace'), HudExtraWidth div 2, HudExtraHeight div 2);
     if GiResourceVariant = 2 then
       FindByNameRecursive('PanelLoad')
           .SetPosition(Classes.Point(-(GameScreenWidth shr 1), -(GameScreenHeight shr 1)))
     else if GiResourceVariant = 1 then
       FindByNameRecursive('PanelLoad').SetPosition(Classes.Point(-400, -300));
-    with FindByNameRecursive('MapPartnerDuty').Parent do
-      SetPosition(
-          Classes.Point(
-              LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y - ExtraScreenHeight div 2
-          )
-      );
+    PlaceHud(
+        FindByNameRecursive('MapPartnerDuty').Parent,
+        HudExtraWidth div 2,
+        -HudExtraHeight div 2
+    );
     with FindByNameRecursive('CircleActionColor') do
     begin
       SetPosition(Classes.Point(-(GameScreenWidth shr 1), -(GameScreenHeight shr 1)));
@@ -654,6 +806,8 @@ begin
   (GetByName('MapPanel') as TGraphBufGI).BindExternalGraphBuf(RenderScratchBuffer);
   BattleMusicSelected := False;
   EndTurnAfterOpen := False;
+  AppliedSpaceZoomPercent := 0;
+  UpdateSpaceZoom;
 end;
 
 procedure TfStarMap.OnOpen;
@@ -950,10 +1104,101 @@ end;
 procedure TfStarMap.CancelPointerInput;
 begin
   inherited CancelPointerInput;
+  ClearTouchItem;
   ScrollLeftHeld := False;
   ScrollRightHeld := False;
   ScrollUpHeld := False;
   ScrollDownHeld := False;
+end;
+
+function TfStarMap.TouchItemInspectionEnabled: Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  if (Mode <> smmOrders)
+      or ScannerSelectionActive
+      or TalkSelectionActive
+      or InterceptorSelectionActive
+      or CustomSelectionActive then
+    Exit;
+  for Index := 0 to High(SelectedWeapons) do
+    if SelectedWeapons[Index] then
+      Exit;
+  Result := True;
+end;
+
+function TfStarMap.TouchItemSelectionValid: Boolean;
+begin
+  // Membership is checked before dereferencing: scripts can remove loot while
+  // an inspector is open, and an address can be reused for a different item.
+  Result :=
+      (TouchItem <> nil)
+          and TouchItemInspectionEnabled
+          and (GetPlayer <> nil)
+          and (Galaxy <> nil)
+          and (PlayerStar <> nil)
+          and (PlayerStar = TouchItemStar)
+          and (Galaxy.CurrentTurn = TouchItemTurn)
+          and (PlayerStar.Items.IndexOf(TouchItem) >= 0)
+          and (TouchItem.Id = TouchItemId)
+          and (GetPlayer.HasPickupTarget(TouchItem) = TouchItemWasPickupTarget);
+end;
+
+procedure TfStarMap.ClearTouchItem;
+begin
+  if TouchItem = nil then
+    Exit;
+  TouchItem := nil;
+  ShowObjectInfo(nil);
+end;
+
+procedure TfStarMap.ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer);
+begin
+  // The legacy double-click dispatch sends both down and double-click. An
+  // ordinary item tap has one action regardless of the previous tap's timing.
+  if (Message = WM_LBUTTONDBLCLK)
+      and GamePointerInputIsTouch
+      and TouchItemInspectionEnabled
+      and ((FindObjectAtCursor is TItem)
+          or ((TouchItem <> nil)
+              and (ItemInfoWindow.ContainsPoint(GetCursorPoint)
+                  or StandardInfoPanel.ContainsPoint(GetCursorPoint)))) then
+    Message := WM_LBUTTONDOWN;
+  if TouchItem <> nil then
+  begin
+    if (Message = WM_KEYDOWN) and (WParam = VK_ESCAPE) then
+    begin
+      ClearTouchItem;
+      Exit;
+    end;
+    if (Message = WM_GAME_TOUCH_DRAG_BEGIN) and TouchItemSelectionValid then
+    begin
+      // Give a description its scroll ownership before deciding whether this
+      // gesture leaves the selected loot. A world drag still dismisses it.
+      inherited ProcessWindowMessage(Message, WParam, LParam);
+      if not InspectionOwnsTouch(ItemInfoWindow) and not InspectionOwnsTouch(StandardInfoPanel) then
+        ClearTouchItem;
+      Exit;
+    end;
+    if not TouchItemSelectionValid
+        or (Message = WM_KEYDOWN)
+        or (Message = WM_MOUSEWHEEL)
+        or (Message = WM_GAME_PAN_BEGIN)
+        or (Message = WM_GAME_TOUCH_DRAG_BEGIN)
+        or (Message = WM_MBUTTONDOWN)
+        or (Message = WM_RBUTTONDOWN)
+        or (Message = WM_RBUTTONDBLCLK)
+        or ((Message = WM_GAME_TOUCH_BEGIN) and (WParam = MK_RBUTTON))
+        or (not GamePointerInputIsTouch
+            and ((Message = WM_LBUTTONDOWN) or (Message = WM_LBUTTONDBLCLK))) then
+    begin
+      ClearTouchItem;
+      if Message = WM_MBUTTONDOWN then
+        CursorObject := FindObjectAtCursor;
+    end;
+  end;
+  inherited ProcessWindowMessage(Message, WParam, LParam);
 end;
 
 procedure TfStarMap.OnClose;
@@ -1862,6 +2107,7 @@ begin
     EndImage.SetOrigin(HalfPoint(ImageSize));
     EndImage.SetSize(ImageSize);
     EndImage.RestartPlayback;
+    ScaleSpaceMarker(EndImage);
     LabelGI := TLabelGI.Create(Owner);
     if Ship = GetPlayer then
       LabelGI.SetDepth(UnitPathEndDepth)
@@ -1883,7 +2129,13 @@ begin
     else
       LabelGI.SetText(IntToStr(LandingTurns));
     LabelGI.SetPositionModeW(True);
-    LabelGI.SetPosition(AddPoints(EndPosition, Classes.Point(20, -32)));
+    LabelGI.SetPosition(
+        AddPoints(
+            EndPosition,
+            Classes.Point(Round(20 * SpaceMarkerScale), Round(-32 * SpaceMarkerScale))
+        )
+    );
+    ScaleSpaceMarker(LabelGI, Round(20 * SpaceMarkerScale), Round(-32 * SpaceMarkerScale));
     if (Ship <> GetPlayer) or (GetPlayer = CursorObject) then
     begin
       Count := Ship.MovementPath.NodeCount;
@@ -1919,6 +2171,11 @@ begin
   TgaiGI(UserData).SetPositionModeW(True);
   TgaiGI(UserData).SetOrigin(HalfPoint(TgaiGI(UserData).GetContentSize));
   TgaiGI(UserData).SetSize(TgaiGI(UserData).GetContentSize);
+  if TgaiGI(UserData).Parent is TSpaceMarkerGI then
+  begin
+    TgaiGI(UserData).SetPositionModeW(False);
+    TgaiGI(UserData).Parent.UpdateAutoGeometry;
+  end;
   TgaiGI(UserData).RestartPlayback;
 end;
 
@@ -2573,7 +2830,13 @@ procedure TfStarMap.DrawFrame;
 var
   RectNode: TRectGR;
   Stage: Integer;
+  SavedTransform: TGameGraphicsTransform;
+  BackgroundClip: TRect;
+  Scale: Single;
 begin
+  UpdateSpaceZoom;
+  if (TouchItem <> nil) and not TouchItemSelectionValid then
+    ClearTouchItem;
   Stage := 0;
   try
     if (MinimapFrameCounter mod 16) = 0 then
@@ -2606,7 +2869,23 @@ begin
     RectNode := UpdateRects.FirstRect;
     while RectNode <> nil do
     begin
-      StarField.DrawBackground(RectNode.Bounds);
+      Scale := StarField.GetDisplayScale;
+      BackgroundClip :=
+          Classes.Rect(
+              Floor(RectNode.Bounds.Left / Scale),
+              Floor(RectNode.Bounds.Top / Scale),
+              Ceil(RectNode.Bounds.Right / Scale),
+              Ceil(RectNode.Bounds.Bottom / Scale)
+          );
+      SavedTransform := GameGraphicsTransform;
+      GameGraphicsTransform := GameGraphicsIdentityTransform;
+      GameGraphicsTransform.ScaleX := Scale;
+      GameGraphicsTransform.ScaleY := Scale;
+      try
+        StarField.DrawBackground(BackgroundClip);
+      finally
+        GameGraphicsTransform := SavedTransform;
+      end;
       RectNode := RectNode.Next;
     end;
     Stage := 9;
@@ -2902,6 +3181,7 @@ procedure TfStarMap.StopOrderMode;
 var
   Index: Integer;
 begin
+  ClearTouchItem;
   Galaxy.CheckIntegrityChecksum(26);
   if DeferredEndTurnTimer <> nil then
   begin
@@ -3088,8 +3368,33 @@ begin
     Exit;
   HideLargeHelp;
   if IsMapPointBlocked(Sender, Point) then
+  begin
+    if not ItemInfoWindow.ContainsPoint(Point) and not StandardInfoPanel.ContainsPoint(Point) then
+      ClearTouchItem;
     Exit;
+  end;
   CursorObject := FindObjectAtCursor;
+  if GamePointerInputIsTouch
+      and not GamePointerInputIsTouchHover
+      and TouchItemInspectionEnabled
+      and (CursorObject is TItem) then
+  begin
+    if TouchDragKind <> tdNone then
+      Exit;
+    if (TouchItem <> CursorObject) or not TouchItemSelectionValid then
+    begin
+      ClearTouchItem;
+      TouchItem := TItem(CursorObject);
+      TouchItemId := TouchItem.Id;
+      TouchItemStar := PlayerStar;
+      TouchItemTurn := Galaxy.CurrentTurn;
+      TouchItemWasPickupTarget := GetPlayer.HasPickupTarget(TouchItem);
+      ShowObjectInfo(TouchItem);
+      Exit;
+    end;
+  end;
+  // Consume before the native action or a modal transition, never on hover.
+  ClearTouchItem;
   ScanUnresolved := ScannerSelectionActive;
   TalkUnresolved := TalkSelectionActive;
   OutOfRange := False;
@@ -4121,16 +4426,27 @@ end;
 
 procedure TfStarMap.MapMouseMove(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
 begin
+  if TouchItem <> nil then
+  begin
+    if TouchItemSelectionValid then
+      Exit;
+    ClearTouchItem;
+  end;
+  if GamePointerInputIsTouch
+      and not GamePointerInputIsTouchHover
+      and TouchItemInspectionEnabled
+      and (FindObjectAtCursor is TItem) then
+    Exit;
   if not MainPanel.NavigationLocked and not ShipScreen.ReopenRequested then
   begin
     RefreshActionRanges;
-    if PtInRect(ScrollInteriorRect, Point) then
+    if not GamePointerAllowsEdgeScroll or PtInRect(ScrollInteriorRect, Point) then
       UpdateActionCursor(False);
     if not Sender.IsOccludedAtPoint(Point) then
     begin
       if (KeyState and MK_RBUTTON) = MK_RBUTTON then
         ShowObjectInfo(FindObjectAtCursor)
-      else if not PtInRect(ScrollInteriorRect, Point) then
+      else if GamePointerAllowsEdgeScroll and not PtInRect(ScrollInteriorRect, Point) then
       begin
         if not IsCursorImageSelected('Scroll') then
           SetCursorByName('Scroll');
@@ -4399,6 +4715,8 @@ var
   BarWidth, CapWidth, MinimumWidth: Integer;
   CustomInfo: TCustomSystemInfo;
   Images: WideString;
+  TouchBounds: TRect;
+  TouchPoint: TPoint;
 begin
   if (Obj is TStar)
       and (TerronShip <> nil)
@@ -5838,6 +6156,7 @@ begin
       PlanetInfoPanel.SetActive(False);
       StarInfoWindow.SetActive(False);
       StandardInfoPanel.SetActive(False);
+      RestoreMobileTooltipBody(InfoWindow);
       InfoTextLabel.SetText(GetPlayer.GetObjectInfoText(Obj));
       InfoWindow.SetSize(
           Classes.Point(
@@ -5877,8 +6196,39 @@ begin
     ActivePanel := StandardInfoPanel
   else
     Exit;
+  if GameMobileUiEnabled then
+  begin
+    if TouchItem <> nil then
+    begin
+      TouchPoint := MapControls.ToAbsolutePoint(TruncatePointF(TouchItem.Position));
+      TouchBounds :=
+          Classes.Rect(TouchPoint.X - 19, TouchPoint.Y - 19, TouchPoint.X + 19, TouchPoint.Y + 19);
+      if (TouchItem.GraphObject is TContainerSE)
+          and (TContainerSE(TouchItem.GraphObject).Animation <> nil) then
+        with TContainerSE(TouchItem.GraphObject).Animation do
+        begin
+          TouchBounds.TopLeft := LogicalToScreenPoint(HitTestBounds.TopLeft);
+          TouchBounds.BottomRight := LogicalToScreenPoint(HitTestBounds.BottomRight);
+        end;
+      FitMobileTooltip(ActivePanel, MainPanel.ContentBounds, TouchPoint, @TouchBounds);
+    end
+    else
+      FitMobileTooltip(ActivePanel, MainPanel.ContentBounds, GetCursorPoint);
+    ActivePanel.MouseBlocking := TouchItem <> nil;
+    Exit;
+  end;
   if DynamicTipsPos then
   begin
+    HitObjectPosition :=
+        Classes.Point(
+            Round(HitObjectPosition.X * MapControls.ChildWorldScale),
+            Round(HitObjectPosition.Y * MapControls.ChildWorldScale)
+        );
+    HitObjectSize :=
+        Classes.Point(
+            Round(HitObjectSize.X * MapControls.ChildWorldScale),
+            Round(HitObjectSize.Y * MapControls.ChildWorldScale)
+        );
     Inc(HitObjectPosition.X, Cardinal(GameScreenWidth) div 2);
     Inc(HitObjectPosition.Y, Cardinal(GameScreenHeight) div 2);
     I := Cardinal(GameScreenWidth) div 3;
@@ -5928,6 +6278,7 @@ end;
 
 procedure TfStarMap.MapScrollChanged;
 begin
+  ClearTouchItem;
   RefreshActionRanges;
   SpaceProcess.Space.DrawMinimap;
 end;
@@ -6429,6 +6780,8 @@ begin
       RadarColor := MainColor;
     end;
   end;
+  MainRadius := Round(MainRadius * MapControls.ChildWorldScale);
+  InnerRadius := Round(InnerRadius * MapControls.ChildWorldScale);
   MainCircle := ActionColorCircle;
   if MainVisible then
     MainCircle.UpdateAbsolutePosition;
@@ -6469,6 +6822,7 @@ begin
           DirectRange := RangeMaximum;
         end;
       end;
+  DirectRange := Round(DirectRange * MapControls.ChildWorldScale);
   ExtraIndex := -1;
   if (DirectRange <> 0)
       and (DirectRange <> MainRadius)
@@ -6551,7 +6905,7 @@ var
   Image: TImageGI;
   Item: TItem;
   Target: TShip;
-  BadgePoint: TPointF;
+  BadgePoint, TargetPoint: TPointF;
 begin
   ClearTargetMarkers;
   for I := 1 to GetPlayer.WeaponCount do
@@ -6571,10 +6925,11 @@ begin
           Point := (Weapon.Target as TMissile).Position
         else if Weapon.Target is TShip then
           Point := (Weapon.Target as TShip).Position;
-        Point := AddPointsF(Point, MakePointF(-40, -40));
+        TargetPoint := Point;
+        Point := AddPointsF(Point, MakePointF(-40 * SpaceMarkerScale, -40 * SpaceMarkerScale));
         for J := 1 to I - 1 do
           if GetPlayer.Weapons[J].Target = Weapon.Target then
-            Point.X := Point.X + 32;
+            Point.X := Point.X + 32 * SpaceMarkerScale;
         Image := TImageGI.Create(MapControls);
         Image.SetImagePath('GI,' + Weapon.GetBitmapResourceName + 's');
         Image.SetSize(Image.GetContentSize);
@@ -6585,6 +6940,7 @@ begin
         Image.UserValue := 100;
         Image.UserIndex := I;
         Image.MouseBlocking := True;
+        ScaleSpaceMarker(Image, Round(Point.X - TargetPoint.X), Round(Point.Y - TargetPoint.Y));
         if Weapon.Target is TShip then
           if GetPlayer.CanResolveObjectWithScanner(Weapon.Target)
               and ((Weapon.GetDamageFlags * TargetDamageFlags) <> NoDamageFlags) then
@@ -6593,14 +6949,19 @@ begin
             Image.SetImagePath('GI,Bm.Items.WeaponTarget');
             Image.SetSize(Image.GetContentSize);
             Image.SetOrigin(HalfPoint(Image.ClientSize));
-            BadgePoint.X := Point.X - 10;
-            BadgePoint.Y := Point.Y + 10;
+            BadgePoint.X := Point.X - 10 * SpaceMarkerScale;
+            BadgePoint.Y := Point.Y + 10 * SpaceMarkerScale;
             Image.SetPosition(TruncatePointF(BadgePoint));
             Image.SetDepthByName('Hit');
             Image.SetPositionModeW(True);
             Image.UserValue := 100;
             Image.UserIndex := I;
             Image.MouseBlocking := True;
+            ScaleSpaceMarker(
+                Image,
+                Round(BadgePoint.X - TargetPoint.X),
+                Round(BadgePoint.Y - TargetPoint.Y)
+            );
           end;
       end;
   end;
@@ -6612,10 +6973,10 @@ begin
     if Target <> nil then
     begin
       Point := Target.Position;
-      Point := AddPointsF(Point, MakePointF(-40, -40));
+      Point := AddPointsF(Point, MakePointF(-40 * SpaceMarkerScale, -40 * SpaceMarkerScale));
       for J := 1 to GetPlayer.WeaponCount do
         if GetPlayer.Weapons[J].Target = Target then
-          Point.X := Point.X + 32;
+          Point.X := Point.X + 32 * SpaceMarkerScale;
       Image := TImageGI.Create(MapControls);
       Image.SetImagePath('GI,Bm.Items.2Interceptors_s');
       Image.SetSize(Image.GetContentSize);
@@ -6626,6 +6987,11 @@ begin
       Image.UserValue := 100;
       Image.UserIndex := 0;
       Image.MouseBlocking := True;
+      ScaleSpaceMarker(
+          Image,
+          Round(Point.X - Target.Position.X),
+          Round(Point.Y - Target.Position.Y)
+      );
     end;
   end;
   if GetPlayer.PickupTargets <> nil then
@@ -6636,12 +7002,17 @@ begin
       Image.SetImagePath('GAI,Bm.PI.ItemTakeAnim');
       Image.SetSize(Image.GetContentSize);
       Image.SetOrigin(HalfPoint(Image.ClientSize));
-      Image.SetPosition(TruncatePointF(AddPointsF(Item.Position, MakePointF(-20, 20))));
+      Image.SetPosition(
+          TruncatePointF(
+              AddPointsF(Item.Position, MakePointF(-20 * SpaceMarkerScale, 20 * SpaceMarkerScale))
+          )
+      );
       Image.SetDepthByName('Weapon');
       Image.SetPositionModeW(True);
       Image.UserValue := 100;
       Image.MouseBlocking := True;
       Image.RestartPlayback;
+      ScaleSpaceMarker(Image, Round(-20 * SpaceMarkerScale), Round(20 * SpaceMarkerScale));
     end;
 end;
 
@@ -7005,10 +7376,59 @@ begin
   // gesture over the HUD, a modal dialog or a locked map must remain harmless.
   if not CanPanGesture(Point) then
     Exit;
-  MapControls.SetScrollOffset(AccumulatePanGesture(DX, DY, MapControls.ScrollOffset));
+  ClearTouchItem;
+  MapControls.SetScrollOffset(
+      AccumulatePanGesture(
+          DX / MapControls.ChildWorldScale,
+          DY / MapControls.ChildWorldScale,
+          MapControls.ScrollOffset
+      )
+  );
   FilmCameraFollow := False;
   if Assigned(MapControls.ScrollChangedCallback) then
     MapControls.ScrollChangedCallback(MapControls);
+end;
+
+procedure TfStarMap.ProcessPinchGesture(Factor: Double; Point: TPoint);
+var
+  OldScale, NewScale: Double;
+  Center, Offset: TPoint;
+begin
+  if not SpacePinchZoom
+      or not HardwareRenderingEnabled
+      or not CanPanGesture(Point)
+      or IsNan(Factor)
+      or IsInfinite(Factor)
+      or (Factor <= 0) then
+    Exit;
+  OldScale := MapControls.ChildWorldScale;
+  NewScale := EnsureRange(OldScale * Factor, MinSpaceZoomPercent / 100, MaxSpaceZoomPercent / 100);
+  if Abs(NewScale - OldScale) < 0.000001 then
+    Exit;
+  ClearTouchItem;
+  Center := MapControls.AbsolutePosition;
+  Offset := MapControls.ScrollOffset;
+  // Keep the world point between the fingers stationary while changing scale.
+  Offset :=
+      AccumulatePanGesture(
+          (Point.X - Center.X) * (1 / OldScale - 1 / NewScale),
+          (Point.Y - Center.Y) * (1 / OldScale - 1 / NewScale),
+          Offset
+      );
+  ApplySpaceZoom(NewScale);
+  SetMapCenterManually(Offset);
+  SpaceZoomPercent := Round(NewScale * 100);
+  AppliedSpaceZoomPercent := SpaceZoomPercent;
+  UserSettingsConfig.SetOrAddParam('SpaceZoomPercent', IntToStr(SpaceZoomPercent));
+  PinchZoomSavePending := True;
+end;
+
+procedure TfStarMap.EndPinchGesture;
+begin
+  if not PinchZoomSavePending then
+    Exit;
+  PinchZoomSavePending := False;
+  UserSettingsConfig.SaveTextFile(PWideChar(GetGameUserDirectory + 'CFG.TXT'), True, False);
 end;
 
 procedure TfStarMap.ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer);
@@ -7605,8 +8025,8 @@ begin
     Exit;
   if (FilmStepIndex = 0) and not SecondaryFilm.ForceCameraMovement then
   begin
-    HalfSize.X := GameScreenWidth shr 2;
-    HalfSize.Y := GameScreenHeight shr 2;
+    HalfSize.X := Round((GameScreenWidth shr 2) / MapControls.ChildWorldScale);
+    HalfSize.Y := Round((GameScreenHeight shr 2) / MapControls.ChildWorldScale);
     FilmCameraMoving :=
         (FilmCameraPosition.X - HalfSize.X > SecondaryFilm.CameraAnchor.X)
             or (FilmCameraPosition.X + HalfSize.X <= SecondaryFilm.CameraAnchor.X)
@@ -7640,8 +8060,10 @@ begin
         FilmCameraTargetUntilStep :=
             PEFilmCameraEventArray(SecondaryFilm.CameraEvents)[BestIndex].StepIndex
                 + FilmCameraLookAheadSteps;
-        HalfSize.X := (GameScreenWidth shr 1) - GiScalePixels(100);
-        HalfSize.Y := (GameScreenHeight shr 1) - GiScalePixels(100);
+        HalfSize.X :=
+            Round(((GameScreenWidth shr 1) - GiScalePixels(100)) / MapControls.ChildWorldScale);
+        HalfSize.Y :=
+            Round(((GameScreenHeight shr 1) - GiScalePixels(100)) / MapControls.ChildWorldScale);
         ViewRect.Left := Round(FilmCameraPosition.X - HalfSize.X);
         ViewRect.Top := Round(FilmCameraPosition.Y - HalfSize.Y);
         ViewRect.Right := Round(FilmCameraPosition.X + HalfSize.X);
@@ -7685,8 +8107,10 @@ begin
       if (SpaceProcess.RadarCenter.X <> SecondaryFilm.CameraAnchor.X)
           or (SpaceProcess.RadarCenter.Y <> SecondaryFilm.CameraAnchor.Y) then
       begin
-        CameraVector.X := (GameScreenWidth shr 1) - GiScalePixels(150);
-        CameraVector.Y := (GameScreenHeight shr 1) - GiScalePixels(150);
+        CameraVector.X :=
+            ((GameScreenWidth shr 1) - GiScalePixels(150)) / MapControls.ChildWorldScale;
+        CameraVector.Y :=
+            ((GameScreenHeight shr 1) - GiScalePixels(150)) / MapControls.ChildWorldScale;
         TopLeft := SubtractPointsF(SpaceProcess.RadarCenter, CameraVector);
         BottomRight := AddPointsF(SpaceProcess.RadarCenter, CameraVector);
         if SegmentIntersectsRectEdges(
@@ -7773,7 +8197,7 @@ var
 begin
   if Sender.IsOccludedAtPoint(Point) or ((KeyState and MK_RBUTTON) = MK_RBUTTON) then
     Exit;
-  if not PtInRect(ScrollInteriorRect, Point) then
+  if GamePointerAllowsEdgeScroll and not PtInRect(ScrollInteriorRect, Point) then
     ShowFilmObjectInfo(nil, 0)
   else
   begin
@@ -9358,8 +9782,24 @@ begin
     ActivePanel := StandardInfoPanel
   else
     Exit;
+  if GameMobileUiEnabled then
+  begin
+    FitMobileTooltip(ActivePanel, MainPanel.ContentBounds, GetCursorPoint);
+    ActivePanel.MouseBlocking := False;
+    Exit;
+  end;
   if DynamicTipsPos then
   begin
+    HitObjectPosition :=
+        Classes.Point(
+            Round(HitObjectPosition.X * MapControls.ChildWorldScale),
+            Round(HitObjectPosition.Y * MapControls.ChildWorldScale)
+        );
+    HitObjectSize :=
+        Classes.Point(
+            Round(HitObjectSize.X * MapControls.ChildWorldScale),
+            Round(HitObjectSize.Y * MapControls.ChildWorldScale)
+        );
     Inc(HitObjectPosition.X, Cardinal(GameScreenWidth) div 2);
     Inc(HitObjectPosition.Y, Cardinal(GameScreenHeight) div 2);
     I := Cardinal(GameScreenWidth) div 3;

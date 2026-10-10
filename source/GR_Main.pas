@@ -2061,6 +2061,10 @@ procedure FinalizeRuntimeAndSettings;
 
 procedure EnumerateAndSelectDisplayModes;
 
+function GetNormalGameLayoutSize: TPoint;
+
+function GetMobileHudLayoutSize: TPoint;
+
 procedure ConfigureDefaultRenderState;
 
 procedure PreparePresentationParameters;
@@ -2074,6 +2078,8 @@ procedure FreeScreenRenderBuffers;
 procedure ApplyGammaRamp(Brightness: Single; Contrast: Single);
 
 function GR_WinMessage(Callback: TWindowMessageCallbackGR): Integer;
+
+function ApplyPendingDisplayChange: Boolean;
 
 function MainWindowProc(
     Window: Cardinal;
@@ -2311,6 +2317,9 @@ uses
   GameGraphics,
   GameAudio,
   aSaveLoad,
+  aScript,
+  ThreadCalc,
+  fStarMap,
   GameInput,
   SDL2,
   GI_Main,
@@ -2339,6 +2348,10 @@ var
   ScreenCenterY: Cardinal;
   LastWindowMessageTick: Cardinal;
   MessageIdle: Boolean;
+  PendingDisplayChange: Boolean;
+  LastDisplayChangeTick: Cardinal;
+  LayoutDensity: Double;
+  NormalGameLayoutSize, MobileHudLayoutSize: TPoint;
 
 {$I-}
 
@@ -4729,6 +4742,14 @@ begin
         ShowWineWarning := True;
       end;
   end;
+  GameUiMode :=
+      TGameUiMode(
+          EnsureRange(
+              StrToIntDef(AnsiString(UserSettingsConfig.GetParamByPathOrMarker('MobileUI')), 0),
+              Ord(Low(TGameUiMode)),
+              Ord(High(TGameUiMode))
+          )
+      );
   EditableSaveBlock := TBlockParEC.Create;
   NewGameSettingsConfig := TBlockParEC.Create;
   Text := GetGameUserDirectory + 'newgame.txt';
@@ -5009,6 +5030,17 @@ begin
   WideCaseTable := nil;
 end;
 
+function MobileHudSizeForLayout(const Layout: TPoint): TPoint;
+begin
+  Result := Layout;
+  if GameMobileUiEnabled and UseDesktopDisplayMode then
+  begin
+    GetGameAutomaticLayoutSize(1024, 480, Result.X, Result.Y);
+    Result.X := Min(Result.X, Layout.X);
+    Result.Y := Min(Result.Y, Layout.Y);
+  end;
+end;
+
 procedure EnumerateAndSelectDisplayModes;
 var
   Index, ModeCount: Integer;
@@ -5192,6 +5224,23 @@ begin
   ExtraScreenHeight := GameScreenHeight - 768;
   GameScreenRect := Classes.Rect(0, 0, GameScreenWidth, GameScreenHeight);
   PresentationRect := Classes.Rect(0, 0, PresentationWidth, PresentationHeight);
+  NormalGameLayoutSize := Classes.Point(GameScreenWidth, GameScreenHeight);
+  MobileHudLayoutSize := MobileHudSizeForLayout(NormalGameLayoutSize);
+  LayoutDensity := GetGameDisplayMetrics.Density;
+end;
+
+function GetNormalGameLayoutSize: TPoint;
+begin
+  Result := NormalGameLayoutSize;
+  if (Result.X <= 0) or (Result.Y <= 0) then
+    Result := Classes.Point(GameScreenWidth, GameScreenHeight);
+end;
+
+function GetMobileHudLayoutSize: TPoint;
+begin
+  Result := MobileHudLayoutSize;
+  if not HardwareRenderingEnabled or (Result.X <= 0) or (Result.Y <= 0) then
+    Result := GetNormalGameLayoutSize;
 end;
 
 procedure ConfigureDefaultRenderState;
@@ -5281,6 +5330,8 @@ begin
   if UserSettingsConfig.CountParams('Window') > 0 then
     WindowedModeRequested :=
         ParseEnabledNameGI(TrimWideString(UserSettingsConfig.GetParamByPathOrMarker('Window')));
+  if GameWindowIsMobile then
+    WindowedModeRequested := False;
   VSyncEnabled := False;
   if UserSettingsConfig.CountParams('VSync') > 0 then
     VSyncEnabled :=
@@ -5300,11 +5351,15 @@ begin
                           UserSettingsConfig.GetParamByPathOrMarker('AllowHardwareRenderUnderWine')
                       ))));
   ScaleViewportToWindow := True;
-  if UserSettingsConfig.CountParams('RenderModeScale') > 0 then
+  if not GameWindowUsesNativeRaster and (UserSettingsConfig.CountParams('RenderModeScale') > 0) then
     ScaleViewportToWindow :=
         ParseEnabledNameGI(
             TrimWideString(UserSettingsConfig.GetParamByPathOrMarker('RenderModeScale'))
         );
+  // Android and mobile UI present the complete logical framebuffer. Old
+  // desktop settings must not select a movable, cropped viewport here.
+  if GameWindowUsesNativeRaster then
+    AlternateViewportEnabled := False;
   TextureManagerDisabled := False;
   if UserSettingsConfig.CountParams('DisableTextureManager') > 0 then
     TextureManagerDisabled :=
@@ -5422,6 +5477,8 @@ begin
         SelectedGameDisplayMode := SmallestGameDisplayMode;
         GameScreenWidth := GameDisplayModes[SelectedGameDisplayMode].Width;
         GameScreenHeight := GameDisplayModes[SelectedGameDisplayMode].Height;
+        NormalGameLayoutSize := Classes.Point(GameScreenWidth, GameScreenHeight);
+        MobileHudLayoutSize := NormalGameLayoutSize;
         PresentationWidth := GameScreenWidth;
         PresentationHeight := GameScreenHeight;
         ExtraScreenWidth := GameScreenWidth - 1024;
@@ -5704,6 +5761,7 @@ function GR_WinMessage(Callback: TWindowMessageCallbackGR): Integer;
 var
   ContinueLoop, Stage: Integer;
   Msg: TGameMessage;
+  PreviousInputSource: TGameInputSource;
 begin
   Stage := 0;
   try
@@ -5756,10 +5814,18 @@ begin
           LastMouseMessageTick := 0;
         end;
         Stage := 9;
-        MainWindowProc(MainWindowHandle, Msg.Message, Msg.WParam, Msg.LParam);
-        Stage := 10;
-        if Assigned(Callback) and GameWindowFocused then
-          Callback(Msg.message, Msg.wParam, Msg.lParam);
+        PreviousInputSource := CurrentGameInputSource;
+        CurrentGameInputSource := Msg.Source;
+        try
+          MainWindowProc(MainWindowHandle, Msg.Message, Msg.WParam, Msg.LParam);
+          Stage := 10;
+          if Assigned(Callback) and GameWindowFocused then
+            Callback(Msg.message, Msg.wParam, Msg.lParam);
+        finally
+          // A handler may run a nested modal message loop. Restore its caller's
+          // event source instead of leaving behind the last nested event.
+          CurrentGameInputSource := PreviousInputSource;
+        end;
       end;
       Stage := 11;
       if (ContinueLoop = 0) or RuntimeActive then
@@ -5781,19 +5847,103 @@ begin
   end;
 end;
 
+function ApplyPendingDisplayChange: Boolean;
+var
+  Mode: TDisplayModeGR;
+  Loop: TMessageLoopGI;
+  HudSize: TPoint;
+  Metrics: TGameDisplayMetrics;
+begin
+  Result := False;
+  if not PendingDisplayChange then
+    Exit;
+  if not UseDesktopDisplayMode then
+  begin
+    PendingDisplayChange := False;
+    Exit;
+  end;
+  if Direct3D = nil then
+    Exit;
+  if Direct3D.GetAdapterDisplayMode(D3DADAPTER_DEFAULT, Mode) <> 0 then
+    Exit;
+  HudSize := MobileHudSizeForLayout(Classes.Point(Mode.Width, Mode.Height));
+  Metrics := GetGameDisplayMetrics;
+  if (Mode.Width = Cardinal(NormalGameLayoutSize.X))
+      and (Mode.Height = Cardinal(NormalGameLayoutSize.Y))
+      and (HudSize.X = MobileHudLayoutSize.X)
+      and (HudSize.Y = MobileHudLayoutSize.Y)
+      and (Metrics.Density = LayoutDensity) then
+  begin
+    // Presentation and native raster dimensions follow the live output in the
+    // renderer, independently of this deferred screen-layout reload.
+    PendingDisplayChange := False;
+    Exit;
+  end;
+  // A stream of surface notifications should fit the existing scene immediately
+  // and rebuild its controls once, after the dimensions have settled.
+  if GameTickCount - LastDisplayChangeTick < 150 then
+    Exit;
+  if ExitScreenLoop
+      or MemorySnapshotActive
+      or (RequestedScreenId <> screenNone)
+      or (MessageLoopStack = nil)
+      or (MessageLoopStack.Count <> 1) then
+    Exit;
+  // These screens already support returning through the settings reload path.
+  // Keep dialogs, edited settings, quests and battle playback intact; their
+  // existing frame remains fitted until a normal game screen resumes.
+  case CurrentScreenId of
+    screenMainMenu, screenPlanet:;
+    screenHangar:
+      if HangarScreen.TakeOffPending or HangarScreen.IsServiceButtonDown then
+        Exit;
+    screenStarMap:
+      if (StarMapScreen.Mode <> smmOrders) or (StarMapScreen.DeferredEndTurnTimer <> nil) then
+        Exit;
+  else
+    Exit;
+  end;
+  if IsTurnCalculationRunning
+      or ((NewGameGenerationThread <> nil) and NewGameGenerationThread.IsRunning)
+      or ((ScriptRequestThread <> nil) and ScriptRequestThread.IsRunning)
+      or HasPendingScriptRequests then
+    Exit;
+  Loop := TMessageLoopGI(MessageLoopStack[0]);
+  if (Loop <> RegisteredScreens[CurrentScreenId]) or (Loop.ChildLoop <> nil) then
+    Exit;
+  PendingDisplayChange := False;
+  // Reuse the normal resolution-change restart: UI and render buffers are
+  // rebuilt, while the current galaxy and the destination screen survive.
+  RequestedScreenId := screenNone;
+  PostLoadScreenId := CurrentScreenId;
+  Loop.RequestClose(1);
+  Result := True;
+end;
+
 function MainWindowProc(Window, Message, WParam: Cardinal; LParam: Integer): Integer; stdcall;
 var
   Origin: TPoint;
   Bounds: TRect;
   Index: Integer;
 begin
-  if Message = WM_GAME_CANCEL_INPUT then
+  if (Message = WM_GAME_CANCEL_INPUT) or (Message = WM_GAME_DISPLAY_CHANGED) then
   begin
-    // Focus/background events must cancel every active or suspended UI loop,
+    if Message = WM_GAME_DISPLAY_CHANGED then
+      CancelGamePointerInput;
+    // Focus and display changes cancel every active or suspended UI loop,
     // even though GR_WinMessage stops forwarding ordinary input without focus.
     if MessageLoopStack <> nil then
       for Index := 0 to MessageLoopStack.Count - 1 do
         TMessageLoopGI(MessageLoopStack[Index]).CancelPointerInput;
+    if (Message = WM_GAME_DISPLAY_CHANGED) and GameWindowUsesNativeRaster then
+    begin
+      PendingDisplayChange := True;
+      LastDisplayChangeTick := GameTickCount;
+      FullFrameRedrawRequested := True;
+      if MessageLoopStack <> nil then
+        for Index := 0 to MessageLoopStack.Count - 1 do
+          TMessageLoopGI(MessageLoopStack[Index]).UpdateRects.AddRect(GameScreenRect);
+    end;
   end
   else if Message = WM_GAME_RENDER_RESET then
   begin
@@ -6064,7 +6214,7 @@ end;
 
 procedure CaptureScreenBackground(ApplyEffects: Boolean; UnusedOption: Byte);
 begin
-  AuxRenderBuffer.LoadFromScreen(UnusedOption);
+  AuxRenderBuffer.LoadFromScreen(UnusedOption, True);
   if ApplyEffects then
   begin
     if BackgroundShade then
@@ -6185,11 +6335,7 @@ begin
     SetCurrentDir(NativeGamePath(Directory));
     Inc(FirstFrameNumber);
     Frame := TGraphBufGR.Create(False);
-    Frame.AllocateNativePitch(
-        ScreenRenderBuffer.Width,
-        ScreenRenderBuffer.Height,
-        ScreenRenderBuffer.Width * 3
-    );
+    Frame.AllocateNativePitch(GameScreenWidth, GameScreenHeight, GameScreenWidth * 3);
     for Index := 0 to RecordingFrameCount - 1 do
     begin
       Ex_OKGF_Convert565toBGR(

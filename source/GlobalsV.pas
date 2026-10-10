@@ -15,6 +15,10 @@ const
 
   gerTerronConversion = 4;
 
+  MinSpaceZoomPercent = 50;
+
+  MaxSpaceZoomPercent = 200;
+
 type
 
   TSpaceImageTemplate = record
@@ -199,6 +203,10 @@ var
   ScrollStep: Integer = 5;
 
   ScrollSense: Integer = 1;
+
+  SpaceZoomPercent: Integer = 100;
+
+  SpacePinchZoom: Boolean = True;
 
   FilmSpeed: Integer = 1;
 

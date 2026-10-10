@@ -76,6 +76,7 @@ procedure LoadPendingAssets(PendingLoads: TList);
 implementation
 
 uses
+  fPanelMain,
   EC_CacheGAI,
   GameInput,
   SysUtils,
@@ -353,6 +354,8 @@ begin
 end;
 
 procedure TfLoad.OnClose;
+var
+  ScreenId: TGameScreenId;
 begin
   with GetByName('Film') as TxvidGI do
     ImageClose;
@@ -408,6 +411,10 @@ begin
     LoadQuestScreen.InitializeLayout;
     LoadArcadeScreen.InitializeLayout;
     AchievementsScreen.InitializeLayout;
+    // Anchor the shared HUD after each owner has positioned its content tree.
+    for ScreenId := Low(TGameScreenId) to High(TGameScreenId) do
+      if TObject(RegisteredScreens[ScreenId]) is TMessageLoopGIWithMainPanel then
+        TMessageLoopGIWithMainPanel(RegisteredScreens[ScreenId]).MainPanel.FinalizeLayout;
   end;
   IntroFinished := True;
   RequestedScreenId := PostLoadScreenId;

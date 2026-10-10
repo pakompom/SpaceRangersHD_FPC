@@ -93,6 +93,8 @@ type
   TGraphBufGR = class(TObjectEx)
     Width: Integer;
     Height: Integer;
+    // Logical display extent; Width/Height remain the captured raster dimensions.
+    ScreenSnapshotSize: TPoint;
     PitchBytes: Integer;
     Pixels: Pointer;
     StorageKind: Integer;
@@ -107,6 +109,7 @@ type
     constructor Create(AUseTexture: Boolean);
     destructor Destroy; override;
     procedure Clear;
+    function HasPixels: Boolean;
     function GetPixels: Pointer;
     procedure AllocateNative(Width: Integer; Height: Integer);
     procedure AllocateNativePitch(Width: Integer; Height: Integer; PitchBytes: Integer);
@@ -247,7 +250,7 @@ type
     procedure AdjustBrightness(Percent: Integer);
     procedure ConvertToGrayscale;
     function GetTexture: IDirect3DTexture9;
-    procedure LoadFromScreen(UnusedOption: Byte);
+    procedure LoadFromScreen(UnusedOption: Byte; NativeResolution: Boolean = False);
     procedure LockTexture(ReadOnly: Boolean);
     procedure UnlockTexture;
     procedure ConvertBgraToRgb24;
@@ -282,6 +285,7 @@ uses
   Classes,
   FPImage,
   FPWriteJPEG,
+  GameGraphics,
   GameSystem;
 
 procedure TPixelFormatGR.RebuildChannelMetrics;
@@ -423,6 +427,7 @@ begin
   inherited Create;
   Width := 0;
   Height := 0;
+  ScreenSnapshotSize := Classes.Point(0, 0);
   PitchBytes := 0;
   StorageKind := 0;
   BitsPerPixel := 0;
@@ -455,10 +460,19 @@ begin
   KeepTextureUntilReplacement := False;
   Width := 0;
   Height := 0;
+  ScreenSnapshotSize := Classes.Point(0, 0);
   PitchBytes := 0;
   StorageKind := 0;
   BitsPerPixel := 0;
   BytesPerPixel := 0;
+end;
+
+function TGraphBufGR.HasPixels: Boolean;
+begin
+  Result :=
+      (Width > 0)
+          and (Height > 0)
+          and ((Pixels <> nil) or (UsesTextureStorage and (Texture <> nil)));
 end;
 
 function TGraphBufGR.GetPixels: Pointer;
@@ -1233,24 +1247,48 @@ begin
   Pixels := NewPixels;
   Width := NewWidth;
   Height := NewHeight;
+  ScreenSnapshotSize := Classes.Point(0, 0);
   PitchBytes := NewPitch;
 end;
 
 procedure TGraphBufGR.Stretch16(Width, Height: Cardinal);
 var
   Data: Pointer;
+  X, Y: Cardinal;
+  SourceRow, DestRow: PWord;
 begin
   if (Width = Cardinal(Self.Width)) and (Height = Cardinal(Self.Height)) then
     Exit;
-  if (Cardinal(Self.Width) < 1) or (Cardinal(Self.Height) < 1) or (Width < 1) or (Height < 1) then
+  if (Self.Width < 1) or (Self.Height < 1) or (Width < 1) or (Height < 1) then
     Exit;
   Data := AllocEC(Width * Height * SizeOf(Word));
-  Ex_OKGR_StretchGdi_WORD(Data, Width, Height, Pixels, Self.Width, Self.Height);
-  FreeEC(Pixels);
+  try
+    LockTexture(True);
+    try
+      // Copy packed RGB565 pixels without interpolating their individual bytes.
+      for Y := 0 to Height - 1 do
+      begin
+        SourceRow :=
+            PWord(PByte(Pixels) + (QWord(Y) * Cardinal(Self.Height) div Height) * PitchBytes);
+        DestRow := PWord(PByte(Data) + Y * Width * SizeOf(Word));
+        for X := 0 to Width - 1 do
+          DestRow[X] := SourceRow[QWord(X) * Cardinal(Self.Width) div Width];
+      end;
+    finally
+      UnlockTexture;
+    end;
+  except
+    FreeEC(Data);
+    raise;
+  end;
+  Clear;
   Pixels := Data;
   Self.Width := Width;
   Self.Height := Height;
   PitchBytes := Width * SizeOf(Word);
+  ScreenSnapshotSize := Classes.Point(0, 0);
+  BitsPerPixel := 16;
+  BytesPerPixel := SizeOf(Word);
 end;
 
 procedure TGraphBufGR.ConvertRgbTo565;
@@ -1456,6 +1494,7 @@ begin
   Self.Width := Width;
   Self.Height := Height;
   PitchBytes := Width * 3;
+  ScreenSnapshotSize := Classes.Point(0, 0);
 end;
 
 procedure TGraphBufGR.RescaleRgba(Width, Height, Filter: Integer);
@@ -1486,6 +1525,7 @@ begin
   Self.Width := Width;
   Self.Height := Height;
   PitchBytes := Width * SizeOf(TColorRGBA);
+  ScreenSnapshotSize := Classes.Point(0, 0);
 end;
 
 procedure TGraphBufGR.RescaleBilinearRgba(Width, Height: Integer);
@@ -1560,6 +1600,7 @@ begin
   Self.Width := Width;
   Self.Height := Height;
   PitchBytes := Width * SizeOf(TColorRGBA);
+  ScreenSnapshotSize := Classes.Point(0, 0);
 end;
 
 procedure TGraphBufGR.FillPolygon32(Points: array of TPoint; Color: Cardinal);
@@ -1816,13 +1857,13 @@ end;
 procedure TGraphBufGR.SavePng(FileName: WideString);
 begin
   LockTexture(True);
-  WritePngFile(FileName, GetPixels, PitchBytes, Width, Height, 1, 1);
+  WritePngFile(FileName, Pixels, PitchBytes, Width, Height, 1, 1);
 end;
 
 procedure TGraphBufGR.SaveBmp(FileName: WideString);
 begin
   LockTexture(True);
-  WriteBmpFile(FileName, GetPixels, PitchBytes, 32, $FF0000, $FF00, $FF, 0, Width, Height);
+  WriteBmpFile(FileName, Pixels, PitchBytes, 32, $FF0000, $FF00, $FF, 0, Width, Height);
 end;
 
 procedure TGraphBufGR.SaveJpeg(FileName: WideString; Quality: Integer);
@@ -2132,6 +2173,7 @@ begin
   Self.Width := Width;
   Self.Height := Height;
   PitchBytes := DestPitch;
+  ScreenSnapshotSize := Classes.Point(0, 0);
 end;
 
 procedure TGraphBufGR.RescaleRgbaLinear(
@@ -2269,6 +2311,7 @@ begin
   Self.Width := Width;
   Self.Height := Height;
   PitchBytes := DestPitch;
+  ScreenSnapshotSize := Classes.Point(0, 0);
 end;
 
 procedure TGraphBufGR.Crop(Rect: TRect);
@@ -2335,6 +2378,7 @@ begin
   Width := NewWidth;
   Height := NewHeight;
   PitchBytes := NewPitch;
+  ScreenSnapshotSize := Classes.Point(0, 0);
 end;
 
 procedure TGraphBufGR.AdjustBrightness(Percent: Integer);
@@ -2503,13 +2547,14 @@ begin
   Result := Texture;
 end;
 
-procedure TGraphBufGR.LoadFromScreen(UnusedOption: Byte);
+procedure TGraphBufGR.LoadFromScreen(UnusedOption: Byte; NativeResolution: Boolean);
 var
   Offscreen, RenderTarget: IDirect3DSurface9;
+  Snapshot: IDirect3DTexture9;
   Locked: TD3DLockedRect;
   Y: Cardinal;
   ErrorCode: Integer;
-  Desc: TD3DSurfaceDesc;
+  Desc, SnapshotDesc: TD3DSurfaceDesc;
 
   procedure SetRowAlpha(Pixels: Pointer; Count, Alpha: Integer);
   var
@@ -2530,6 +2575,43 @@ begin
         ErrorCode := RenderTarget.GetDesc(Desc);
         if ErrorCode = 0 then
         begin
+          if NativeResolution then
+          begin
+            Snapshot := CaptureGameGraphicsSurface(RenderTarget);
+            if Snapshot <> nil then
+            begin
+              Clear;
+              Snapshot.GetLevelDesc(0, SnapshotDesc);
+              if UseTexture then
+              begin
+                Width := SnapshotDesc.Width;
+                Height := SnapshotDesc.Height;
+                BitsPerPixel := 32;
+                BytesPerPixel := SizeOf(TColorRGBA);
+                Texture := Snapshot;
+                UsesTextureStorage := True;
+                LockTexture(True);
+                UnlockTexture;
+              end
+              else
+              begin
+                AllocateRgbaTight(SnapshotDesc.Width, SnapshotDesc.Height);
+                Snapshot.LockRect(0, Locked, nil, D3DLOCK_READONLY);
+                try
+                  for Y := 0 to Cardinal(Height) - 1 do
+                    System.Move(
+                        Pointer(AddPointerOffset(Locked.Bits, Locked.Pitch * Y))^,
+                        Pointer(AddPointerOffset(Pixels, PitchBytes * Y))^,
+                        Width * SizeOf(TColorRGBA)
+                    );
+                finally
+                  Snapshot.UnlockRect(0);
+                end;
+              end;
+              ScreenSnapshotSize := Classes.Point(Desc.Width, Desc.Height);
+              Exit;
+            end;
+          end;
           ErrorCode :=
               Direct3DDevice.CreateOffscreenPlainSurface(
                   Desc.Width,
@@ -2551,13 +2633,7 @@ begin
               BytesPerPixel := SizeOf(TColorRGBA);
               if UseTexture then
               begin
-                Texture :=
-                    GR_CreateTexture(
-                        GameScreenWidth,
-                        GameScreenHeight,
-                        D3DFMT_A8R8G8B8,
-                        D3DPOOL_MANAGED
-                    );
+                Texture := GR_CreateTexture(Width, Height, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED);
                 UsesTextureStorage := True;
                 LockTexture(False);
               end

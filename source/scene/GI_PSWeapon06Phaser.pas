@@ -66,6 +66,7 @@ procedure LoadPhaserPalettes;
 implementation
 
 uses
+  GI_Main,
   GlobalsV,
   SysUtils,
   Math,
@@ -109,10 +110,7 @@ end;
 
 procedure TPSWeapon06Phaser.UpdateHitTestBounds;
 begin
-  HitTestBounds.Left := 0;
-  HitTestBounds.Top := 0;
-  HitTestBounds.Right := GameScreenWidth;
-  HitTestBounds.Bottom := GameScreenHeight;
+  HitTestBounds := ControlViewportBounds(Self);
 end;
 
 procedure TPSWeapon06Phaser.ClearParticles;

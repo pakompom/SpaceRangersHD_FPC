@@ -60,6 +60,7 @@ procedure LoadECutterPalettes;
 implementation
 
 uses
+  GI_Main,
   GlobalsV,
   SysUtils,
   Math,
@@ -110,10 +111,7 @@ end;
 
 procedure TPSWeapon08ECutter.UpdateHitTestBounds;
 begin
-  HitTestBounds.Left := 0;
-  HitTestBounds.Top := 0;
-  HitTestBounds.Right := GameScreenWidth;
-  HitTestBounds.Bottom := GameScreenHeight;
+  HitTestBounds := ControlViewportBounds(Self);
 end;
 
 procedure TPSWeapon08ECutter.ClearParticles;

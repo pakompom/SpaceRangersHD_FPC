@@ -67,8 +67,10 @@ uses
   GI_Window,
   Globals,
   GR_Main,
+  Math,
   Types,
-  GameInput;
+  GameInput,
+  GameWindow;
 
 procedure TMessageBoxGI.OnOpen;
 var
@@ -78,7 +80,7 @@ var
   Icon, Light: TImageGI;
   TextSize, WindowSize, CandidateSize: TPoint;
   BottomMargin: Integer;
-  VerticalFactor, TargetRatio, ActualRatio: Single;
+  VerticalFactor, TargetRatio, ActualRatio, Scale: Single;
   Attempts, IconTop: Integer;
   Borders: TRect;
 begin
@@ -260,6 +262,24 @@ begin
   end;
   Light.SetPosition(Classes.Point(WindowSize.X div 2 - Light.ClientSize.X div 2, 0));
   TextSize := TextLabel.MeasureContentSize(nil);
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    FitMobileControl(
+        ContentPanel,
+        Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12)
+    );
+    // Redraw and background restoration use screen coordinates, while the
+    // fitted dialog and its children retain their original logical bounds.
+    Scale := ContentPanel.GetDisplayScale;
+    with ContentPanel.HitTestBounds do
+      ViewportRect :=
+          Classes.Rect(
+              Floor(Left * Scale),
+              Floor(Top * Scale),
+              Ceil(Right * Scale),
+              Ceil(Bottom * Scale)
+          );
+  end;
 end;
 
 procedure TMessageBoxGI.AcceptClick(Sender: TObjectGI);

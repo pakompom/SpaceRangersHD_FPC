@@ -260,6 +260,7 @@ uses
   GI_Image,
   GI_GraphButton,
   GI_Main,
+  GI_DialogueLayout,
   GI_GAI,
   EC_Str,
   SysUtils,
@@ -714,6 +715,7 @@ begin
   Row.SetPositionModeW(True);
   Row.MouseEnterCallback := ChoiceMouseEnter;
   Row.MouseLeaveCallback := ChoiceMouseLeave;
+  Row.TouchInteraction := tiTap;
   Row.LeftButtonDownCallback := ChoiceMouseDown;
   Row.LeftButtonUpCallback := ChoiceMouseUp;
   Highlight := TImageGI.Create(Row);
@@ -965,42 +967,25 @@ begin
   if PresentedTextLength >= Length(DialogText) then
   begin
     Choices := GetByName('TalkPA') as TPanelScrollBarGI;
-    Choices.SetActive(True);
-    Choices.VerticalScrollBar.SetSmallChange((GetByName('TalkText') as TLabelGI).GetLineHeight);
-    Choices.VerticalScrollBar.SetLargeChange(Choices.ClientSize.Y);
-    Choices.VerticalScrollBar.SetPageSize(Choices.ClientSize.Y);
-    Choices.SetScrollOffset(Point(0, 0));
-    Choices.SetVerticalScrollbarEnabled(ChoiceHeight > Choices.ClientSize.Y);
-    Choices.VerticalScrollBar.SetDepth(4);
-    Choices.SetDragScrollingEnabled(Choices.IsVerticalScrollbarEnabled);
-    Choices.UpdateScrollRanges;
+    ShowDialogueChoices(
+        Choices,
+        ChoiceHeight,
+        (GetByName('TalkText') as TLabelGI).GetLineHeight,
+        SavedChoiceScroll
+    );
     if TextPresentationTimer <> nil then
     begin
       CancelCallbackTimer(TextPresentationTimer);
       TextPresentationTimer := nil;
     end;
-    if SavedChoiceScroll >= 0 then
-      Choices.VerticalScrollBar.SetPosition(SavedChoiceScroll);
-    SavedChoiceScroll := -1;
     PostMouseMoveMessage;
   end
   else
   begin
     PresentedTextLength := Length(DialogText);
     DialogText := ReplaceAllWideString(DialogText, TextHighlightColorTag, DialogHighlightColorTag);
-    (GetByName('TalkText') as TLabelGI).SetText(DialogText);
     TextPanel := GetByName('TextScroll') as TPanelScrollBarGI;
-    TextPanel.SetScrollOffset(Point(0, 0));
-    TextPanel.UpdateScrollRanges;
-    TextPanel.VerticalScrollBar.SetActive(
-        (TextPanel.FindByNameRecursive('TalkText') as TLabelGI).ClientSize.Y
-            > TextPanel.ClientSize.Y
-    );
-    TextPanel.VerticalScrollBar.SetSmallChange(
-        (TextPanel.FindByNameRecursive('TalkText') as TLabelGI).GetLineHeight
-    );
-    TextPanel.VerticalScrollBar.SetLargeChange(TextPanel.ClientSize.Y);
-    TextPanel.VerticalScrollBar.SetPageSize(TextPanel.ClientSize.Y);
+    RefreshDialogueText(TextPanel, GetByName('TalkText') as TLabelGI, DialogText);
     (GetByName('UserMsgAdd') as TGraphButtonGI).SetDisabled(False);
   end;
 end;

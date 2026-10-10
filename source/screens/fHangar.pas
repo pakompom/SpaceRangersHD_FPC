@@ -117,6 +117,7 @@ uses
   aSaveLoad,
   aScript,
   GI_Main,
+  GI_Inspection,
   GI_MessageBox,
   EC_Cache,
   GR_DX,
@@ -197,91 +198,91 @@ begin
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('AnimRnd') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('AnimRepair') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('AnimFuel') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship0') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship1') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship2') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship3') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship4') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship5') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship6') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship7') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('Ship8') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     FindByNameRecursive('BGCity2').SetSize(Classes.Point(GameScreenWidth, GameScreenHeight));
@@ -290,21 +291,21 @@ begin
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('PanelUp') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('PanelDown') do
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
   end;
@@ -1477,6 +1478,7 @@ begin
       end
       else
         ShipInfoWindow.SetPosition(Classes.Point(10, 10));
+      FitMobileTooltip(ShipInfoWindow, MainPanel.ContentBounds, CursorPoint);
       Exit;
     end;
   end;

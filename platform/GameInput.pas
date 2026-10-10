@@ -5,9 +5,12 @@ unit GameInput;
 interface
 
 type
+  TGameInputSource = (gisOther, gisTouch, gisTouchHover);
+
   TGameMessage = record
     Message, WParam: Cardinal;
     LParam: Integer;
+    Source: TGameInputSource;
   end;
 
 // Message and key values used by the game UI and configuration files.
@@ -81,6 +84,17 @@ const
   WM_GAME_TOUCH_DRAG_END = $8005;
   WM_GAME_PAN_BEGIN = $8006;
   WM_GAME_CANCEL_INPUT = $8007;
+  // The host surface or its density changed; refresh Auto at a safe UI boundary.
+  WM_GAME_DISPLAY_CHANGED = $8008;
+  // Android arcade controls: fire bits in WParam, signed screen-direction axes in LParam.
+  WM_GAME_ARCADE_INPUT = $8009;
+  // Physical finger lifetime, before deferred clicks or drag routing.
+  WM_GAME_TOUCH_BEGIN = $800A;
+  WM_GAME_TOUCH_MOVE = $800B;
+  WM_GAME_TOUCH_END = $800C;
+  // Multiplicative 16.16 zoom factor in WParam; current pinch midpoint in LParam.
+  WM_GAME_PINCH = $800D;
+  WM_GAME_PAN_END = $800E;
 
   WHEEL_DELTA = 120;
   MK_MBUTTON = $10;
@@ -89,11 +103,27 @@ const
 
 function PackGamePoint(X, Y: Integer): Integer;
 function PackGamePan(X, Y: Double): Cardinal;
+function GamePointerInputIsTouch: Boolean;
+function GamePointerInputIsTouchHover: Boolean;
+
+var
+  // Scoped around message dispatch, including nested modal loops.
+  CurrentGameInputSource: TGameInputSource;
 
 implementation
 
 uses
   Math;
+
+function GamePointerInputIsTouch: Boolean;
+begin
+  Result := CurrentGameInputSource in [gisTouch, gisTouchHover];
+end;
+
+function GamePointerInputIsTouchHover: Boolean;
+begin
+  Result := CurrentGameInputSource = gisTouchHover;
+end;
 
 function PackGamePoint(X, Y: Integer): Integer;
 begin

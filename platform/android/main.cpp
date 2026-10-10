@@ -40,6 +40,19 @@ void post_input_event(Sint32 code, std::intptr_t value = 0) {
     event.user.data1 = reinterpret_cast<void *>(value);
     SDL_PushEvent(&event);
 }
+
+void arcade_controls_changed(void *, const char *, const char *, const char *value) {
+    auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+    auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (!env || !activity)
+        return;
+    const auto type = env->GetObjectClass(activity);
+    const auto method = env->GetMethodID(type, "setArcadeControls", "(I)V");
+    if (method)
+        env->CallVoidMethod(activity, method, value ? std::atoi(value) : 0);
+    env->DeleteLocalRef(type);
+    env->DeleteLocalRef(activity);
+}
 } // namespace
 
 extern "C" int SDL_main(int argc, char **argv) {
@@ -51,6 +64,8 @@ extern "C" int SDL_main(int argc, char **argv) {
             user = argv[++i];
         else if (std::strcmp(argv[i], "--touch-slop") == 0)
             SDL_SetHint("SRHD_TOUCH_SLOP", argv[++i]);
+        else if (std::strcmp(argv[i], "--ui-density") == 0)
+            SDL_SetHint("SRHD_UI_DENSITY", argv[++i]);
     }
     if (!game || !user || game[0] != '/' || user[0] != '/')
         return startup_error("The Android launcher did not provide private data directories.");
@@ -96,7 +111,9 @@ extern "C" int SDL_main(int argc, char **argv) {
             return startup_error("Cannot copy game arguments.");
         }
     }
+    SDL_AddHintCallback("SRHD_ARCADE_CONTROLS", arcade_controls_changed, nullptr);
     const int result = entry(argc, arguments);
+    SDL_DelHintCallback("SRHD_ARCADE_CONTROLS", arcade_controls_changed, nullptr);
     if (result != 0)
         startup_error(
             "The game stopped with an error. Return to the launcher and use Export saves for diagnostics.");
@@ -116,4 +133,25 @@ Java_io_github_pakompom_spacerangershd_GameActivity_nativeInputMode(JNIEnv *, jc
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_pakompom_spacerangershd_GameActivity_nativeScroll(JNIEnv *, jclass, jint direction) {
     post_input_event(0x53525343, direction); // SRSC: scroll at the game's virtual cursor.
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_pakompom_spacerangershd_GameActivity_nativeDensityChanged(JNIEnv *, jclass,
+                                                                         jint densityDpi) {
+    // SDL2 hints are not thread-safe. The game thread applies this update.
+    if (densityDpi > 0)
+        post_input_event(0x53524444, densityDpi); // SRDD: Android density, in dpi.
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_pakompom_spacerangershd_GameActivity_nativeArcadeInput(JNIEnv *, jclass,
+                                                                      jint controls, jint axes,
+                                                                      jint buttons) {
+    SDL_Event event{};
+    event.type = SDL_USEREVENT;
+    event.user.code = 0x53524143; // SRAC: screen-direction axes and fire state.
+    event.user.data1 = reinterpret_cast<void *>(static_cast<std::intptr_t>(axes));
+    event.user.data2 = reinterpret_cast<void *>(
+        static_cast<std::intptr_t>((controls & 0x7fffff00) | (buttons & 3)));
+    SDL_PushEvent(&event);
 }

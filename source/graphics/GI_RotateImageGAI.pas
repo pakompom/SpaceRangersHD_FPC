@@ -271,10 +271,10 @@ var
   Degrees, C, S, LeftX, RightX, TopY, BottomY, CenterX, CenterY: Single;
   OldClip: TRect;
 begin
-  if (HitTestBounds.Left + ClientSize.X < 0)
-      or (HitTestBounds.Left - ClientSize.X div 2 > GameScreenWidth)
-      or (HitTestBounds.Top + ClientSize.Y < 0)
-      or (HitTestBounds.Top - ClientSize.Y div 2 > GameScreenHeight) then
+  if (HitTestBounds.Right <= ClipRect.Left)
+      or (HitTestBounds.Left >= ClipRect.Right)
+      or (HitTestBounds.Bottom <= ClipRect.Top)
+      or (HitTestBounds.Top >= ClipRect.Bottom) then
     Exit;
   if HardwareRenderingEnabled then
   begin

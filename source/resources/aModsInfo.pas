@@ -273,7 +273,8 @@ var
     if DirectoryExists(NativeGamePath(AnsiString(Folder + '\CFG'))) then
     begin
       try
-        SetCurrentDir(NativeGamePath(AnsiString(Folder + '\CFG')));
+        if not SetCurrentDir(NativeGamePath(AnsiString(Folder + '\CFG'))) then
+          Exit;
 
         if SysUtils.FindFirst('*', faAnyFile, FindData) = 0 then
         begin
@@ -308,7 +309,8 @@ begin
   Block := nil;
   SavedDir := GetCurrentDir;
   try
-    SetCurrentDir(NativeGamePath(AnsiString(Folder)));
+    if not SetCurrentDir(NativeGamePath(AnsiString(Folder))) then
+      Exit(False);
     if SysUtils.FileExists('install.txt')
         or SysUtils.FileExists(NativeGamePath('CFG\Main.dat'))
         or SysUtils.FileExists(NativeGamePath('CFG\CacheData.dat')) then
@@ -457,48 +459,52 @@ var
   Index: Integer;
   FindData: TSearchRec;
 begin
-  Info := TModInfo.Create;
-  SetCurrentDir(NativeGamePath(AnsiString(Folder)));
-
-  if SysUtils.FindFirst('*', faAnyFile, FindData) = 0 then
+  // Searching an explicit path cannot fall back to the current directory when
+  // Mods is missing or unreadable. Recursive scans leave the caller's CWD alone.
+  if SysUtils.FindFirst(NativeGamePath(Folder + '\*'), faAnyFile, FindData) = 0 then
   begin
-    repeat
-      if (FindData.Attr and faDirectory) <> 0 then
-      begin
-        FileName := WideString(FindData.Name);
-        if (FileName <> '.') and (FileName <> '..') then
+    Info := nil;
+    try
+      Info := TModInfo.Create;
+      repeat
+        if (FindData.Attr and faDirectory) <> 0 then
         begin
-          Path := Folder + '\' + FileName;
-          if LoadModInfo(Path, Info) then
+          FileName := WideString(FindData.Name);
+          if (FileName <> '.') and (FileName <> '..') then
           begin
-            Info.Folder := Prefix + FileName;
-            Index := FindOrInsertModFolder(Info.Folder);
-            ModInfos[Index] := Info;
-            if Info.Name <> '' then
+            Path := Folder + '\' + FileName;
+            if LoadModInfo(Path, Info) then
             begin
-              if ModIdCounts.CountParams(Info.Name) <= 0 then
-                ModIdCounts.AddParam(Info.Name, '1')
-              else
-                ModIdCounts.SetOrAddParam(Info.Name, '0');
+              Info.Folder := Prefix + FileName;
+              Index := FindOrInsertModFolder(Info.Folder);
+              if Info.Name <> '' then
+              begin
+                if ModIdCounts.CountParams(Info.Name) <= 0 then
+                  ModIdCounts.AddParam(Info.Name, '1')
+                else
+                  ModIdCounts.SetOrAddParam(Info.Name, '0');
+              end;
+              ModInfos[Index] := Info;
+              Info := nil;
+              Info := TModInfo.Create;
+            end
+            else
+            begin
+              ChildPrefix := Prefix + FileName + '\';
+              ScanModFolders(Path, ChildPrefix);
             end;
-            Info := TModInfo.Create;
-          end
-          else
-          begin
-            ChildPrefix := Prefix + FileName + '\';
-            ScanModFolders(Path, ChildPrefix);
           end;
         end;
-      end;
-    until SysUtils.FindNext(FindData) <> 0;
-    SysUtils.FindClose(FindData);
+      until SysUtils.FindNext(FindData) <> 0;
+    finally
+      Info.Free;
+      SysUtils.FindClose(FindData);
+    end;
   end;
-  Info.Free;
 end;
 
 procedure InitializeModInfos;
 var
-  SavedDir: AnsiString;
   Folder, Name, Names, Indices: WideString;
   I, J, Index, Count: Integer;
   Info: TModInfo;
@@ -515,11 +521,8 @@ begin
     ModConflictIndex := TBlockParEC.Create;
   if ModDependencyIndex = nil then
     ModDependencyIndex := TBlockParEC.Create;
-  SavedDir := GetCurrentDir;
-  Folder := WideString(SavedDir);
-  Folder := Folder + '\Mods';
+  Folder := WideString(GetCurrentDir) + '\Mods';
   ScanModFolders(Folder, '');
-  SetCurrentDir(NativeGamePath(SavedDir));
   if SelectedMods <> '' then
   begin
     Names := SelectedMods;

@@ -22,6 +22,7 @@ type
 
   TfPanelMain = class(TObjectEx)
     Screen: TMessageLoopGI;
+    Panel: TObjectGI;
     StatusTimer: PCallbackTimerGI;
     MessagePulseTimer: PCallbackTimerGI;
     MessageSlideTimer: PCallbackTimerGI;
@@ -42,6 +43,7 @@ type
     MessagePulseStep: Integer;
     MessageSlideDirection: Integer;
     MessagePanelRestTop: Integer;
+    MessagePanelHiddenTop: Integer;
     DisplayedTurn: Integer;
     DateSlideProgress: Single;
     TargetTurn: Integer;
@@ -57,6 +59,11 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure InitializeLayout(Screen: TMessageLoopGI);
+    procedure FinalizeLayout;
+    function ContentLayoutHeight: Integer;
+    function ContentBounds: TRect;
+    procedure FitContent(Control: TObjectGI);
+    function VerticalContentOffset: Integer;
     procedure OnOpen;
     procedure OnClose;
     procedure Show;
@@ -124,6 +131,7 @@ var
 implementation
 
 uses
+  Math,
   GameWindow,
   GI_GI,
   aMyFunction,
@@ -172,71 +180,94 @@ begin
 end;
 
 procedure TfPanelMain.InitializeLayout(Screen: TMessageLoopGI);
+var
+  LayoutSize: TPoint;
+  LayoutWidth, LayoutHeight, ExtraWidth, ExtraHeight, Query: Integer;
+  ImagePath: WideString;
 begin
   Self.Screen := Screen;
+  Panel := Screen.GetByName('PanelMain');
+  LayoutSize := GetMobileHudLayoutSize;
+  LayoutWidth := LayoutSize.X;
+  LayoutHeight := LayoutSize.Y;
+  ExtraWidth := LayoutWidth - 1024;
+  ExtraHeight := LayoutHeight - 768;
+  Panel.DisplayScale := Min(GameScreenWidth / LayoutWidth, GameScreenHeight / LayoutHeight);
   AppendLogTextThreadSafe('fPanelMain... ');
-  with Self.Screen.GetByName('PanelMain') do
+  with Panel do
   begin
-    SetSize(Classes.Point(GameScreenWidth, GameScreenHeight));
+    SetSize(Classes.Point(LayoutWidth, LayoutHeight));
     with FindByNameRecursive('PM_PanelMsg') do
     begin
-      SetSize(Classes.Point(ClientSize.X + ExtraScreenWidth, ClientSize.Y));
-      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y + ExtraScreenHeight));
+      SetSize(Classes.Point(ClientSize.X + ExtraWidth, ClientSize.Y));
+      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y + ExtraHeight));
     end;
     with FindByNameRecursive('PM_WinMsg') do
     begin
-      SetSize(Classes.Point(ClientSize.X + ExtraScreenWidth, ClientSize.Y));
-      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y + ExtraScreenHeight));
+      SetSize(Classes.Point(ClientSize.X + ExtraWidth, ClientSize.Y));
+      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y + ExtraHeight));
     end;
     with FindByNameRecursive('PM_Ship').Parent do
     begin
-      SetSize(Classes.Point(GameScreenWidth, ClientSize.Y));
-      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y + ExtraScreenHeight));
+      SetSize(Classes.Point(LayoutWidth, ClientSize.Y));
+      SetPosition(Classes.Point(LocalPosition.X, LocalPosition.Y + ExtraHeight));
       with FindByNameRecursive('PM_ImageBG') as TImageGI do
       begin
         SetPosition(Classes.Point(0, 0));
-        SetSize(Classes.Point(GameScreenWidth, ClientSize.Y));
+        SetSize(Classes.Point(LayoutWidth, ClientSize.Y));
       end;
       with FindByNameRecursive('PM_Ship') do
-        SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
+        SetPosition(Classes.Point(LocalPosition.X + ExtraWidth, LocalPosition.Y));
       with FindByNameRecursive('PM_Gal') do
-        SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
+        SetPosition(Classes.Point(LocalPosition.X + ExtraWidth, LocalPosition.Y));
       with FindByNameRecursive('PM_Quest') do
-        SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
+        SetPosition(Classes.Point(LocalPosition.X + ExtraWidth, LocalPosition.Y));
       with FindByNameRecursive('PM_EndTurn') as TGraphButtonGI do
         if GiResourceVariant = 2 then
-          SetPosition(Classes.Point(899 + ExtraScreenWidth, 33))
+          SetPosition(Classes.Point(899 + ExtraWidth, 33))
         else
-          SetPosition(Classes.Point(702 + ExtraScreenWidth, 25));
+          SetPosition(Classes.Point(702 + ExtraWidth, 25));
       with FindByNameRecursive('PM_Break') as TGraphButtonGI do
         if GiResourceVariant = 2 then
-          SetPosition(Classes.Point(899 + ExtraScreenWidth, 33))
+          SetPosition(Classes.Point(899 + ExtraWidth, 33))
         else
-          SetPosition(Classes.Point(702 + ExtraScreenWidth, 25));
+          SetPosition(Classes.Point(702 + ExtraWidth, 25));
       with FindByNameRecursive('PM_Logo') do
         if GiResourceVariant = 2 then
           SetPosition(Classes.Point(0, 42))
         else
           SetPosition(Classes.Point(3, 32));
       with FindByNameRecursive('PM_WarningSpace') do
-        SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
+        SetPosition(Classes.Point(LocalPosition.X + ExtraWidth, LocalPosition.Y));
       with FindByNameRecursive('PM_WarningMoney') do
-        SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
+        SetPosition(Classes.Point(LocalPosition.X + ExtraWidth, LocalPosition.Y));
       with FindByNameRecursive('PM_Money') do
-        SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
+        SetPosition(Classes.Point(LocalPosition.X + ExtraWidth, LocalPosition.Y));
       with FindByNameRecursive('PM_FreeSpace') do
-        SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
+        SetPosition(Classes.Point(LocalPosition.X + ExtraWidth, LocalPosition.Y));
       with FindByNameRecursive('PM_Help') do
-        SetSize(Classes.Point(ClientSize.X + ExtraScreenWidth, ClientSize.Y));
+        SetSize(Classes.Point(ClientSize.X + ExtraWidth, ClientSize.Y));
       with FindByNameRecursive('PM_PanelDate') do
-        SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth, LocalPosition.Y));
+        SetPosition(Classes.Point(LocalPosition.X + ExtraWidth, LocalPosition.Y));
     end;
   end;
   AppendLogLineThreadSafe('ok');
   MessagePanel := Self.Screen.GetByName('PM_PanelMsg') as TPanelGI;
   MessagePanelRestTop := MessagePanel.LocalPosition.Y;
+  MessagePanelHiddenTop := LayoutHeight - 5;
   HelpLabel := Self.Screen.GetByName('PM_Help') as TLabelGI;
   BackgroundImage := Self.Screen.GetByName('PM_ImageBG') as TImageGI;
+  if (LayoutWidth <> GameScreenWidth) or (LayoutHeight <> GameScreenHeight) then
+  begin
+    // The enlarged HUD must not share its resized background with full panels.
+    ImagePath := BackgroundImage.GetImagePath;
+    Query := Pos('?', ImagePath);
+    if Query > 0 then
+      SetLength(ImagePath, Query - 1);
+    BackgroundImage.SetImagePath(
+        ImagePath + '?mobile-hud=' + IntToStr(LayoutWidth) + ',' + IntToStr(LayoutHeight)
+    );
+  end;
   ShipButton := Self.Screen.GetByName('PM_Ship') as TGraphButtonGI;
   GalaxyButton := Self.Screen.GetByName('PM_Gal') as TGraphButtonGI;
   QuestButton := Self.Screen.GetByName('PM_Quest') as TGraphButtonGI;
@@ -253,6 +284,75 @@ begin
   Self.Screen.SetHelpCallback(ShowControlHelp);
   CurrentDateColor := GetStyleColorGI('PanelMain.TextColor', 200, 240, 255);
   AdvancingDateColor := GetStyleColorGI('PanelMain.DateTransitionColor', 6, 166, 198);
+end;
+
+procedure TfPanelMain.FinalizeLayout;
+var
+  Delta: TPoint;
+
+  procedure AlignBarPart(const Name: WideString; RightAligned: Boolean);
+  var
+    Control: TObjectGI;
+  begin
+    Control := Screen.FindControlByPath(Name);
+    if Control = nil then
+      Exit;
+    // Planet/station navigation and transaction labels are siblings of the
+    // common bar in the original layouts. Keep their depth and callbacks.
+    Control.DisplayScale := Panel.DisplayScale;
+    if RightAligned then
+      Control.SetPosition(
+          Classes.Point(Control.LocalPosition.X + Delta.X, Control.LocalPosition.Y + Delta.Y)
+      )
+    else
+      Control
+          .SetPosition(Classes.Point(Control.LocalPosition.X, Control.LocalPosition.Y + Delta.Y));
+  end;
+
+begin
+  if Panel.DisplayScale = 1 then
+    Exit;
+  Screen.RootUiObject.UpdateAbsolutePosition;
+  Panel.SetPosition(
+      Classes.Point(-Panel.Parent.AbsolutePosition.X, -Panel.Parent.AbsolutePosition.Y)
+  );
+  Delta :=
+      Classes.Point(Panel.ClientSize.X - GameScreenWidth, Panel.ClientSize.Y - GameScreenHeight);
+  AlignBarPart('PanelPlanet', True);
+  AlignBarPart('PanelPlanetNO', True);
+  AlignBarPart('PanelRuins', True);
+  AlignBarPart('ADD_WarningSpace', True);
+  AlignBarPart('ADD_WarningMoney', True);
+  AlignBarPart('ADD_Space', True);
+  AlignBarPart('ADD_Money', True);
+  AlignBarPart('GS_Help', False);
+end;
+
+function TfPanelMain.ContentLayoutHeight: Integer;
+begin
+  Result := GameScreenHeight - Round(ShipButton.Parent.ClientSize.Y * (Panel.DisplayScale - 1));
+end;
+
+function TfPanelMain.ContentBounds: TRect;
+begin
+  Result :=
+      Classes.Rect(0, 0, GameScreenWidth, ContentLayoutHeight - ShipButton.Parent.ClientSize.Y);
+end;
+
+procedure TfPanelMain.FitContent(Control: TObjectGI);
+var
+  Bounds: TRect;
+begin
+  Bounds := ContentBounds;
+  InflateRect(Bounds, -10, -10);
+  FitMobileControl(Control, Bounds, 1.5);
+end;
+
+function TfPanelMain.VerticalContentOffset: Integer;
+begin
+  // Keep the original centered layout, reserving the additional height taken
+  // by the shared mobile bar. Content moves; its artwork and hitboxes keep scale.
+  Result := (ContentLayoutHeight - 768) div 2;
 end;
 
 procedure TfPanelMain.OnOpen;
@@ -1289,7 +1389,7 @@ begin
     Screen.CancelCallbackTimer(MessageSlideTimer);
     MessageSlideTimer := nil;
   end;
-  if MessagePanel.LocalPosition.Y < GameScreenHeight - 5 then
+  if MessagePanel.LocalPosition.Y < MessagePanelHiddenTop then
     MessageSlideTimer := Screen.ScheduleCallbackTimer(10, 10, AdvanceMessageSlide);
 end;
 
@@ -1315,7 +1415,7 @@ begin
   end
   else
   begin
-    if MessagePanel.LocalPosition.Y >= GameScreenHeight - 5 then
+    if MessagePanel.LocalPosition.Y >= MessagePanelHiddenTop then
     begin
       if MessageSlideTimer <> nil then
       begin

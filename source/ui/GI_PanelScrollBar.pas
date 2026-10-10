@@ -41,6 +41,9 @@ type
     procedure SetUnlimitedWorldEnabled(Value: Boolean);
     procedure UpdateScrollbarPlacement;
     procedure UpdateScrollRanges;
+    function CanTouchScroll: Boolean;
+    function GetTouchInteraction: TTouchInteractionGI; override;
+    procedure ScrollByTouch(DX, DY: Double; var RemainderX, RemainderY: Double); override;
     procedure ScrollbarPositionChanged(Sender: TObjectGI);
     procedure PanelScrollChanged(Sender: TObjectGI);
     procedure ScrollbarDestroyed(Sender: TObjectGI);
@@ -55,6 +58,17 @@ uses
   EC_Struct,
   GI_Main,
   GR_Main;
+
+function TouchScrollAxisEnabled(Panel: TPanelScrollBarGI; Bar: TScrollBarGI): Boolean;
+begin
+  Result :=
+      (Bar <> nil)
+          and (Bar.Active or Panel.DragScrollingEnabled)
+          and ((Panel.ScrollAxis = psaBoth)
+              or ((Panel.ScrollAxis = psaHorizontal) and (Bar = Panel.HorizontalScrollBar))
+              or ((Panel.ScrollAxis = psaVertical) and (Bar = Panel.VerticalScrollBar)))
+          and (Bar.Maximum - Bar.Minimum + 1 > Bar.PageSize);
+end;
 
 constructor TPanelScrollBarGI.Create(Owner: TObjectGI);
 begin
@@ -313,6 +327,73 @@ end;
 procedure TPanelScrollBarGI.ScrollbarPositionChanged(Sender: TObjectGI);
 begin
   SetScrollOffset(Classes.Point(HorizontalScrollBar.Position, VerticalScrollBar.Position));
+end;
+
+function TPanelScrollBarGI.GetTouchInteraction: TTouchInteractionGI;
+begin
+  if CanTouchScroll then
+    Result := tiScroll
+  else
+    Result := inherited GetTouchInteraction;
+end;
+
+function TPanelScrollBarGI.CanTouchScroll: Boolean;
+begin
+  Result :=
+      TouchScrollAxisEnabled(Self, HorizontalScrollBar)
+          or TouchScrollAxisEnabled(Self, VerticalScrollBar);
+end;
+
+procedure TPanelScrollBarGI.ScrollByTouch(DX, DY: Double; var RemainderX, RemainderY: Double);
+var
+  Offset: TPoint;
+
+  procedure MoveAxis(
+      Bar: TScrollBarGI;
+      Delta: Double;
+      var Remainder: Double;
+      var Position: Integer
+  );
+  var
+    Pixels, Requested, LastPosition: Integer;
+  begin
+    if not TouchScrollAxisEnabled(Self, Bar) then
+    begin
+      Remainder := 0;
+      Exit;
+    end;
+    LastPosition := Bar.Maximum;
+    if Bar.CalculationMode <> 0 then
+      LastPosition := LastPosition - Bar.PageSize + 1;
+    // Discard even sub-pixel movement against an edge. Otherwise reversing a
+    // slow finger first has to consume a hidden fraction left by the overscroll.
+    if ((Position <= Bar.Minimum) and (Delta < 0))
+        or ((Position >= LastPosition) and (Delta > 0)) then
+    begin
+      Remainder := 0;
+      Exit;
+    end;
+    Remainder := Remainder + Delta;
+    Pixels := Trunc(Remainder);
+    Remainder := Remainder - Pixels;
+    Requested := Position + Pixels;
+    Bar.SetPositionInternal(Requested);
+    Position := Bar.Position;
+    // Do not accumulate movement beyond an edge: reversing the finger should
+    // move the content immediately, even after a long drag against the limit.
+    if Position <> Requested then
+      Remainder := 0;
+  end;
+
+begin
+  Offset := ScrollOffset;
+  MoveAxis(HorizontalScrollBar, DX, RemainderX, Offset.X);
+  MoveAxis(VerticalScrollBar, DY, RemainderY, Offset.Y);
+  if (Offset.X = ScrollOffset.X) and (Offset.Y = ScrollOffset.Y) then
+    Exit;
+  SetScrollOffset(Offset);
+  if Assigned(ScrollChangedCallback) then
+    ScrollChangedCallback(Self);
 end;
 
 procedure TPanelScrollBarGI.PanelScrollChanged(Sender: TObjectGI);

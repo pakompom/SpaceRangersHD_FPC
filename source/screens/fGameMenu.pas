@@ -75,6 +75,10 @@ begin
           )
       );
   end;
+  FitMobileControl(
+      GetByName('Resume').Parent,
+      Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12)
+  );
   AppendLogLineThreadSafe('ok');
   GetByName('MainPanel').LeftButtonUpCallback := BackgroundMouseUp;
   with GetByName('Resume') as TGraphButtonGI do

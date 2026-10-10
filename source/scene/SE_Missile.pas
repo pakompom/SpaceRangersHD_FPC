@@ -39,6 +39,7 @@ type
 implementation
 
 uses
+  GI_Main,
   aMyFunction,
   SysUtils,
   EC_Str,
@@ -141,14 +142,8 @@ begin
 end;
 
 procedure TMissileSE.AdvanceAnimationTimer(Timer: PSpaceTimerSE; UserData: Integer);
-var
-  Bounds: PRect;
 begin
-  Bounds := @Image.HitTestBounds;
-  if (Cardinal(GameScreenWidth) * -0.1 <= Bounds.Right)
-      and (Cardinal(GameScreenWidth) * 1.1 >= Bounds.Left)
-      and (Cardinal(GameScreenHeight) * -0.1 <= Bounds.Bottom)
-      and (Cardinal(GameScreenHeight) * 1.1 >= Bounds.Top) then
+  if ControlIntersectsViewport(Image, 0.1) then
   begin
     Image.SetFrameIndex(Image.FrameIndex + 1);
     if Integer(Image.GetFrameCount) <= Integer(Image.FrameIndex) then

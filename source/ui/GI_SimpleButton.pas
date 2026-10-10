@@ -41,6 +41,7 @@ uses
 constructor TSimpleButtonGI.Create(Owner: TObjectGI);
 begin
   inherited Create(Owner);
+  TouchInteraction := tiTap;
   NormalImage := TCBitmapControlEC.Create;
   GlobalCache.ResetControl(NormalImage);
   ActiveImage := TCBitmapControlEC.Create;
@@ -77,12 +78,16 @@ end;
 
 procedure TSimpleButtonGI.ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint);
 begin
+  if not AllowsTouchActivation then
+    Exit;
   inherited ProcessLeftButtonDown(KeyState, Point);
   DispatchNamedEvent(1, Point.X, Point.Y);
 end;
 
 procedure TSimpleButtonGI.ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint);
 begin
+  if not AllowsTouchActivation then
+    Exit;
   inherited ProcessLeftButtonUp(KeyState, Point);
   DispatchNamedEvent(2, Point.X, Point.Y);
 end;

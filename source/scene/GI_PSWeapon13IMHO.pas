@@ -60,6 +60,7 @@ procedure LoadIMHOPalettes;
 implementation
 
 uses
+  GI_Main,
   GlobalsV,
   SysUtils,
   Math,
@@ -110,10 +111,7 @@ end;
 
 procedure TPSWeapon13IMHO.UpdateHitTestBounds;
 begin
-  HitTestBounds.Left := 0;
-  HitTestBounds.Top := 0;
-  HitTestBounds.Right := GameScreenWidth;
-  HitTestBounds.Bottom := GameScreenHeight;
+  HitTestBounds := ControlViewportBounds(Self);
 end;
 
 procedure TPSWeapon13IMHO.ClearParticles;

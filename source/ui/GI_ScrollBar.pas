@@ -6,6 +6,7 @@ interface
 
 uses
   EC_BlockPar,
+  GI_Frame,
   GI_Image,
   GI_Label,
   GI_MessageLoop,
@@ -17,6 +18,10 @@ type
   TScrollBarGI = class;
 
   TScrollBarGI = class(TPanelGI)
+  private
+    Indicator: TFrameGI;
+    IndicatorThickness: Integer;
+  public
     Minimum: Integer;
     Maximum: Integer;
     Position: Integer;
@@ -76,6 +81,7 @@ type
     procedure SetKindCalcMode(Value: Integer);
     procedure UpdateLayout;
     procedure UpdateSizeForOrientation;
+    procedure SetIndicatorThickness(Value: Integer);
     procedure StartAutoRepeat(DelayMs: Integer; RepeatMs: Integer);
     procedure StopAutoRepeat;
     procedure AutoRepeat(Timer: PCallbackTimerGI; UserData: PtrInt);
@@ -86,6 +92,7 @@ implementation
 
 uses
   Classes,
+  Math,
   GI_Main,
   GR_Main,
   SysUtils;
@@ -93,6 +100,7 @@ uses
 constructor TScrollBarGI.Create(Owner: TObjectGI);
 begin
   inherited Create(Owner);
+  TouchInteraction := tiDrag;
   RepeatTimer := nil;
   UpImages[0] := TImageGI.Create(Self);
   UpImages[0].SetDepth(1);
@@ -174,6 +182,8 @@ end;
 
 procedure TScrollBarGI.Clear;
 begin
+  FreeAndNil(Indicator);
+  IndicatorThickness := 0;
   Minimum := 0;
   Maximum := 99;
   Position := 0;
@@ -262,6 +272,8 @@ function TScrollBarGI.GetHitRegion(Point: TPoint): Integer;
 var
   UpEnd, ThumbStart, ThumbEnd, DownStart: Integer;
 begin
+  if Indicator <> nil then
+    Exit(0);
   if Orientation = 1 then
   begin
     UpEnd := UpImages[0].ClientSize.X;
@@ -474,6 +486,8 @@ end;
 procedure TScrollBarGI.SetConfigPath(const Path: WideString);
 begin
   inherited SetConfigPath(Path);
+  if Indicator <> nil then
+    UpdateSizeForOrientation;
   if Active = True then
   begin
     UpdateLayout;
@@ -499,6 +513,43 @@ procedure TScrollBarGI.UpdateLayout;
 var
   X, Y, TrackLength, BeforeLength, ThumbLength, AfterLength, MinimumThumbLength: Integer;
 begin
+  if Indicator <> nil then
+  begin
+    if Orientation = 1 then
+      TrackLength := ClientSize.X
+    else
+      TrackLength := ClientSize.Y;
+    Indicator.SetActive((TrackLength > 0) and (Maximum - Minimum + 1 > PageSize));
+    if Indicator.Active then
+    begin
+      ThumbLength :=
+          Min(
+              TrackLength,
+              Max(12, Round(Double(PageSize) / (Maximum - Minimum + 1) * TrackLength))
+          );
+      if CalculationMode = 0 then
+        AfterLength := Maximum - Minimum
+      else
+        AfterLength := Maximum - Minimum + 1 - PageSize;
+      BeforeLength :=
+          Round(
+              Double(EnsureRange(Position - Minimum, 0, AfterLength))
+                  / Max(1, AfterLength)
+                  * (TrackLength - ThumbLength)
+          );
+      if Orientation = 1 then
+      begin
+        Indicator.SetPosition(Classes.Point(BeforeLength, 0));
+        Indicator.SetSize(Classes.Point(ThumbLength, IndicatorThickness));
+      end
+      else
+      begin
+        Indicator.SetPosition(Classes.Point(0, BeforeLength));
+        Indicator.SetSize(Classes.Point(IndicatorThickness, ThumbLength));
+      end;
+    end;
+    Exit;
+  end;
   if Active then
   begin
     if (Orientation = 1) then
@@ -872,15 +923,54 @@ end;
 
 procedure TScrollBarGI.UpdateSizeForOrientation;
 begin
-  if Orientation = 1 then
+  if Indicator <> nil then
+  begin
+    if Orientation = 1 then
+      SetSize(Classes.Point(ClientSize.X, IndicatorThickness))
+    else
+      SetSize(Classes.Point(IndicatorThickness, ClientSize.Y));
+  end
+  else if Orientation = 1 then
     SetSize(Classes.Point(ClientSize.X, UpImages[0].ClientSize.Y))
   else
     SetSize(Classes.Point(UpImages[0].ClientSize.X, ClientSize.Y));
 end;
 
+procedure TScrollBarGI.SetIndicatorThickness(Value: Integer);
+var
+  Child: TObjectGI;
+begin
+  Value := Max(0, Value);
+  if IndicatorThickness = Value then
+    Exit;
+  CancelPointerInput;
+  IndicatorThickness := Value;
+  if Value = 0 then
+    FreeAndNil(Indicator)
+  else if Indicator = nil then
+  begin
+    Child := FirstChild;
+    while Child <> nil do
+    begin
+      Child.SetActive(False);
+      Child := Child.NextSibling;
+    end;
+    Indicator := TFrameGI.Create(Self);
+    Indicator.SetFill(True);
+    Indicator.SetFillColor(GetColorGI('126,148,151'));
+  end;
+  // Touch scrolling belongs to the content; this only shows its position.
+  SetHitTestDisabled(Value > 0);
+  UpdateSizeForOrientation;
+  Invalidate;
+end;
+
 procedure TScrollBarGI.ProcessMouseMove(KeyState: Cardinal; Point: TPoint);
+var
+  LogicalPoint: TPoint;
 begin
   inherited ProcessMouseMove(KeyState, Point);
+  LogicalPoint := ScreenToLogicalPoint(Point);
   if PressedRegion = 5 then
   begin
     if Orientation = 1 then
@@ -898,7 +988,7 @@ begin
                                 - ThumbCenterImages[0].ClientSize.X
                                 - ThumbTopImages[0].ClientSize.X
                                 - ThumbBottomImages[0].ClientSize.X)
-                            * (Point.X - HitTestBounds.Left - UpImages[0].ClientSize.X)
+                            * (LogicalPoint.X - HitTestBounds.Left - UpImages[0].ClientSize.X)
                     ))
                 + DragStartPosition
         )
@@ -908,7 +998,7 @@ begin
                     Trunc(
                         (Maximum - Minimum)
                             / (ClientSize.X - UpImages[0].ClientSize.X - DownImages[0].ClientSize.X)
-                            * (Point.X - HitTestBounds.Left - UpImages[0].ClientSize.X)
+                            * (LogicalPoint.X - HitTestBounds.Left - UpImages[0].ClientSize.X)
                     ))
                 + DragStartPosition
         );
@@ -928,7 +1018,7 @@ begin
                                 - ThumbCenterImages[0].ClientSize.Y
                                 - ThumbTopImages[0].ClientSize.Y
                                 - ThumbBottomImages[0].ClientSize.Y)
-                            * (Point.Y - HitTestBounds.Top - UpImages[0].ClientSize.Y)
+                            * (LogicalPoint.Y - HitTestBounds.Top - UpImages[0].ClientSize.Y)
                     ))
                 + DragStartPosition
         )
@@ -938,7 +1028,7 @@ begin
                     Trunc(
                         (Maximum - Minimum)
                             / (ClientSize.Y - UpImages[0].ClientSize.Y - DownImages[0].ClientSize.Y)
-                            * (Point.Y - HitTestBounds.Top - UpImages[0].ClientSize.Y)
+                            * (LogicalPoint.Y - HitTestBounds.Top - UpImages[0].ClientSize.Y)
                     ))
                 + DragStartPosition
         );
@@ -967,8 +1057,11 @@ begin
 end;
 
 procedure TScrollBarGI.ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint);
+var
+  LogicalPoint: TPoint;
 begin
   inherited ProcessLeftButtonDown(KeyState, Point);
+  LogicalPoint := ScreenToLogicalPoint(Point);
   if Active then
     MessageLoop.SetFocusedControl(Self);
   HoveredRegion := GetHitRegion(ToLocalPoint(Point));
@@ -1012,7 +1105,7 @@ begin
                                 - ThumbCenterImages[0].ClientSize.X
                                 - ThumbTopImages[0].ClientSize.X
                                 - ThumbBottomImages[0].ClientSize.X)
-                            * (Point.X - HitTestBounds.Left - UpImages[0].ClientSize.X)
+                            * (LogicalPoint.X - HitTestBounds.Left - UpImages[0].ClientSize.X)
                     ))
       else
         DragStartPosition :=
@@ -1021,7 +1114,7 @@ begin
                     Trunc(
                         (Maximum - Minimum)
                             / (ClientSize.X - UpImages[0].ClientSize.X - DownImages[0].ClientSize.X)
-                            * (Point.X - HitTestBounds.Left - UpImages[0].ClientSize.X)
+                            * (LogicalPoint.X - HitTestBounds.Left - UpImages[0].ClientSize.X)
                     ));
     end
     else
@@ -1038,7 +1131,7 @@ begin
                                 - ThumbCenterImages[0].ClientSize.Y
                                 - ThumbTopImages[0].ClientSize.Y
                                 - ThumbBottomImages[0].ClientSize.Y)
-                            * (Point.Y - HitTestBounds.Top - UpImages[0].ClientSize.Y)
+                            * (LogicalPoint.Y - HitTestBounds.Top - UpImages[0].ClientSize.Y)
                     ))
       else
         DragStartPosition :=
@@ -1047,7 +1140,7 @@ begin
                     Trunc(
                         (Maximum - Minimum)
                             / (ClientSize.Y - UpImages[0].ClientSize.Y - DownImages[0].ClientSize.Y)
-                            * (Point.Y - HitTestBounds.Top - UpImages[0].ClientSize.Y)
+                            * (LogicalPoint.Y - HitTestBounds.Top - UpImages[0].ClientSize.Y)
                     ));
     end;
   end;

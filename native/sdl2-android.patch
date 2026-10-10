@@ -1,0 +1,103 @@
+--- a/src/core/android/SDL_android.c
++++ b/src/core/android/SDL_android.c
+@@ -892,7 +892,10 @@
+     SDL_LockMutex(Android_ActivityMutex);
+ 
+     if (Android_Window) {
+-        Android_SendResize(Android_Window);
++        SDL_VideoData *videodata = (SDL_VideoData *)SDL_GetVideoDevice()->driverdata;
++        /* Renderer resize watches can flush GL commands. Run them on the game
++         * thread, after its EGL context has been restored, not this UI thread. */
++        videodata->resizePending = SDL_TRUE;
+     }
+ 
+     SDL_UnlockMutex(Android_ActivityMutex);
+--- a/src/video/android/SDL_androidvideo.h
++++ b/src/video/android/SDL_androidvideo.h
+@@ -40,6 +40,7 @@
+     int isPaused;
+     int isPausing;
+     int pauseAudio;
++    SDL_bool resizePending; /* Protected by Android_ActivityMutex. */
+ } SDL_VideoData;
+ 
+ extern int Android_SurfaceWidth;
+--- a/src/video/android/SDL_androidevents.c
++++ b/src/video/android/SDL_androidevents.c
+@@ -100,6 +100,20 @@
+ }
+ #endif
+ 
++static void Android_PumpResizeEvents(_THIS)
++{
++    SDL_VideoData *videodata = (SDL_VideoData *)_this->driverdata;
++    if (videodata->isPaused || videodata->isPausing || SDL_HasEvent(SDL_QUIT)) {
++        return;
++    }
++    SDL_LockMutex(Android_ActivityMutex);
++    if (videodata->resizePending) {
++        videodata->resizePending = SDL_FALSE;
++        Android_SendResize(Android_Window);
++    }
++    SDL_UnlockMutex(Android_ActivityMutex);
++}
++
+ /*
+  * Android_ResumeSem and Android_PauseSem are signaled from Java_org_libsdl_app_SDLActivity_nativePause and Java_org_libsdl_app_SDLActivity_nativeResume
+  * When the pause semaphore is signaled, if Android_PumpEvents_Blocking is used, the event loop will block until the resume signal is emitted.
+@@ -134,7 +148,6 @@
+             /* Android_ResumeSem was signaled */
+             SDL_SendAppEvent(SDL_APP_WILLENTERFOREGROUND);
+             SDL_SendAppEvent(SDL_APP_DIDENTERFOREGROUND);
+-            SDL_SendWindowEvent(Android_Window, SDL_WINDOWEVENT_RESTORED, 0, 0);
+ 
+             ANDROIDAUDIO_ResumeDevices();
+             openslES_ResumeDevices();
+@@ -148,6 +161,10 @@
+                 SDL_UnlockMutex(Android_ActivityMutex);
+             }
+ #endif
++
++            /* Refresh the mode before RESTORED can reapply the old fullscreen size. */
++            Android_PumpResizeEvents(_this);
++            SDL_SendWindowEvent(Android_Window, SDL_WINDOWEVENT_RESTORED, 0, 0);
+ 
+             /* Make sure SW Keyboard is restored when an app becomes foreground */
+             Android_RestoreScreenKeyboardOnResume(_this, Android_Window);
+@@ -174,6 +191,8 @@
+         }
+     }
+ 
++    Android_PumpResizeEvents(_this);
++
+     if (aaudio_DetectBrokenPlayState()) {
+         aaudio_PauseDevices();
+         aaudio_ResumeDevices();
+@@ -214,7 +233,6 @@
+             /* Android_ResumeSem was signaled */
+             SDL_SendAppEvent(SDL_APP_WILLENTERFOREGROUND);
+             SDL_SendAppEvent(SDL_APP_DIDENTERFOREGROUND);
+-            SDL_SendWindowEvent(Android_Window, SDL_WINDOWEVENT_RESTORED, 0, 0);
+ 
+             if (videodata->pauseAudio) {
+                 ANDROIDAUDIO_ResumeDevices();
+@@ -230,6 +248,10 @@
+                 SDL_UnlockMutex(Android_ActivityMutex);
+             }
+ #endif
++
++            /* Refresh the mode before RESTORED can reapply the old fullscreen size. */
++            Android_PumpResizeEvents(_this);
++            SDL_SendWindowEvent(Android_Window, SDL_WINDOWEVENT_RESTORED, 0, 0);
+ 
+             /* Make sure SW Keyboard is restored when an app becomes foreground */
+             Android_RestoreScreenKeyboardOnResume(_this, Android_Window);
+@@ -257,6 +279,8 @@
+         }
+     }
+ 
++    Android_PumpResizeEvents(_this);
++
+     if (aaudio_DetectBrokenPlayState()) {
+         aaudio_PauseDevices();
+         aaudio_ResumeDevices();

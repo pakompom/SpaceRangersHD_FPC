@@ -435,6 +435,11 @@ begin
     Exit;
   if not Active then
     Exit;
+  if GetDisplayScale <> 1 then
+  begin
+    MessageLoop.InvalidateViewport;
+    Exit;
+  end;
   if not IntersectRects(Bounds, HitTestBounds, GameScreenRect) then
     Exit;
   Dec(Bounds.Left, AbsolutePosition.X);

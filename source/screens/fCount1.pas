@@ -100,10 +100,15 @@ begin
           )
       );
   end;
+  FitMobileControl(
+      GetByName('Ok').Parent,
+      Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12)
+  );
 end;
 
 procedure TfCount1.OnOpen;
 begin
+  (GetByName('BGBuf') as TGraphBufGI).GraphBuf.LoadFromScreen(0, True);
   Dragging := False;
   with GetByName('ItemImage') as TImageGI do
   begin
@@ -113,16 +118,19 @@ begin
     SetActive(True);
   end;
   (GetByName('Caption') as TLabelGI).SetText(Caption);
-  (GetByName('BGBuf') as TGraphBufGI).BindExternalGraphBuf(AuxRenderBuffer);
   with GetByName('Add') as TGraphButtonGI do
   begin
     DownCallback := AddPressed;
     UpCallback := AddReleased;
+    TouchHold := True;
+    TouchCancelCallback := AddReleased;
   end;
   with GetByName('Sub') as TGraphButtonGI do
   begin
     DownCallback := SubPressed;
     UpCallback := SubReleased;
+    TouchHold := True;
+    TouchCancelCallback := SubReleased;
   end;
   (GetByName('Max') as TGraphButtonGI).UpCallback := MaxClicked;
   (GetByName('Ok') as TGraphButtonGI).UpCallback := AcceptClicked;
@@ -403,7 +411,6 @@ begin
   Parent.CaptureCursorState(@State);
   Parent.SetCursorActive(False);
   Parent.DrawQueuedUpdateRects;
-  CaptureScreenBackground(False, 0);
   Dialog := TfCount1.Create;
   Dialog.ParentLoop := Parent;
   Parent.ChildLoop := Dialog;

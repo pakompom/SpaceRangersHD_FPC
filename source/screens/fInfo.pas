@@ -230,7 +230,7 @@ end;
 
 procedure TfInfo.InitializeLayout;
 var
-  ExtraHeight: Integer;
+  ExtraHeight, ContentExtraHeight: Integer;
 begin
   inherited InitializeLayout;
   MainPanel.InitializeLayout(Self);
@@ -244,7 +244,8 @@ begin
     SetSize(Types.Point(GameScreenWidth, GameScreenHeight));
     FindByNameRecursive('BGCity2').SetSize(Types.Point(GameScreenWidth, GameScreenHeight));
     FindByNameRecursive('BGCity').SetSize(Types.Point(GameScreenWidth, GameScreenHeight));
-    ExtraHeight := Min(Max(ExtraScreenHeight, 0), 432) div 3 * 3;
+    ContentExtraHeight := MainPanel.ContentLayoutHeight - 768;
+    ExtraHeight := Min(ContentExtraHeight, 432) div 3 * 3;
     with FindByNameRecursive('ButFormClose') do
     begin
       SetPosition(Types.Point(LocalPosition.X, LocalPosition.Y + ExtraHeight));
@@ -253,12 +254,18 @@ begin
         SetPosition(
             Types.Point(
                 LocalPosition.X + ExtraScreenWidth div 2,
-                LocalPosition.Y + (Max(ExtraScreenHeight, 0) - ExtraHeight) div 2
+                LocalPosition.Y + (ContentExtraHeight - ExtraHeight) div 2
             )
         );
         SetSize(Types.Point(ClientSize.X, ClientSize.Y + ExtraHeight));
-        with FirstChild.NextSibling do
+        with FirstChild.NextSibling as TImageGI do
         begin
+          SetImagePath(
+              'GI,Bm.FormInfo3.'
+                  + GiResourceSuffix
+                  + 'BG?content-height='
+                  + IntToStr(MainPanel.ContentLayoutHeight)
+          );
           SetSize(Types.Point(ClientSize.X, ClientSize.Y + ExtraHeight));
           with NextSibling do
             SetPosition(Types.Point(LocalPosition.X, LocalPosition.Y + ExtraHeight));

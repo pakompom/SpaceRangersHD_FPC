@@ -8,7 +8,9 @@ uses
   EC_BlockPar,
   EC_CacheFont,
   GI_Label,
+  GI_GraphButton,
   GI_MessageLoop,
+  QuestArtwork,
   TextQuest,
   TextQuestInterface,
   Types,
@@ -48,6 +50,14 @@ type
     ChoiceCount: Integer;
     Gap104: array[0..1] of Byte;
     ParameterPanelOrigin: TPoint;
+    MobileArtwork: TQuestArtworkGI;
+    MobileTextScale: Single;
+    MobileTextBounds, MobileSidebarBounds: TRect;
+    MobileStylePositions: array[0..5] of TPoint;
+    MobileStatsToggle: TGraphButtonGI;
+    MobileStatsExpanded: Boolean;
+    ChoicePadding: Integer;
+    ChoicesFinalized: Boolean;
     QuestId: Integer;
     procedure OnOpen; override;
     procedure OnClose; override;
@@ -55,6 +65,13 @@ type
     procedure ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer); override;
     procedure InitializeLayout; override;
     procedure ExecuteUiCode(Block: TBlockParEC; Key: Cardinal); override;
+    function GetQuestFontName: WideString;
+    procedure InitializeMobileLayout;
+    procedure LayoutMobileControls;
+    procedure LayoutMobilePage;
+    procedure ReflowMobileText;
+    procedure ReflowMobileChoices;
+    procedure StatsButtonClick(Sender: TObjectGI);
     function GetTextBeforeDelimiter(const Text: WideString; Delimiter: WideChar): WideString;
     function GetTextAfterComma(const Text: WideString; IgnoredDelimiter: WideChar): WideString;
     function GetQuestContentHash(QuestId: Integer): WideString;
@@ -136,10 +153,10 @@ implementation
 uses
   aSaveLoad,
   GameInput,
+  GameWindow,
   Classes,
   Math,
   GI_GraphBuf,
-  GI_GraphButton,
   GI_ScrollBar,
   GI_Window,
   EC_Cache,
@@ -173,6 +190,99 @@ uses
   ValueListClass,
   EventClass,
   aMyFunction;
+
+type
+  TQuestStatsActionGI = class(TGraphButtonGI)
+  private
+    Frame: TGraphBufGI; // Owned child; its buffer holds the button's composed skin.
+    Artwork: TQuestArtworkGI; // Borrowed from this screen's control tree.
+  public
+    constructor Create(Owner: TObjectGI; SourceArtwork: TQuestArtworkGI);
+    procedure SetSize(Size: TPoint); override;
+  end;
+
+  // A fixed-width quest diagram is one indivisible block. Its rows share one
+  // scale, while its position and scroll extent remain in the page's coordinates.
+  TQuestTextGI = class(TLabelGI)
+    FixedBlock: Boolean;
+    procedure FitWidth(Width: Integer);
+    function LayoutHeight: Integer;
+    function GetLocalBounds: TRect; override;
+    procedure UpdateHitTestBounds; override;
+  end;
+
+constructor TQuestStatsActionGI.Create(Owner: TObjectGI; SourceArtwork: TQuestArtworkGI);
+begin
+  inherited Create(Owner);
+  Artwork := SourceArtwork;
+  Frame := TGraphBufGI.Create(Self, True);
+  Frame.SetDepth(1);
+  Frame.SourceHasPerPixelAlpha := True;
+  UpOnlyDown := True;
+  CaptionOffsets := Rect(0, 0, 0, 1);
+end;
+
+procedure TQuestStatsActionGI.SetSize(Size: TPoint);
+begin
+  inherited SetSize(Size);
+  if (Frame = nil) or ((Frame.ClientSize.X = Size.X) and (Frame.ClientSize.Y = Size.Y)) then
+    Exit;
+  Frame.SetSize(Size);
+  Artwork.BuildControlPlate(Frame.GraphBuf, Size.X, Size.Y);
+end;
+
+procedure TQuestTextGI.FitWidth(Width: Integer);
+var
+  OldSize: TPoint;
+begin
+  OldSize := ClientSize;
+  DisplayScale := 1;
+  if FixedBlock then
+  begin
+    SetWordWrapEnabled(False);
+    SetTextAlignX(taxAuto);
+    SetSize(Point(1, 1));
+    // Measure without justification, then keep the measured width fixed.
+    SetTextAlignX(taxLeft);
+    if HardwareRenderingEnabled then
+      DisplayScale := Min(1, Width / Max(1, ClientSize.X + 1));
+  end
+  else
+    SetSize(Point(Width, 1));
+  SetSize(Point(ClientSize.X, Max(1, GetRenderedLineCount) * GetLineHeight + 4));
+  if (TextTexture <> nil) and ((OldSize.X <> ClientSize.X) or (OldSize.Y <> ClientSize.Y)) then
+    TextTexture.ReleaseSurfaces;
+  UpdateAbsolutePosition;
+  UpdateSubtreeHitBounds;
+end;
+
+function TQuestTextGI.LayoutHeight: Integer;
+begin
+  Result := Ceil(ClientSize.Y * DisplayScale);
+end;
+
+function TQuestTextGI.GetLocalBounds: TRect;
+begin
+  Result :=
+      Rect(
+          LocalPosition.X,
+          LocalPosition.Y,
+          LocalPosition.X + Ceil(ClientSize.X * DisplayScale),
+          LocalPosition.Y + LayoutHeight
+      );
+end;
+
+procedure TQuestTextGI.UpdateHitTestBounds;
+begin
+  if FixedBlock and (DisplayScale <> 1) and (Parent <> nil) then
+    AbsolutePosition :=
+        ScaledChildPosition(
+            Parent.GetChildAbsolutePosition(LocalPosition, PositionModeW),
+            Point(0, 0),
+            DisplayScale
+        );
+  inherited UpdateHitTestBounds;
+end;
 
 constructor TfQuestA.Create;
 begin
@@ -331,13 +441,14 @@ begin
   Panel := GetByName('ActionListWindow') as TPanelScrollBarGI;
   Panel.FreeOwnedChildren;
   Panel.Invalidate;
-  NextChoiceTop := 10;
+  NextChoiceTop := ChoicePadding;
   ParameterPanelWidth := 0;
   ParameterPanelHeight := 0;
   ChoiceCount := 0;
+  ChoicesFinalized := False;
   Spacer := TPanelGI.Create(GetByName('ActionListWindow'));
   Spacer.SetPosition(Classes.Point(0, 0));
-  Spacer.SetSize(Classes.Point(10, 10));
+  Spacer.SetSize(Classes.Point(ChoicePadding, ChoicePadding));
   Spacer.SetPositionModeW(True);
 end;
 
@@ -374,6 +485,7 @@ begin
   Panel.MouseLeaveCallback := ChoiceMouseLeave;
   Panel.LeftButtonDownCallback := ChoiceMouseDown;
   Panel.LeftButtonUpCallback := ChoiceMouseUp;
+  Panel.TouchInteraction := tiTap;
   Highlight := TImageGI.Create(Panel);
   Highlight.SetDepth(3);
   Highlight.SetPosition(Classes.Point(0, 0));
@@ -389,14 +501,7 @@ begin
   Highlight.SetActive(False);
   TextLabel := TLabelGI.Create(Panel);
   TextLabel.SetName(IntToStr(ChoiceCount));
-  if FontQuest = 0 then
-    TextLabel.SetFontName(NormalFontName)
-  else if FontQuest = 1 then
-    TextLabel.SetFontName(SmoothBigFontName)
-  else if FontQuest = 2 then
-    TextLabel.SetFontName(SmoothHugeFontName)
-  else if FontQuest >= 3 then
-    TextLabel.SetFontName(SmoothIntroFontName);
+  TextLabel.SetFontName(GetQuestFontName);
   TextLabel.SetSize(Classes.Point(Owner.ClientSize.X - 20, 20));
   TextLabel.SetPosition(Classes.Point(10, 0));
   TextLabel.SetDepth(2);
@@ -454,6 +559,7 @@ begin
   Panel.MouseLeaveCallback := DisabledChoiceMouseLeave;
   Panel.LeftButtonDownCallback := ChoiceMouseDown;
   Panel.LeftButtonUpCallback := DisabledChoiceMouseUp;
+  Panel.TouchInteraction := tiTap;
   Highlight := TImageGI.Create(Panel);
   Highlight.SetDepth(3);
   Highlight.SetPosition(Classes.Point(0, 0));
@@ -469,14 +575,7 @@ begin
   Highlight.SetActive(False);
   TextLabel := TLabelGI.Create(Panel);
   TextLabel.SetName(IntToStr(ChoiceCount));
-  if FontQuest = 0 then
-    TextLabel.SetFontName(NormalFontName)
-  else if FontQuest = 1 then
-    TextLabel.SetFontName(SmoothBigFontName)
-  else if FontQuest = 2 then
-    TextLabel.SetFontName(SmoothHugeFontName)
-  else if FontQuest >= 3 then
-    TextLabel.SetFontName(SmoothIntroFontName);
+  TextLabel.SetFontName(GetQuestFontName);
   TextLabel.SetSize(Classes.Point(Owner.ClientSize.X - 20, 20));
   TextLabel.SetPosition(Classes.Point(10, 0));
   TextLabel.SetDepth(2);
@@ -647,12 +746,14 @@ var
   LineCount, Page, ExtraOffset: Integer;
   Spacer: TPanelGI;
 begin
-  Inc(NextChoiceTop, 10);
+  ChoicesFinalized := True;
+  Inc(NextChoiceTop, ChoicePadding);
   Panel := GetByName('ActionListWindow') as TPanelScrollBarGI;
   Spacer := TPanelGI.Create(Panel);
-  Spacer.SetPosition(Classes.Point(0, NextChoiceTop - 10));
-  Spacer.SetSize(Classes.Point(10, 10));
+  Spacer.SetPosition(Classes.Point(0, NextChoiceTop - ChoicePadding));
+  Spacer.SetSize(Classes.Point(ChoicePadding, ChoicePadding));
   Spacer.SetPositionModeW(True);
+  LayoutMobilePage;
   Panel.SetActive(True);
   Panel.SetVerticalScrollbarEnabled(NextChoiceTop > Panel.ClientSize.Y);
   Panel.VerticalScrollBar.SetLargeChange(Panel.ClientSize.Y);
@@ -739,8 +840,23 @@ begin
       CancelCallbackTimer(PageAnimationTimer);
       PageAnimationTimer := nil;
     end;
+    LayoutMobilePage;
     GetByName('ActionListWindow').SetActive(True);
     PostMouseMoveMessage;
+  end;
+end;
+
+function TfPlanetQuest.GetQuestFontName: WideString;
+var
+  Size: Integer;
+begin
+  Size := FontQuest;
+  case Size of
+    0: Result := NormalFontName;
+    1: Result := SmoothBigFontName;
+    2: Result := SmoothHugeFontName;
+  else
+    Result := SmoothIntroFontName;
   end;
 end;
 
@@ -848,13 +964,13 @@ begin
             Window.LocalPosition.Y
         )
     );
+  LayoutMobilePage;
 end;
 
 procedure TfPlanetQuest.SetQuestText(const Text: WideString);
 var
   Panel: TPanelScrollBarGI;
   NextTop: Integer;
-  Lines: TStringsEC;
   LowerText: WideString;
   StartIndex, TagIndex, TextLength: Integer;
 
@@ -862,7 +978,7 @@ var
   var
     Indent: Boolean;
     I: Integer;
-    TextLabel: TLabelGI;
+    TextLabel: TQuestTextGI;
   begin
     if Text <> '' then
     begin
@@ -886,24 +1002,19 @@ var
           end;
         end;
       end;
-      TextLabel := TLabelGI.Create(Panel);
+      TextLabel := TQuestTextGI.Create(Panel);
+      TextLabel.FixedBlock := FontMode <> 0;
       if FontMode = 0 then
-      begin
-        if FontQuest = 0 then
-          TextLabel.SetFontName(NormalFontName)
-        else if FontQuest = 1 then
-          TextLabel.SetFontName(SmoothBigFontName)
-        else if FontQuest = 2 then
-          TextLabel.SetFontName(SmoothHugeFontName)
-        else if FontQuest >= 3 then
-          TextLabel.SetFontName(SmoothIntroFontName);
-      end
+        TextLabel.SetFontName(GetQuestFontName)
       else
         TextLabel.SetFontName('Font.' + GiResourceSuffix + 'Fix');
       TextLabel.SetPosition(Point(0, NextTop));
       TextLabel.SetSize(Point(Panel.ClientSize.X, 1));
-      TextLabel.SetWordWrapEnabled(True);
-      TextLabel.SetTextAlignX(taxAuto);
+      TextLabel.SetWordWrapEnabled(FontMode = 0);
+      if (MobileArtwork <> nil) or (FontMode <> 0) then
+        TextLabel.SetTextAlignX(taxLeft)
+      else
+        TextLabel.SetTextAlignX(taxAuto);
       TextLabel.SetTextAlignY(tayAuto);
       if Indent then
         TextLabel.SetText('     ' + Text)
@@ -912,14 +1023,8 @@ var
       TextLabel.SetPositionModeW(True);
       TextLabel.SetTextColor(GetTextColor(QuestStyleIndex));
       TextLabel.SetTextAlignY(tayTop);
-      { Preserve native getter order: rendered line count, then line height. }
-      TextLabel.SetSize(
-          Point(
-              TextLabel.ClientSize.X,
-              Max(1, TextLabel.GetRenderedLineCount) * TextLabel.GetLineHeight + 4
-          )
-      );
-      NextTop := TextLabel.LocalPosition.Y + TextLabel.ClientSize.Y - 2;
+      TextLabel.FitWidth(Panel.ClientSize.X);
+      NextTop := TextLabel.LocalPosition.Y + TextLabel.LayoutHeight - 2;
     end;
   end;
 
@@ -927,6 +1032,11 @@ var
   var
     N, StartIndex, EndIndex: Integer;
   begin
+    if FontMode <> 0 then
+    begin
+      AddQuestTextParagraph(Text, FontMode);
+      Exit;
+    end;
     N := Length(Text);
     StartIndex := 0;
     while StartIndex < N do
@@ -949,8 +1059,6 @@ begin
   if Text <> '' then
   begin
     NextTop := 0;
-    // The native routine retains this allocation although the nested helpers do not use it.
-    Lines := TStringsEC.Create;
     TextLength := Length(Text);
     LowerText := LowerCaseWideString(Text);
     StartIndex := 0;
@@ -962,14 +1070,10 @@ begin
       if TagIndex >= 0 then
       begin
         Inc(TagIndex, 5);
-        while (TagIndex < TextLength)
-            and ((Text[TagIndex + 1] = ' ')
-                or (Text[TagIndex + 1] = #9)
-                or (Text[TagIndex + 1] = #13)) do
+        if (TagIndex < TextLength) and (Text[TagIndex + 1] = #13) then
           Inc(TagIndex);
-        if TagIndex < TextLength then
-          if Text[TagIndex + 1] = #10 then
-            Inc(TagIndex);
+        if (TagIndex < TextLength) and (Text[TagIndex + 1] = #10) then
+          Inc(TagIndex);
         StartIndex := TagIndex;
         TagIndex := FindTextOffsetW(LowerText, '</fix>', StartIndex);
         if StartIndex < TagIndex then
@@ -999,7 +1103,6 @@ begin
         Break;
       end;
     end;
-    Lines.Free;
     Panel.SetScrollOffset(Point(0, 0));
     Panel.SetVerticalScrollbarEnabled(Panel.ClientSize.Y < NextTop);
     if Panel.FirstChild <> nil then
@@ -1016,6 +1119,10 @@ var
   I, Shift: Integer;
   Control: TObjectGI;
 begin
+  MobileArtwork := nil;
+  MobileStatsToggle := nil;
+  MobileStatsExpanded := False;
+  ChoicePadding := 10;
   inherited InitializeLayout;
   AppendLogTextThreadSafe('fPlanetQuest... ');
   ViewportRect := Rect(0, 0, GameScreenWidth, GameScreenHeight);
@@ -1104,6 +1211,7 @@ begin
   end;
   AppendLogLineThreadSafe('ok');
   ParameterPanelOrigin := GetByName('ParamsShowWindowParent').LocalPosition;
+  InitializeMobileLayout;
   SetHelpCallback(ShowControlHelp);
   with GetByName('AnimTextOn') as TGraphButtonGI do
   begin
@@ -1133,6 +1241,472 @@ begin
   GetByName('MainPanel').KeyDownCallback := QuestKeyDown;
   (GetByName('ButtonExit') as TGraphButtonGI).UpCallback := RequestLoadGame;
   QuestPlayerInterface := TTextQuestPlayerInterface.Create;
+end;
+
+procedure TfPlanetQuest.InitializeMobileLayout;
+var
+  I: Integer;
+  Root: TObjectGI;
+begin
+  if not GameMobileUiEnabled or not HardwareRenderingEnabled then
+    Exit;
+  Root := GetByName('MainPanel');
+  MobileTextScale := GetGameMobileUiScale(1.15);
+  ChoicePadding := 4;
+  MobileTextBounds := Rect(12, 12, GameScreenWidth - 12, GameScreenHeight);
+  MobileSidebarBounds := Rect(GameScreenWidth - 12, 12, GameScreenWidth - 12, GameScreenHeight);
+  MobileStylePositions[0] := GetByName('AnimTextOn').LocalPosition;
+  MobileStylePositions[1] := GetByName('AnimTextOff').LocalPosition;
+  for I := 1 to 4 do
+    MobileStylePositions[I + 1] := GetByName('Style' + IntToStr(I)).LocalPosition;
+  MobileArtwork := TQuestArtworkGI.Create(Root);
+  MobileArtwork.SetDepth(8.5);
+  MobileStatsToggle := TQuestStatsActionGI.Create(Root, MobileArtwork);
+  MobileStatsToggle.SetName('ParamsExpand');
+  MobileStatsToggle.SetCaptionFontName(SmoothBigFontName);
+  MobileStatsToggle.SetSize(Point(152, 32));
+  MobileStatsToggle.SetCaptionColor(CurrentPixelFormat.PackRgbBytes(9, 26, 31));
+  MobileStatsToggle.MouseBlocking := True;
+  MobileStatsToggle.UpCallback := StatsButtonClick;
+  LayoutMobileControls;
+  GetByName('BGImage').SetActive(False);
+  GetByName('PanelImage').SetActive(False);
+  GetByName('BGStyle').SetActive(False);
+  GetByName('ImageFrame').SetActive(False);
+  (GetByName('MessageWindow') as TPanelScrollBarGI).VerticalScrollBar.SetIndicatorThickness(2);
+  (GetByName('ActionListWindow') as TPanelScrollBarGI).VerticalScrollBar.SetIndicatorThickness(2);
+  // Both scroll panels and their external scrollbars share this transform.
+  // Their text, row positions and scrolling stay in the same source coordinates.
+  with GetByName('QuestPanel') do
+  begin
+    DisplayScale := MobileTextScale;
+    SetSize(
+        Point(Ceil(GameScreenWidth / MobileTextScale), Ceil(GameScreenHeight / MobileTextScale))
+    );
+  end;
+  LayoutMobilePage;
+end;
+
+procedure TfPlanetQuest.LayoutMobileControls;
+var
+  Scale, ExitScale: Single;
+  Origin: TPoint;
+  StyleBounds, ExitBounds: TRect;
+  Control: TGraphButtonGI;
+  I, Width, Height, ExitHeight, FooterGap: Integer;
+
+  procedure PlaceStyleButton(const Name: WideString; Index: Integer);
+  var
+    Button: TGraphButtonGI;
+  begin
+    Button := GetByName(Name) as TGraphButtonGI;
+    PlaceControlAtScreen(
+        Button,
+        Point(
+            StyleBounds.Left + Round((MobileStylePositions[Index].X - Origin.X) * Scale),
+            StyleBounds.Top + Round((MobileStylePositions[Index].Y - Origin.Y) * Scale)
+        ),
+        Scale
+    );
+    Button.HitKind := gbhRect;
+  end;
+
+begin
+  // Keep the native icons and spacing, with a separate scale from quest text.
+  Scale :=
+      Min(
+          GetGameMobileUiScale(30) / GetByName('AnimTextOn').ClientSize.Y,
+          Min(
+              (MobileTextBounds.Right - MobileTextBounds.Left - 24) / 116,
+              (GameScreenHeight div 6 - 20) / GetByName('AnimTextOn').ClientSize.Y
+          )
+      );
+  Origin := MobileStylePositions[0];
+  Control := GetByName('Style4') as TGraphButtonGI;
+  Width := Round((MobileStylePositions[5].X + Control.ClientSize.X - Origin.X) * Scale);
+  Height := Round(GetByName('AnimTextOn').ClientSize.Y * Scale);
+  // The original backing extends left of the first icon by seven source pixels.
+  StyleBounds.Left := Ceil(8 * GetGameMobileUiScale + 8 * Scale);
+  StyleBounds.Top := GameScreenHeight - 12 - Height;
+  StyleBounds.Right := StyleBounds.Left + Width;
+  StyleBounds.Bottom := StyleBounds.Top + Height;
+  FooterGap := Ceil(6 * GetGameMobileUiScale);
+  // Appearance controls are infrequent actions; the story can use the height
+  // returned by their smaller plate. Exit keeps its independent touch size.
+  MobileTextBounds.Bottom := StyleBounds.Top - FooterGap;
+  PlaceStyleButton('AnimTextOn', 0);
+  PlaceStyleButton('AnimTextOff', 1);
+  for I := 1 to 4 do
+    PlaceStyleButton('Style' + IntToStr(I), I + 1);
+  Control := GetByName('ButtonExit') as TGraphButtonGI;
+  ExitHeight := Min(Ceil(GetGameMobileUiScale(44)), GameScreenHeight div 6 - 20);
+  ExitScale := ExitHeight / Max(1, Control.ClientSize.Y);
+  Width := Round(Control.ClientSize.X * ExitScale);
+  ExitBounds :=
+      Rect(
+          GameScreenWidth - 12 - Width,
+          GameScreenHeight - 12 - ExitHeight,
+          GameScreenWidth - 12,
+          GameScreenHeight - 12
+      );
+  MobileSidebarBounds.Bottom := ExitBounds.Top - FooterGap;
+  PlaceControlAtScreen(Control, ExitBounds.TopLeft, ExitScale);
+  Control.HitKind := gbhRect;
+  MobileArtwork.SetControlLayout(StyleBounds);
+end;
+
+procedure TfPlanetQuest.ReflowMobileText;
+var
+  Panel: TPanelScrollBarGI;
+  Child: TObjectGI;
+  Text: TQuestTextGI;
+  NextTop, AnimationOffset: Integer;
+begin
+  Panel := GetByName('MessageWindow') as TPanelScrollBarGI;
+  NextTop := 0;
+  Child := Panel.FirstChild;
+  while Child <> nil do
+  begin
+    if Child is TQuestTextGI then
+    begin
+      Text := TQuestTextGI(Child);
+      AnimationOffset := 0;
+      if PageAnimationTimer <> nil then
+        AnimationOffset := Min(0, Text.LocalPosition.Y - Text.UserIndex);
+      Text.FitWidth(Panel.ClientSize.X);
+      Text.UserIndex := NextTop;
+      Text.SetPosition(Point(0, NextTop + AnimationOffset));
+      Inc(NextTop, Text.LayoutHeight - 2);
+    end;
+    Child := Child.NextSibling;
+  end;
+end;
+
+procedure TfPlanetQuest.ReflowMobileChoices;
+var
+  Panel: TPanelScrollBarGI;
+  Child: TObjectGI;
+  Text: TLabelGI;
+begin
+  Panel := GetByName('ActionListWindow') as TPanelScrollBarGI;
+  NextChoiceTop := ChoicePadding;
+  Child := Panel.FirstChild;
+  while Child <> nil do
+  begin
+    // Choice rows own a highlight image followed by their text label. Spacers
+    // and external scrollbars are not rows and must not affect text measurement.
+    if (Child.FirstChild is TImageGI) and (Child.FirstChild.NextSibling is TLabelGI) then
+    begin
+      Text := Child.FirstChild.NextSibling as TLabelGI;
+      Text.SetTextAlignY(tayAuto);
+      Text.SetSize(Point(Panel.ClientSize.X - 20, 1));
+      Child.SetPosition(Point(0, NextChoiceTop));
+      Child.SetSize(Point(Panel.ClientSize.X, Text.ClientSize.Y + GiScalePixelsEx(2, 1) * 2));
+      Text.SetTextAlignY(tayCenterEx);
+      Text.SetSize(Point(Text.ClientSize.X, Child.ClientSize.Y));
+      Child.FirstChild.SetSize(Child.ClientSize);
+      Inc(NextChoiceTop, Child.ClientSize.Y);
+    end;
+    Child := Child.NextSibling;
+  end;
+  if ChoicesFinalized then
+    Inc(NextChoiceTop, ChoicePadding);
+  Child := Panel.FirstChild;
+  while Child <> nil do
+  begin
+    if (Child is TPanelGI) and (Child.FirstChild = nil) and (Child.LocalPosition.Y > 0) then
+      Child.SetPosition(Point(0, NextChoiceTop - ChoicePadding));
+    Child := Child.NextSibling;
+  end;
+end;
+
+procedure TfPlanetQuest.StatsButtonClick(Sender: TObjectGI);
+begin
+  if (MobileArtwork = nil) or not MobileStatsToggle.Active then
+    Exit;
+  MobileStatsExpanded := not MobileStatsExpanded;
+  LayoutMobilePage;
+end;
+
+procedure TfPlanetQuest.LayoutMobilePage;
+const
+  Gap = 12;
+  Padding = 6;
+  ScrollbarWidth = 2;
+var
+  Window: TWindowGI;
+  Picture: TGraphBufGI;
+  MessagePanel, ChoicesPanel: TPanelScrollBarGI;
+  TextFrame, ChoicesFrame, PictureFrame, Inner, StatsBounds, ExpandedStatsBounds: TRect;
+  Scale, PictureScale, CompactScale, ExpandedScale, ActionScale: Single;
+  StatsPosition: TPoint;
+  ChoiceHeight,
+  MinChoiceHeight,
+  ChoiceBottom,
+  StatsTop,
+  PictureHeight,
+  PictureWidth,
+  ContentHeight,
+  SidebarWidth,
+  ActionHeight,
+  OldTextWidth,
+  OldChoiceWidth: Integer;
+  HasStats, HasPicture, CanEnlarge: Boolean;
+  Child: TObjectGI;
+
+  procedure PlaceScrollPanel(
+      Panel: TPanelScrollBarGI;
+      Frame, Insets: TRect;
+      Story: Boolean;
+      MeasureWidthOnly: Boolean = False
+  );
+  var
+    Left, Top, Right, Bottom: Integer;
+  begin
+    // Frame and insets are game-screen units; the text subtree uses source units.
+    Left := Ceil((Frame.Left + Insets.Left) / Double(MobileTextScale)) + Padding;
+    Top := Ceil((Frame.Top + Insets.Top) / Double(MobileTextScale)) + Padding;
+    // Leave room for the Android Controls toggle above the first story line.
+    if Story then
+      Top := Max(Top, Ceil(56 * GetGameMobileUiScale / MobileTextScale));
+    Right := Floor((Frame.Right - Insets.Right) / Double(MobileTextScale)) - Padding;
+    Bottom := Floor((Frame.Bottom - Insets.Bottom) / Double(MobileTextScale)) - Padding;
+    if MeasureWidthOnly then
+    begin
+      // Measuring a different width must not temporarily enlarge the viewport:
+      // scrollbar page-size clamping would discard the reader's scroll position.
+      Panel.SetSize(Point(Max(1, Right - Left - Padding - ScrollbarWidth), Panel.ClientSize.Y));
+      Exit;
+    end;
+    Panel.AutoVerticalPlacement := False;
+    Panel.VerticalScrollBarRect := Rect(Right - ScrollbarWidth, Top, Right, Bottom);
+    Panel.SetPosition(Point(Left, Top));
+    Panel.SetSize(Point(Max(1, Right - Left - Padding - ScrollbarWidth), Max(1, Bottom - Top)));
+    Panel.VerticalScrollBar.SetPageSize(Panel.ClientSize.Y);
+    Panel.VerticalScrollBar.SetLargeChange(Panel.ClientSize.Y);
+    if not Story or (PageAnimationTimer = nil) then
+      Panel.UpdateScrollRanges;
+  end;
+
+begin
+  if MobileArtwork = nil then
+    Exit;
+  Window := GetByName('ParamsShowWindowParent') as TWindowGI;
+  Picture := GetByName('PQI') as TGraphBufGI;
+  HasStats := GetByName('ParamsShowWindow').FirstChild <> nil;
+  HasPicture :=
+      (CurrentPicture <> '') and (Picture.GraphBuf.Width > 0) and (Picture.GraphBuf.Height > 0);
+  // Reserve only the width the current state needs. Illustrations can use a
+  // modest thumbnail; short statistics must not permanently take a third of a page.
+  SidebarWidth := 0;
+  if HasStats then
+    SidebarWidth := Ceil(Window.ClientSize.X * MobileTextScale);
+  if HasPicture then
+    SidebarWidth := Max(SidebarWidth, Round(GameScreenWidth * 0.25));
+  SidebarWidth := Min(SidebarWidth, Round(GameScreenWidth * 0.36));
+  MobileTextBounds.Right := GameScreenWidth - 12;
+  if SidebarWidth > 0 then
+    Dec(MobileTextBounds.Right, SidebarWidth + Gap);
+  MobileSidebarBounds.Left := MobileTextBounds.Right + Gap;
+  LayoutMobileControls;
+  if not HasStats then
+    MobileStatsExpanded := False;
+  Window.SetActive(HasStats);
+  MobileStatsToggle.SetActive(False);
+  (GetByName('QuestPanel') as TPanelGI).SetActive(not MobileStatsExpanded);
+  ExpandedStatsBounds :=
+      Rect(
+          12,
+          Max(12, Ceil(56 * GetGameMobileUiScale)),
+          GameScreenWidth - 12,
+          MobileSidebarBounds.Bottom
+      );
+  StatsBounds := MobileSidebarBounds;
+  if MobileStatsExpanded then
+    StatsBounds := ExpandedStatsBounds;
+  StatsTop := MobileSidebarBounds.Bottom + Gap;
+  if HasStats then
+  begin
+    ActionScale := GetGameMobileUiScale;
+    ActionHeight := Ceil((MobileStatsToggle.ClientSize.Y + 4) * ActionScale);
+    CompactScale :=
+        Min(
+            MobileTextScale,
+            Min(
+                (MobileSidebarBounds.Right - MobileSidebarBounds.Left) / Window.ClientSize.X,
+                (MobileSidebarBounds.Bottom - MobileSidebarBounds.Top) / Window.ClientSize.Y
+            )
+        );
+    ExpandedScale :=
+        Min(
+            MobileTextScale,
+            Min(
+                (ExpandedStatsBounds.Right - ExpandedStatsBounds.Left) / Window.ClientSize.X,
+                (ExpandedStatsBounds.Bottom - ExpandedStatsBounds.Top - ActionHeight)
+                    / Window.ClientSize.Y
+            )
+        );
+    // The whole state is already visible. Offer magnification only when its
+    // text is small and the larger view materially improves readability.
+    CanEnlarge :=
+        (CompactScale < GetGameMobileUiScale(0.9)) and (ExpandedScale >= CompactScale * 1.25);
+    MobileStatsToggle.SetActive(CanEnlarge or MobileStatsExpanded);
+    if LowerCaseWideString(SelectedLanguage) = 'russian' then
+    begin
+      if MobileStatsExpanded then
+        MobileStatsToggle.SetCaption('К тексту')
+      else
+        MobileStatsToggle.SetCaption('Увеличить');
+    end
+    else if MobileStatsExpanded then
+      MobileStatsToggle.SetCaption('Back to text')
+    else
+      MobileStatsToggle.SetCaption('Enlarge');
+    // Keep every row/column at the previous compact scale. The useful-gain check
+    // also ensures that this frame and its action fit without shrinking text.
+    if MobileStatsExpanded then
+      Scale := ExpandedScale
+    else
+      Scale := CompactScale;
+    if not MobileStatsToggle.Active then
+      ActionHeight := 0;
+    StatsTop := StatsBounds.Bottom - Ceil(Window.ClientSize.Y * Scale) - ActionHeight;
+    if MobileStatsExpanded then
+      StatsTop :=
+          (StatsBounds.Top + StatsBounds.Bottom - Ceil(Window.ClientSize.Y * Scale) - ActionHeight)
+              div 2;
+    StatsPosition :=
+        Point(
+            (StatsBounds.Left + StatsBounds.Right - Ceil(Window.ClientSize.X * Scale)) div 2,
+            StatsTop
+        );
+    PlaceControlAtScreen(Window, StatsPosition, Scale);
+    if MobileStatsToggle.Active then
+    begin
+      MobileStatsToggle
+          .SetSize(Point(Min(152, Floor(Window.ClientSize.X * Scale / ActionScale)), 32));
+      PlaceControlAtScreen(
+          MobileStatsToggle,
+          Point(
+              StatsPosition.X,
+              StatsTop + Ceil(Window.ClientSize.Y * Scale) + Ceil(4 * ActionScale)
+          ),
+          ActionScale
+      );
+    end;
+  end;
+  if MobileStatsExpanded then
+  begin
+    Picture.SetActive(False);
+    MobileArtwork.SetLayout(Rect(0, 0, 0, 0), Rect(0, 0, 0, 0), Rect(0, 0, 0, 0), QuestStyleIndex);
+    InvalidateViewport;
+    Exit;
+  end;
+  // The illustration uses only the room left above statistics, preserving aspect.
+  PictureFrame := Rect(0, 0, 0, 0);
+  PictureHeight := StatsTop - Gap - MobileSidebarBounds.Top;
+  if HasPicture and (PictureHeight >= 102) then
+  begin
+    PictureWidth :=
+        Min(
+            MobileSidebarBounds.Right - MobileSidebarBounds.Left,
+            Floor((PictureHeight - 20) * Picture.GraphBuf.Width / Picture.GraphBuf.Height) + 20
+        );
+    PictureHeight :=
+        Min(
+            PictureHeight,
+            Floor((PictureWidth - 20) * Picture.GraphBuf.Height / Picture.GraphBuf.Width) + 20
+        );
+    // Preserve the original gold corner shapes; omit a thumbnail too small for them.
+    if (PictureWidth >= 100) and (PictureHeight >= 102) then
+    begin
+      PictureFrame.Left :=
+          (MobileSidebarBounds.Left + MobileSidebarBounds.Right - PictureWidth) div 2;
+      PictureFrame.Top := MobileSidebarBounds.Top;
+      PictureFrame.Right := PictureFrame.Left + PictureWidth;
+      PictureFrame.Bottom := PictureFrame.Top + PictureHeight;
+    end;
+  end;
+  MessagePanel := GetByName('MessageWindow') as TPanelScrollBarGI;
+  ChoicesPanel := GetByName('ActionListWindow') as TPanelScrollBarGI;
+  TextFrame := MobileTextBounds;
+  ChoicesFrame := MobileTextBounds;
+  OldTextWidth := MessagePanel.ClientSize.X;
+  OldChoiceWidth := ChoicesPanel.ClientSize.X;
+  PlaceScrollPanel(MessagePanel, TextFrame, MobileArtwork.TextInsets, True, True);
+  PlaceScrollPanel(ChoicesPanel, ChoicesFrame, MobileArtwork.ChoiceInsets, False, True);
+  if MessagePanel.ClientSize.X <> OldTextWidth then
+    ReflowMobileText;
+  if ChoicesPanel.ClientSize.X <> OldChoiceWidth then
+    ReflowMobileChoices;
+  // Match PlaceScrollPanel's rounded endpoints, not just their distance.
+  // A height rounded independently can lose one source pixel and enable scrolling.
+  ChoiceBottom :=
+      Floor((ChoicesFrame.Bottom - MobileArtwork.ChoiceInsets.Bottom) / Double(MobileTextScale));
+  MinChoiceHeight :=
+      ChoicesFrame.Bottom
+          - Floor((ChoiceBottom - NextChoiceTop - Padding * 2) * Double(MobileTextScale))
+          + MobileArtwork.ChoiceInsets.Top;
+  ChoiceHeight :=
+      Min(Max(80, MinChoiceHeight), (MobileTextBounds.Bottom - MobileTextBounds.Top) * 2 div 5);
+  ChoicesFrame.Top := ChoicesFrame.Bottom - ChoiceHeight;
+  TextFrame.Bottom := ChoicesFrame.Top - Gap;
+  MobileArtwork.SetLayout(TextFrame, ChoicesFrame, PictureFrame, QuestStyleIndex);
+  PlaceScrollPanel(MessagePanel, TextFrame, MobileArtwork.TextInsets, True);
+  PlaceScrollPanel(ChoicesPanel, ChoicesFrame, MobileArtwork.ChoiceInsets, False);
+  ContentHeight := 0;
+  Child := MessagePanel.FirstChild;
+  while Child <> nil do
+  begin
+    if Child is TQuestTextGI then
+    begin
+      if PageAnimationTimer <> nil then
+        ContentHeight :=
+            Max(
+                ContentHeight,
+                Max(Child.LocalPosition.Y, Child.UserIndex) + TQuestTextGI(Child).LayoutHeight
+            )
+      else
+        ContentHeight :=
+            Max(ContentHeight, Child.LocalPosition.Y + TQuestTextGI(Child).LayoutHeight);
+    end
+    else
+      ContentHeight := Max(ContentHeight, Child.LocalPosition.Y + Child.ClientSize.Y);
+    Child := Child.NextSibling;
+  end;
+  if not MessagePanel.UnlimitedWorld then
+    MessagePanel.SetScrollOffset(
+        Point(
+            0,
+            EnsureRange(
+                MessagePanel.ScrollOffset.Y,
+                0,
+                Max(0, ContentHeight - MessagePanel.ClientSize.Y)
+            )
+        )
+    );
+  MessagePanel.SetVerticalScrollbarEnabled(ContentHeight > MessagePanel.ClientSize.Y);
+  ChoicesPanel.SetVerticalScrollbarEnabled(NextChoiceTop > ChoicesPanel.ClientSize.Y);
+  Inner := MobileArtwork.PictureInnerBounds;
+  Picture.SetActive(HasPicture and (Inner.Right > Inner.Left) and (Inner.Bottom > Inner.Top));
+  if Picture.Active then
+  begin
+    PictureScale :=
+        Min(
+            (Inner.Right - Inner.Left) / Picture.GraphBuf.Width,
+            (Inner.Bottom - Inner.Top) / Picture.GraphBuf.Height
+        );
+    Picture.SetSize(Point(Picture.GraphBuf.Width, Picture.GraphBuf.Height));
+    PlaceControlAtScreen(
+        Picture,
+        Point(
+            (Inner.Left + Inner.Right - Round(Picture.GraphBuf.Width * PictureScale)) div 2,
+            (Inner.Top + Inner.Bottom - Round(Picture.GraphBuf.Height * PictureScale)) div 2
+        ),
+        PictureScale
+    );
+  end;
+  InvalidateViewport;
 end;
 
 procedure TfPlanetQuest.OnOpen;
@@ -1546,6 +2120,7 @@ begin
     end;
     Control := Control.NextSibling;
   end;
+  LayoutMobilePage;
 end;
 
 procedure TfPlanetQuest.SelectPageMode(Sender: TObjectGI);
@@ -1610,12 +2185,19 @@ begin
     Image.GraphBuf.ConvertRgbTo565;
     Image.Invalidate;
   end;
+  LayoutMobilePage;
 end;
 
 procedure TfPlanetQuest.RequestLoadGame(Sender: TObjectGI);
 var
   Standalone: Boolean;
 begin
+  if MobileStatsExpanded then
+  begin
+    MobileStatsExpanded := False;
+    LayoutMobilePage;
+    Exit;
+  end;
   if ShowMessageBoxGI(
           Self,
           LanguageDataConfig.GetParamByPathOrMarker('FormGameMenu.QExit'),
@@ -1648,6 +2230,12 @@ var
   Panel: TPanelScrollBarGI;
   Choice, Control: TObjectGI;
 begin
+  if MobileStatsExpanded then
+  begin
+    if VirtualKey = VK_ESCAPE then
+      RequestLoadGame(nil);
+    Exit;
+  end;
   if not IsVirtualKeyDown(VK_CONTROL)
       and not IsVirtualKeyDown(VK_SHIFT)
       and not IsVirtualKeyDown(VK_MENU) then
@@ -1718,18 +2306,46 @@ begin
     MusicManager.PlayCategory('Quest');
 end;
 
+function RemoveQuestProseIndent(const Text: WideString): WideString;
+var
+  Lower: WideString;
+  Cursor, First, Last: Integer;
+begin
+  Result := '';
+  Lower := LowerCaseWideString(Text);
+  Cursor := 0;
+  repeat
+    First := FindTextOffsetW(Lower, '<fix>', Cursor);
+    if First < 0 then
+      First := Length(Text);
+    Result :=
+        Result
+            + ReplaceAllWideString(
+                Copy(Text, Cursor + 1, First - Cursor),
+                #13#10'          ',
+                #13#10);
+    if First = Length(Text) then
+      Exit;
+    Last := FindTextOffsetW(Lower, '</fix>', First + 5);
+    if Last < 0 then
+      Last := Length(Text)
+    else
+      Inc(Last, 6);
+    // Leading spaces in a fixed block are grid columns, not paragraph indent.
+    Result := Result + Copy(Text, First + 1, Last - First);
+    Cursor := Last;
+  until Cursor >= Length(Text);
+end;
+
 function TfPlanetQuest.ExpandTemplateText(Text: WideString): WideString;
 var
-  Expanded, SourceLineBreak, ReplacementLineBreak, IndentedLineBreak: WideString;
+  Expanded: WideString;
 begin
   if GetPlayer = nil then
     CurrentDate := TrimWideString(Galaxy.FormatTurnDate(DaysElapsed + GalaxyWarmupTurns))
   else
     CurrentDate := TrimWideString(Galaxy.FormatTurnDate(Galaxy.CurrentTurn));
   Expanded := ExpandExternalText(Text);
-  SourceLineBreak := #13#10;
-  ReplacementLineBreak := #13#10;
-  IndentedLineBreak := #13#10'          ';
   Expanded :=
       ReplaceAllWideString(
           Expanded,
@@ -1781,8 +2397,7 @@ begin
           '<CurDate>',
           WrapTextInColor(CurrentDate, GetTextColorTag(QuestStyleIndex))
       );
-  Expanded := ReplaceAllWideString(Expanded, SourceLineBreak, ReplacementLineBreak);
-  Expanded := ReplaceAllWideString(Expanded, IndentedLineBreak, ReplacementLineBreak);
+  Expanded := RemoveQuestProseIndent(Expanded);
   if Pos('<', Expanded) > 0 then
   begin
     Expanded := ReplaceAllWideString(Expanded, '<br>', #13#10);

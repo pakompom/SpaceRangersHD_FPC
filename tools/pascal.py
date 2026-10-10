@@ -1,6 +1,7 @@
 """FPC game/package compilation, including its unit invalidation rules."""
 
 import json
+import resource
 from pathlib import Path
 
 from build_support import (
@@ -114,6 +115,11 @@ def compile_pascal(
         build_command = [command[0], "-B", *command[1:]]
     else:
         build_command = command
+    # FPC keeps dependency PPUs open while loading the UI/game unit graph.
+    # Apply this to imported builders and standalone probes too, not only CLI builds.
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, desired), hard))
     # A failed build must not leave units compiled with a mixture of settings.
     with stamp.recording(signature):
         run_step(work, "pascal", build_command)

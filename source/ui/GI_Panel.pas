@@ -36,7 +36,7 @@ type
     procedure CancelPointerInput; override;
     procedure ProcessRightButtonDown(KeyState: Cardinal; Point: TPoint); override;
     procedure ProcessRightButtonUp(KeyState: Cardinal; Point: TPoint); override;
-    function ToLocalPoint(Point: TPoint): TPoint; override;
+    function LogicalToLocalPoint(Point: TPoint): TPoint; override;
     function ToAbsolutePoint(Point: TPoint): TPoint; override;
     procedure LoadFromBlock(Block: TBlockParEC); override;
     procedure SetScrollOffset(Offset: TPoint); virtual;
@@ -54,6 +54,7 @@ uses
   EC_Str,
   GI_Main,
   GR_Main,
+  Math,
   SysUtils;
 
 constructor TPanelGI.Create(Owner: TObjectGI);
@@ -89,21 +90,22 @@ begin
   end
   else
   begin
-    Result.X := AbsolutePosition.X + LocalPosition.X - ScrollOffset.X;
-    Result.Y := AbsolutePosition.Y + LocalPosition.Y - ScrollOffset.Y;
+    Result.X := Round(AbsolutePosition.X / ChildWorldScale) + LocalPosition.X - ScrollOffset.X;
+    Result.Y := Round(AbsolutePosition.Y / ChildWorldScale) + LocalPosition.Y - ScrollOffset.Y;
   end;
 end;
 
-function TPanelGI.ToLocalPoint(Point: TPoint): TPoint;
+function TPanelGI.LogicalToLocalPoint(Point: TPoint): TPoint;
 begin
-  Result.X := Point.X - AbsolutePosition.X + ScrollOffset.X;
-  Result.Y := Point.Y - AbsolutePosition.Y + ScrollOffset.Y;
+  Result.X := Round((Point.X - AbsolutePosition.X) / ChildWorldScale) + ScrollOffset.X;
+  Result.Y := Round((Point.Y - AbsolutePosition.Y) / ChildWorldScale) + ScrollOffset.Y;
 end;
 
 function TPanelGI.ToAbsolutePoint(Point: TPoint): TPoint;
 begin
-  Result.X := Point.X + AbsolutePosition.X - ScrollOffset.X;
-  Result.Y := Point.Y + AbsolutePosition.Y - ScrollOffset.Y;
+  Result.X := Round((Point.X - ScrollOffset.X) * ChildWorldScale) + AbsolutePosition.X;
+  Result.Y := Round((Point.Y - ScrollOffset.Y) * ChildWorldScale) + AbsolutePosition.Y;
+  Result := LogicalToScreenPoint(Result);
 end;
 
 procedure TPanelGI.SetDragScrollingEnabled(Value: Boolean);
@@ -131,7 +133,7 @@ begin
     UpdateAbsolutePosition;
     UpdateSubtreeHitBounds;
   end
-  else if ScrollType = pstAll then
+  else if (ScrollType = pstAll) or (GetDisplayScale <> 1) then
   begin
     ScrollOffset := Offset;
     UpdateAbsolutePosition;
@@ -226,10 +228,10 @@ end;
 
 function TPanelGI.GetVisibleContentRect: TRect;
 begin
-  Result.Left := ScrollOffset.X - OriginPoint.X;
-  Result.Top := ScrollOffset.Y - OriginPoint.Y;
-  Result.Right := Result.Left + ClientSize.X;
-  Result.Bottom := Result.Top + ClientSize.Y;
+  Result.Left := ScrollOffset.X - Ceil(OriginPoint.X / ChildWorldScale);
+  Result.Top := ScrollOffset.Y - Ceil(OriginPoint.Y / ChildWorldScale);
+  Result.Right := ScrollOffset.X + Ceil((ClientSize.X - OriginPoint.X) / ChildWorldScale);
+  Result.Bottom := ScrollOffset.Y + Ceil((ClientSize.Y - OriginPoint.Y) / ChildWorldScale);
 end;
 
 procedure TPanelGI.ScrollRectIntoView(Rect: TRect);
@@ -284,6 +286,8 @@ var
   X, Y: Integer;
 begin
   inherited ProcessMouseMove(KeyState, Point);
+  Point := ScreenToLogicalPoint(Point);
+  Point := Classes.Point(Round(Point.X / ChildWorldScale), Round(Point.Y / ChildWorldScale));
   if Dragging = True then
     if (Point.X <> LastDragPoint.X) or (Point.Y <> LastDragPoint.Y) then
     begin
@@ -324,7 +328,9 @@ begin
   if not IsOccludedAtPoint(Point) and (DragScrollingEnabled = True) then
   begin
     Dragging := True;
-    LastDragPoint := Point;
+    Point := ScreenToLogicalPoint(Point);
+    LastDragPoint :=
+        Classes.Point(Round(Point.X / ChildWorldScale), Round(Point.Y / ChildWorldScale));
     if MessageLoop.IsCursorImageSelected('Main') then
       MessageLoop.SetCursorByName('Scroll');
   end;

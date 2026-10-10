@@ -13,6 +13,7 @@ uses
   GI_GAI,
   GI_Image,
   GI_MessageLoop,
+  GI_PanelScrollBar,
   GI_Window,
   Types,
   aItem,
@@ -45,6 +46,17 @@ type
   end;
 
   TfEquipmentShop = class(TMessageLoopGIWithMainPanel)
+  private
+    TouchSlot: TShopSlot;
+    TouchItemId, TouchTurn: Integer;
+    TouchPlanet: TPlanet;
+    TouchStation: TRuins;
+    ItemInfoScroll, HullInfoScroll: TPanelScrollBarGI;
+    procedure ClearTouchSelection;
+    procedure ShowSlotInfo(Slot: TShopSlot);
+    function TouchSelectionMatches(Slot: TShopSlot): Boolean;
+    procedure MainPanelPointerUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
+  public
     PlanetPanel: TfPanelPlanet;
     StationPanel: TfPanelRuins;
     LoadPanel: TfPanelLoad;
@@ -62,6 +74,8 @@ type
     HullRaceOffset: TPoint;
     procedure OnOpen; override;
     procedure OnClose; override;
+    procedure CancelPointerInput; override;
+    procedure ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer); override;
     procedure SelectMusic; override;
     procedure ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer); override;
     procedure InitializeLayout; override;
@@ -85,6 +99,7 @@ type
     procedure ChooseAnimatedPreview(Timer: PCallbackTimerGI; UserData: PtrInt);
     procedure PreviewCycleComplete(Sender: TObjectGI);
     procedure HideItemInfo(Timer: PCallbackTimerGI; UserData: PtrInt);
+    procedure PositionItemInfo(Window: TWindowGI);
     procedure RefreshItemInfo(Item: TItem);
     procedure BuildHullSlotOverlays(
         Parent: TObjectGI;
@@ -128,7 +143,9 @@ function GetShopItemIconName(Item: TItem): WideString;
 implementation
 
 uses
+  GI_LayoutMetrics,
   GI_Main,
+  GI_Inspection,
   ThreadCalc,
   aCalc,
   aGalaxyEvent,
@@ -148,9 +165,9 @@ uses
   EC_Str,
   Math,
   GameInput,
+  GameWindow,
   SysUtils,
   GI_Panel,
-  GI_PanelScrollBar,
   GI_GraphButton,
   GI_Label,
   GR_Main,
@@ -450,16 +467,19 @@ end;
 procedure TfEquipmentShop.InitializeLayout;
 var
   ExtraWidth: Integer;
+  Expansion: TShopExpansion;
 begin
   inherited InitializeLayout;
+  TouchSlot := nil;
+  ItemInfoScroll := nil;
+  HullInfoScroll := nil;
   MainPanel.InitializeLayout(Self);
   PlanetPanel.InitializeLayout(Self);
   StationPanel.InitializeLayout(Self);
   LoadPanel.InitializeLayout(Self);
-  ExtraWidth := ExtraScreenWidth div 198 * 198;
-  if ExtraWidth > 198 then
-    ExtraWidth := 198;
-  ShopVisibleColumnCount := 6 + ExtraWidth div 99;
+  Expansion := MeasureShopExpansion(GameScreenWidth);
+  ExtraWidth := Expansion.Width;
+  ShopVisibleColumnCount := Expansion.Columns;
   AppendLogTextThreadSafe('fEquipmentShop... ');
   ViewportRect := Classes.Rect(0, 0, GameScreenWidth, GameScreenHeight);
   with GetByName('MainPanel') do
@@ -473,7 +493,7 @@ begin
       SetPosition(
           Classes.Point(
               (GameScreenWidth - ClientSize.X) div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
       if ExtraWidth > 0 then
@@ -491,10 +511,12 @@ begin
       end;
     end;
   end;
+  MainPanel.FitContent(GetByName('PanelShop'));
   AppendLogLineThreadSafe('ok');
   (GetByName('PM_EndTurn') as TGraphButtonGI).UpCallback := EndTurnClicked;
   (GetByName('PM_Ship') as TGraphButtonGI).UpCallback := ShipClicked;
   GetByName('MainPanel').KeyDownCallback := MainPanelKeyDown;
+  GetByName('MainPanel').LeftButtonUpCallback := MainPanelPointerUp;
   ItemInfoWindow := GetByName('PII') as TWindowGI;
   with GetByName('InfoHullSize') do
     HullSizeOffset := Classes.Point(LocalPosition.X, LocalPosition.Y - Parent.ClientSize.Y);
@@ -632,6 +654,7 @@ var
   Slot: TShopSlot;
   I, Count: Integer;
 begin
+  ClearTouchSelection;
   Galaxy.CheckIntegrityChecksum(191);
   if GetPlayer <> nil then
     GetPlayer.ScriptItemsAct(satOnLeavingForm, nil, nil, 0);
@@ -706,6 +729,7 @@ var
   CellWidth, CellHeight: Single;
   LevelSuffix: WideString;
 begin
+  ClearTouchSelection;
   UnknownEC := 0;
   ContentColumnCount := 0;
   Count := TemporaryShopSlots.Count;
@@ -936,6 +960,7 @@ var
   Panel: TPanelGI;
   Child, Current: TObjectGI;
 begin
+  ClearTouchSelection;
   if TemporaryShopSlots <> nil then
   begin
     Count := TemporaryShopSlots.Count;
@@ -987,6 +1012,7 @@ end;
 
 procedure TfEquipmentShop.EndTurnClicked(Sender: TObjectGI);
 begin
+  ClearTouchSelection;
   if GetPlayer = nil then
     Exit;
   if GetPlayer.QueuedTravelTarget <> nil then
@@ -1050,6 +1076,7 @@ end;
 
 procedure TfEquipmentShop.ShipClicked(Sender: TObjectGI);
 begin
+  ClearTouchSelection;
   if ExitCode <> 0 then
     Exit;
   HideItemInfo(nil, 0);
@@ -1126,21 +1153,113 @@ begin
     Slot.ItemAnimation.CycleCompleteCallback := PreviewCycleComplete;
 end;
 
-procedure TfEquipmentShop.ItemMouseEnter(Sender: TObjectGI);
+function TfEquipmentShop.TouchSelectionMatches(Slot: TShopSlot): Boolean;
+begin
+  Result :=
+      (Slot <> nil)
+          and (Slot = TouchSlot)
+          and (TemporaryShopSlots <> nil)
+          and (TemporaryShopSlots.IndexOf(Slot) >= 0)
+          and (Slot.Item <> nil)
+          and (Slot.Item.Id = TouchItemId)
+          and (Galaxy.CurrentTurn = TouchTurn)
+          and (TemporaryShopPlanet = TouchPlanet)
+          and (TemporaryShopStation = TouchStation)
+          and (GetPlayer.CurrentPlanet = TouchPlanet)
+          and ((TouchPlanet <> nil) or (GetPlayer.DockedTo = TouchStation));
+end;
+
+procedure TfEquipmentShop.ClearTouchSelection;
 var
   Slot: TShopSlot;
-  Panel: TObjectGI;
 begin
-  Slot := TShopSlot(Sender.UserValue);
+  Slot := TouchSlot;
+  TouchSlot := nil;
+  if Slot = nil then
+    Exit;
+  if (TemporaryShopSlots <> nil)
+      and (TemporaryShopSlots.IndexOf(Slot) >= 0)
+      and (Slot.SlotImage <> nil) then
+  begin
+    Slot.SlotImage.SetImagePath('GI,Bm.FormShop2.' + GiResourceSuffix + 'SlotN');
+    Slot.SlotImage.SetImageKindX(ikxCenter);
+    Slot.SlotImage.SetImageKindY(ikyCenter);
+    ScheduleSlotPreviewStop(Slot);
+  end;
+  HideItemInfo(nil, 0);
+  MainPanel.HelpLabel.SetActive(False);
+  MainPanel.SlideMessagesIn;
+end;
+
+procedure TfEquipmentShop.CancelPointerInput;
+begin
+  inherited CancelPointerInput;
+  ClearTouchSelection;
+end;
+
+procedure TfEquipmentShop.ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer);
+begin
+  if TouchSlot <> nil then
+  begin
+    if not GamePointerInputIsTouch
+        and ((Message = WM_LBUTTONDOWN)
+            or (Message = WM_RBUTTONDOWN)
+            or (Message = WM_LBUTTONDBLCLK)
+            or (Message = WM_MOUSEWHEEL)) then
+      ClearTouchSelection
+    else if (Message = WM_GAME_PAN_BEGIN)
+        or ((Message = WM_GAME_TOUCH_BEGIN) and (WParam = MK_RBUTTON)) then
+      ClearTouchSelection;
+  end;
+  inherited ProcessWindowMessage(Message, WParam, LParam);
+  // The base class has converted the drag anchor to game coordinates now.
+  if (TouchSlot <> nil)
+      and (Message = WM_GAME_TOUCH_DRAG_BEGIN)
+      and not ItemInfoWindow.ContainsPoint(TouchAnchor)
+      and not GetByName('InfoHull').ContainsPoint(TouchAnchor) then
+    ClearTouchSelection;
+end;
+
+procedure TfEquipmentShop.MainPanelPointerUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
+begin
+  if not GamePointerInputIsTouch or (TouchSlot = nil) then
+    Exit;
+  if not TouchSelectionMatches(TouchSlot) then
+    ClearTouchSelection
+  else if not TouchSlot.SlotImage.ContainsPoint(Point)
+      and not ItemInfoWindow.ContainsPoint(Point)
+      and not GetByName('InfoHull').ContainsPoint(Point) then
+    ClearTouchSelection;
+end;
+
+procedure TfEquipmentShop.ItemMouseEnter(Sender: TObjectGI);
+begin
+  // Finger-down sends hover for cursor feedback. It must not arm a purchase.
+  if GamePointerInputIsTouch and not GamePointerInputIsTouchHover then
+    Exit;
+  ClearTouchSelection;
+  ShowSlotInfo(TShopSlot(Sender.UserValue));
+end;
+
+procedure TfEquipmentShop.ShowSlotInfo(Slot: TShopSlot);
+var
+  Panel, Sender: TObjectGI;
+begin
+  Sender := Slot.SlotImage;
   Slot.SlotImage.SetImagePath('GI,Bm.FormShop2.' + GiResourceSuffix + 'SlotA');
   Slot.SlotImage.SetImageKindX(ikxCenter);
   Slot.SlotImage.SetImageKindY(ikyCenter);
   StartSlotAnimatedPreview(Slot);
   Panel := GetByName('PanelShop');
   ItemInfoAnchor :=
-      Classes.Point(
-          Sender.HitTestBounds.Left + Sender.ClientSize.X div 2,
-          Min(Sender.HitTestBounds.Bottom, Panel.HitTestBounds.Bottom - Sender.ClientSize.Y - 24)
+      Sender.LogicalToScreenPoint(
+          Classes.Point(
+              Sender.HitTestBounds.Left + Sender.ClientSize.X div 2,
+              Min(
+                  Sender.HitTestBounds.Bottom,
+                  Panel.HitTestBounds.Bottom - Sender.ClientSize.Y - 24
+              )
+          )
       );
   RefreshItemInfo(Slot.Item);
   if not IsCursorImageSelected('Take') then
@@ -1152,11 +1271,14 @@ var
   Slot: TShopSlot;
 begin
   Slot := TShopSlot(Sender.UserValue);
+  if TouchSlot = Slot then
+    Exit;
   Slot.SlotImage.SetImagePath('GI,Bm.FormShop2.' + GiResourceSuffix + 'SlotN');
   Slot.SlotImage.SetImageKindX(ikxCenter);
   Slot.SlotImage.SetImageKindY(ikyCenter);
   ScheduleSlotPreviewStop(Slot);
-  RefreshItemInfo(nil);
+  if TouchSlot = nil then
+    RefreshItemInfo(nil);
   if not IsCursorImageSelected('Main') then
     SetCursorByName('Main');
 end;
@@ -1166,6 +1288,7 @@ var
   Panel: TPanelGI;
   Column: Integer;
 begin
+  ClearTouchSelection;
   Panel := GetByName('PanelGoods') as TPanelGI;
   Column :=
       Round(
@@ -1185,6 +1308,7 @@ var
   Panel: TPanelGI;
   Column: Integer;
 begin
+  ClearTouchSelection;
   Panel := GetByName('PanelGoods') as TPanelGI;
   Column :=
       Round(
@@ -1220,8 +1344,18 @@ begin
 end;
 
 procedure TfEquipmentShop.PanelScrollChanged(Sender: TObjectGI);
+var
+  Panel: TPanelScrollBarGI;
 begin
-  (GetByName('PanelGoods') as TPanelScrollBarGI).PanelScrollChanged(Sender);
+  ClearTouchSelection;
+  if ScrollTimer <> nil then
+  begin
+    CancelCallbackTimer(ScrollTimer);
+    ScrollTimer := nil;
+  end;
+  Panel := GetByName('PanelGoods') as TPanelScrollBarGI;
+  Panel.PanelScrollChanged(Sender);
+  TargetScrollX := Panel.ScrollOffset.X;
   UpdateScrollButtons;
 end;
 
@@ -1234,6 +1368,24 @@ var
   Destination: PtrInt;
 begin
   Slot := TShopSlot(Sender.UserValue);
+  if GamePointerInputIsTouch and ((TouchDragKind <> tdNone) or Sender.IsOccludedAtPoint(Point)) then
+    Exit;
+  if GamePointerInputIsTouch and (Slot <> nil) and (Slot.Item <> nil) then
+  begin
+    if not TouchSelectionMatches(Slot) then
+    begin
+      ClearTouchSelection;
+      TouchSlot := Slot;
+      TouchItemId := Slot.Item.Id;
+      TouchTurn := Galaxy.CurrentTurn;
+      TouchPlanet := TemporaryShopPlanet;
+      TouchStation := TemporaryShopStation;
+      ShowSlotInfo(Slot);
+      Exit;
+    end;
+    // Consume the selection before opening a confirmation or running scripts.
+    ClearTouchSelection;
+  end;
   if (Slot <> nil) and (Slot.Item <> nil) then
   begin
     Galaxy.CheckIntegrityChecksum(198);
@@ -1555,6 +1707,67 @@ begin
   (GetByName('InfoPrice') as TLabelGI).SetText('');
 end;
 
+procedure TfEquipmentShop.PositionItemInfo(Window: TWindowGI);
+var
+  Position: TPoint;
+  Target: TRect;
+  Title: TLabelGI;
+begin
+  if GameMobileUiEnabled and (Window.MessageLoop = Self) then
+  begin
+    if TouchSlot <> nil then
+    begin
+      Target := TouchSlot.SlotImage.HitTestBounds;
+      Target.TopLeft := TouchSlot.SlotImage.LogicalToScreenPoint(Target.TopLeft);
+      Target.BottomRight := TouchSlot.SlotImage.LogicalToScreenPoint(Target.BottomRight);
+    end
+    else
+      Target :=
+          Classes.Rect(
+              ItemInfoAnchor.X - 24,
+              ItemInfoAnchor.Y - 24,
+              ItemInfoAnchor.X + 24,
+              ItemInfoAnchor.Y + 24
+          );
+    if Window = ItemInfoWindow then
+    begin
+      FitInspectionWindow(
+          Window,
+          GetByName('InfoText'),
+          ItemInfoScroll,
+          MainPanel.ContentBounds,
+          Target,
+          True
+      );
+      Title := GetByName('InfoName') as TLabelGI;
+    end
+    else
+    begin
+      FitInspectionWindow(
+          Window,
+          GetByName('InfoHullText'),
+          HullInfoScroll,
+          MainPanel.ContentBounds,
+          Target,
+          True
+      );
+      Title := GetByName('InfoHullName') as TLabelGI;
+    end;
+    Title.SetSize(
+        Classes.Point(
+            Window.ClientSize.X - Window.WorkSubRect.Right - Title.LocalPosition.X - 15,
+            Title.ClientSize.Y
+        )
+    );
+    Exit;
+  end;
+  if DynamicTipsPos then
+    Position := Classes.Point(ItemInfoAnchor.X - Window.ClientSize.X div 2, ItemInfoAnchor.Y)
+  else
+    Position := Classes.Point(10, 10);
+  Window.SetPosition(Position);
+end;
+
 procedure TfEquipmentShop.RefreshItemInfo(Item: TItem);
 const
   DurableTypes = [0..79] - [0..7, 9, 23..25, 35..38, 42, 69..72, 74..79];
@@ -1721,6 +1934,7 @@ begin
           True,
           MinimumWidth
       );
+      PositionItemInfo(ItemInfoWindow);
       GetByName('InfoSize')
           .SetPosition(
               Classes.Point(
@@ -1739,12 +1953,6 @@ begin
                   ItemInfoWindow.ClientSize.X + ShipScreen.ItemRaceImagePosition.X,
                   ItemInfoWindow.ClientSize.Y + ShipScreen.ItemRaceImagePosition.Y
               ));
-      if DynamicTipsPos then
-        ItemInfoWindow.SetPosition(
-            Classes.Point(ItemInfoAnchor.X - ItemInfoWindow.ClientSize.X div 2, ItemInfoAnchor.Y)
-        )
-      else
-        ItemInfoWindow.SetPosition(Classes.Point(10, 10));
     end;
   end;
 end;
@@ -2009,6 +2217,7 @@ begin
       True,
       MinimumWidth
   );
+  PositionItemInfo(Window);
   Target
       .GetByName('InfoHullSize')
       .SetPosition(Classes.Point(HullSizeOffset.X, Window.ClientSize.Y + HullSizeOffset.Y));
@@ -2022,11 +2231,6 @@ begin
               Window.ClientSize.X + HullRaceOffset.X,
               Window.ClientSize.Y + HullRaceOffset.Y
           ));
-  if DynamicTipsPos then
-    Window
-        .SetPosition(Classes.Point(ItemInfoAnchor.X - Window.ClientSize.X div 2, ItemInfoAnchor.Y))
-  else
-    Window.SetPosition(Classes.Point(10, 10));
 end;
 
 procedure TfEquipmentShop.ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer);
@@ -2045,6 +2249,11 @@ end;
 
 procedure TfEquipmentShop.MainPanelKeyDown(Sender: TObjectGI; Key: Cardinal);
 begin
+  if (Key = VK_ESCAPE) and (TouchSlot <> nil) then
+  begin
+    ClearTouchSelection;
+    BreakUiMessage;
+  end;
   if not IsVirtualKeyDown(VK_CONTROL)
       and not IsVirtualKeyDown(VK_SHIFT)
       and not IsVirtualKeyDown(VK_MENU)

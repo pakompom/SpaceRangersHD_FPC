@@ -764,6 +764,7 @@ function GetInnermostScreenLoop: TMessageLoopGI;
 implementation
 
 uses
+  GameWindow,
   aPacket,
   aSaveLoad,
   aScript,
@@ -1064,6 +1065,24 @@ begin
     ScrollStep := StrToInt(AnsiString(UserSettingsConfig.GetParamByPathOrMarker('ScrollStep')));
   if UserSettingsConfig.CountParamsByPath('ScrollSense') > 0 then
     ScrollSense := StrToInt(AnsiString(UserSettingsConfig.GetParamByPathOrMarker('ScrollSense')));
+  if GameMobileUiEnabled then
+    SpaceZoomPercent := 115
+  else
+    SpaceZoomPercent := 100;
+  if UserSettingsConfig.CountParamsByPath('SpaceZoomPercent') > 0 then
+    SpaceZoomPercent :=
+        EnsureRange(
+            StrToIntDef(
+                AnsiString(UserSettingsConfig.GetParamByPathOrMarker('SpaceZoomPercent')),
+                SpaceZoomPercent
+            ),
+            MinSpaceZoomPercent,
+            MaxSpaceZoomPercent
+        );
+  SpacePinchZoom := True;
+  if UserSettingsConfig.CountParamsByPath('SpacePinchZoom') > 0 then
+    SpacePinchZoom :=
+        ParseEnabledNameGI(UserSettingsConfig.GetParamByPathOrMarker('SpacePinchZoom'));
   if UserSettingsConfig.CountParamsByPath('FilmSpeed') > 0 then
     FilmSpeed := StrToInt(AnsiString(UserSettingsConfig.GetParamByPathOrMarker('FilmSpeed')));
   ScrollInteriorRect :=
@@ -1103,6 +1122,12 @@ begin
         TGalaxyMapFontChoice(
             ExtractDigitsToIntW(UserSettingsConfig.GetParamByPathOrMarker('FontGalaxy'))
         );
+  // Mobile font defaults apply only when no explicit user preference is saved.
+  if GameMobileUiEnabled then
+  begin
+    FontDialog := 2;
+    FontQuest := 3;
+  end;
   if UserSettingsConfig.CountParamsByPath('FontDialog') > 0 then
     FontDialog := ExtractDigitsToIntW(UserSettingsConfig.GetParamByPathOrMarker('FontDialog'));
   if UserSettingsConfig.CountParamsByPath('FontQuest') > 0 then
@@ -1960,7 +1985,11 @@ begin
     LoadArcadeScreen.Free;
     LoadArcadeScreen := nil;
   end;
-  // Native code omits AchievementsScreen from this cleanup list.
+  if AchievementsScreen <> nil then
+  begin
+    AchievementsScreen.Free;
+    AchievementsScreen := nil;
+  end;
   for ScreenIndex := Low(TGameScreenId) to High(TGameScreenId) do
     RegisteredScreens[ScreenIndex] := nil;
   if PopupController <> nil then

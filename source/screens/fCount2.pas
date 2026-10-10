@@ -119,10 +119,17 @@ begin
           )
       );
   end;
+  FitMobileControl(
+      GetByName('Ok').Parent,
+      Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12),
+      0,
+      1.15 // Slightly larger than ordinary dialogs, in dp per source pixel.
+  );
 end;
 
 procedure TfCount2.OnOpen;
 begin
+  (GetByName('BGBuf') as TGraphBufGI).GraphBuf.LoadFromScreen(0, True);
   Dragging := False;
   if ImagePath <> '' then
     with GetByName('ItemImage') as TImageGI do
@@ -164,17 +171,19 @@ begin
     SetText(Description);
     SetFontName(Self.FontName);
   end;
-  with GetByName('BGBuf') as TGraphBufGI do
-    BindExternalGraphBuf(AuxRenderBuffer);
   with GetByName('Add') as TGraphButtonGI do
   begin
     DownCallback := IncreaseMouseDown;
     UpCallback := IncreaseMouseUp;
+    TouchHold := True;
+    TouchCancelCallback := IncreaseMouseUp;
   end;
   with GetByName('Sub') as TGraphButtonGI do
   begin
     DownCallback := DecreaseMouseDown;
     UpCallback := DecreaseMouseUp;
+    TouchHold := True;
+    TouchCancelCallback := DecreaseMouseUp;
   end;
   (GetByName('Max') as TGraphButtonGI).UpCallback := MaximumClicked;
   (GetByName('Ok') as TGraphButtonGI).UpCallback := AcceptClicked;
@@ -436,7 +445,6 @@ begin
   Parent.CaptureCursorState(@State);
   Parent.SetCursorActive(False);
   Parent.DrawQueuedUpdateRects;
-  CaptureScreenBackground(False, 0);
   Dialog := TfCount2.Create;
   Dialog.ParentLoop := Parent;
   Parent.ChildLoop := Dialog;

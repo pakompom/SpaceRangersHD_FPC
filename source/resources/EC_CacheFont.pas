@@ -193,6 +193,7 @@ implementation
 
 uses
   EC_Mem,
+  GameWindow,
   GR_DX,
   GR_Main,
   Math,
@@ -501,7 +502,7 @@ begin
     WordLength := Index - WordStart;
     WordWidth := 0;
     Index := WordStart;
-    FitEnd := 0;
+    FitEnd := WordStart - 1;
     while Index <= WordStart + WordLength - 1 do
     begin
       Ch := PFontTextCharsEC(Pointer(Text))^[Index];
@@ -574,7 +575,7 @@ begin
           end;
           WordLength := Index - WordStart;
           if WordWidth <= MaxWidth then
-            FitEnd := Index - 1 - 1;
+            FitEnd := Index - 1;
           Continue;
         end;
         Index := Index + TokenLength - 1;
@@ -585,7 +586,7 @@ begin
       else
         WordWidth := WordWidth + GetGlyphAdvance(Ch);
       if WordWidth <= MaxWidth then
-        FitEnd := Index - 1 - 1;
+        FitEnd := Index - 1;
     end;
     if LineWidth = 0 then
     begin
@@ -593,12 +594,16 @@ begin
       begin
         TokenLength := 0;
         if not FirstLine then
-          while Text[LineStart + 1 + TokenLength] = ' ' do
+          while (TokenLength < LineLength) and (Text[LineStart + 1 + TokenLength] = ' ') do
             Inc(TokenLength);
         if LineLength - TokenLength > 0 then
           Lines.AddSlice(PWideChar(Text) + LineStart + TokenLength, LineLength - TokenLength)
         else
         begin
+          // An indivisible glyph, object or formatted field can exceed the
+          // available width. Keep the word intact rather than retrying it forever.
+          if FitEnd < WordStart then
+            FitEnd := WordStart + WordLength - 1;
           Lines.AddSlice(PWideChar(Text) + LineStart + TokenLength, FitEnd + 1 - WordStart);
           WordStart := FitEnd + 1;
           WordLength := 0;
@@ -621,7 +626,7 @@ begin
     begin
       TokenLength := 0;
       if not FirstLine then
-        while Text[LineStart + 1 + TokenLength] = ' ' do
+        while (TokenLength < LineLength) and (Text[LineStart + 1 + TokenLength] = ' ') do
           Inc(TokenLength);
       Lines.AddSlice(PWideChar(Text) + LineStart + TokenLength, LineLength - TokenLength);
       FirstLine := False;
@@ -634,7 +639,7 @@ begin
   TokenLength := 0;
   LineLength := CharCount - LineStart;
   if not FirstLine then
-    while Text[LineStart + 1 + TokenLength] = ' ' do
+    while (TokenLength < LineLength) and (Text[LineStart + 1 + TokenLength] = ' ') do
       Inc(TokenLength);
   if LineLength - TokenLength > 0 then
     Lines.AddSlice(PWideChar(Text) + LineStart + TokenLength, LineLength - TokenLength);
@@ -2061,6 +2066,37 @@ var
   Locked: TD3DLockedRect;
   Clip: TRect;
 
+  procedure ExtendGlyphColors;
+  var
+    X, Y, NX, NY: Integer;
+    Pixel, Neighbor: PCardinal;
+    Color, Alpha, BestAlpha: Cardinal;
+  begin
+    // Linear filtering must interpolate glyph coverage, not fade its RGB toward
+    // transparent black as well. Keep alpha unchanged around the glyph edges.
+    for Y := 0 to Height - 1 do
+      for X := 0 to Width - 1 do
+      begin
+        Pixel := AddPointerOffset(Locked.Bits, Y * Locked.Pitch + X * 4);
+        if (Pixel^ shr 24) <> 0 then
+          Continue;
+        Color := 0;
+        BestAlpha := 0;
+        for NY := Max(0, Y - 1) to Min(Height - 1, Y + 1) do
+          for NX := Max(0, X - 1) to Min(Width - 1, X + 1) do
+          begin
+            Neighbor := AddPointerOffset(Locked.Bits, NY * Locked.Pitch + NX * 4);
+            Alpha := Neighbor^ shr 24;
+            if Alpha > BestAlpha then
+            begin
+              BestAlpha := Alpha;
+              Color := Neighbor^ and $FFFFFF;
+            end;
+          end;
+        Pixel^ := Color;
+      end;
+  end;
+
   function MeasureFontTextureTextSize: TPoint;
   var
     First: Boolean;
@@ -2263,6 +2299,8 @@ begin
         Lines.Next;
       end;
     end;
+    if GameWindowUsesNativeRaster then
+      ExtendGlyphColors;
     Image.UnlockRect(0);
   finally
     if Lines <> nil then

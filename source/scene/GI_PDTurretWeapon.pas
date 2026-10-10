@@ -51,6 +51,7 @@ type
 implementation
 
 uses
+  GI_Main,
   GlobalsV,
   Math,
   EC_Mem,
@@ -89,10 +90,7 @@ end;
 
 procedure TPSPDWeaponGI.UpdateHitTestBounds;
 begin
-  HitTestBounds.Left := 0;
-  HitTestBounds.Top := 0;
-  HitTestBounds.Right := GameScreenWidth;
-  HitTestBounds.Bottom := GameScreenHeight;
+  HitTestBounds := ControlViewportBounds(Self);
 end;
 
 procedure TPSPDWeaponGI.SetActive(Enabled: Boolean);

@@ -425,6 +425,7 @@ uses
   Classes,
   fTalk,
   GI_Main,
+  GI_DialogueLayout,
   GI_Panel,
   GI_Image,
   GI_ScrollBar,
@@ -510,12 +511,7 @@ end;
 
 procedure TfRuinsTalk.InitializeLayout;
 var
-  ChoiceExtra, TextExtra: Integer;
-  Panel, TalkPanel, Child, AddButton, CloseButton: TObjectGI;
-  TextPanel: TPanelScrollBarGI;
-  TextLabel: TObjectGI;
-  ChoicePanel: TPanelScrollBarGI;
-  Border, BottomBorder, Separator, Decoration: TObjectGI;
+  Panel: TObjectGI;
   Button, CloseFormButton: TGraphButtonGI;
 begin
   inherited InitializeLayout;
@@ -535,78 +531,10 @@ begin
     LargePortraitLayout := True;
     PortraitTableVisible := UseTablesForGov;
   end;
-  TalkPanel := Panel.FindByNameRecursive('PanelTalk');
-  TextExtra := Min(Max(ExtraScreenHeight, 0), 250) div 3;
-  ChoiceExtra := TextExtra div 4 * 3;
-  TextExtra := TextExtra * 3 - ChoiceExtra;
-  if ExtraScreenHeight < 0 then
-    TalkPanel.SetPosition(
-        Classes.Point(
-            TalkPanel.LocalPosition.X + ExtraScreenWidth div 2,
-            TalkPanel.LocalPosition.Y + ExtraScreenHeight div 2
-        )
-    )
-  else
-    TalkPanel.SetPosition(
-        Classes.Point(TalkPanel.LocalPosition.X + ExtraScreenWidth div 2, TalkPanel.LocalPosition.Y)
-    );
-  TalkPanel.SetSize(
-      Classes.Point(TalkPanel.ClientSize.X, TalkPanel.ClientSize.Y + TextExtra + ChoiceExtra)
-  );
-  Child := TalkPanel.FirstChild;
-  Child.SetPosition(Classes.Point(Child.LocalPosition.X, Child.LocalPosition.Y + TextExtra));
-  Child.SetSize(Classes.Point(Child.ClientSize.X, Child.ClientSize.Y + ChoiceExtra));
-  AddButton := TalkPanel.FindByNameRecursive('UserMsgAdd');
-  AddButton
-      .SetPosition(Classes.Point(AddButton.LocalPosition.X, AddButton.LocalPosition.Y + TextExtra));
-  CloseButton := TalkPanel.FindByNameRecursive('ButFormClose');
-  CloseButton.SetPosition(
-      Classes
-          .Point(CloseButton.LocalPosition.X, CloseButton.LocalPosition.Y + TextExtra + ChoiceExtra)
-  );
-  TextPanel := TalkPanel.FindByNameRecursive('TextScroll') as TPanelScrollBarGI;
-  TextPanel.SetSize(Classes.Point(TextPanel.ClientSize.X, TextPanel.ClientSize.Y + TextExtra));
-  TextPanel.VerticalScrollBar.SetSize(
-      Classes.Point(
-          TextPanel.VerticalScrollBar.ClientSize.X,
-          TextPanel.VerticalScrollBar.ClientSize.Y + TextExtra
-      )
-  );
-  TextLabel := TextPanel.FindByNameRecursive('TalkText');
-  TextLabel.SetSize(Classes.Point(TextLabel.ClientSize.X, TextLabel.ClientSize.Y + TextExtra));
-  ChoicePanel := TalkPanel.FindByNameRecursive('TalkPA') as TPanelScrollBarGI;
-  ChoicePanel.SetPosition(
-      Classes.Point(ChoicePanel.LocalPosition.X, ChoicePanel.LocalPosition.Y + TextExtra)
-  );
-  ChoicePanel
-      .SetSize(Classes.Point(ChoicePanel.ClientSize.X, ChoicePanel.ClientSize.Y + ChoiceExtra));
-  TObjectGI(ChoicePanel.VerticalScrollBar)
-      .SetPosition(
-          Classes.Point(
-              ChoicePanel.VerticalScrollBar.LocalPosition.X,
-              ChoicePanel.VerticalScrollBar.LocalPosition.Y + TextExtra
-          ));
-  ChoicePanel.VerticalScrollBar.SetSize(
-      Classes.Point(
-          ChoicePanel.VerticalScrollBar.ClientSize.X,
-          ChoicePanel.VerticalScrollBar.ClientSize.Y + ChoiceExtra
-      )
-  );
-  Border := ChoicePanel.NextSibling;
-  Border.SetSize(Classes.Point(Border.ClientSize.X, Border.ClientSize.Y + TextExtra + ChoiceExtra));
-  BottomBorder := Border.NextSibling;
-  BottomBorder.SetPosition(
-      Classes.Point(
-          BottomBorder.LocalPosition.X,
-          BottomBorder.LocalPosition.Y + TextExtra + ChoiceExtra
-      )
-  );
-  Separator := BottomBorder.NextSibling;
-  Separator
-      .SetPosition(Classes.Point(Separator.LocalPosition.X, Separator.LocalPosition.Y + TextExtra));
-  Decoration := Separator.NextSibling;
-  Decoration.SetPosition(
-      Classes.Point(Decoration.LocalPosition.X, Decoration.LocalPosition.Y + TextExtra)
+  PrepareDialoguePanel(
+      Panel.FindByNameRecursive('PanelTalk'),
+      MainPanel.ContentLayoutHeight,
+      MainPanel.ContentBounds
   );
   Panel.FindByNameRecursive('Film').SetSize(Classes.Point(GameScreenWidth, GameScreenHeight));
   AppendLogLineThreadSafe('ok');
@@ -1298,6 +1226,7 @@ begin
   Row.SetPositionModeW(True);
   Row.MouseEnterCallback := ChoiceMouseEnter;
   Row.MouseLeaveCallback := ChoiceMouseLeave;
+  Row.TouchInteraction := tiTap;
   Row.LeftButtonDownCallback := ChoiceMouseDown;
   Row.LeftButtonUpCallback := ChoiceMouseUp;
   Highlight := TImageGI.Create(Row);
@@ -1408,24 +1337,19 @@ var
 begin
   if PresentedTextLength >= Length(DialogText) then
   begin
+    FitDialogueChoices(GetByName('PanelTalk'), ChoiceHeight);
     Choices := GetByName('TalkPA') as TPanelScrollBarGI;
-    Choices.SetActive(True);
-    Choices.VerticalScrollBar.SetSmallChange((GetByName('TalkText') as TLabelGI).GetLineHeight);
-    Choices.VerticalScrollBar.SetLargeChange(Choices.ClientSize.Y);
-    Choices.VerticalScrollBar.SetPageSize(Choices.ClientSize.Y);
-    Choices.SetScrollOffset(Point(0, 0));
-    Choices.VerticalScrollBar.SetActive(ChoiceHeight > Choices.ClientSize.Y);
-    Choices.VerticalScrollBar.SetDepth(4);
-    Choices.SetDragScrollingEnabled(Choices.VerticalScrollBar.Active);
-    Choices.UpdateScrollRanges;
+    ShowDialogueChoices(
+        Choices,
+        ChoiceHeight,
+        (GetByName('TalkText') as TLabelGI).GetLineHeight,
+        SavedChoiceScroll
+    );
     if TextPresentationTimer <> nil then
     begin
       CancelCallbackTimer(TextPresentationTimer);
       TextPresentationTimer := nil;
     end;
-    if SavedChoiceScroll >= 0 then
-      Choices.VerticalScrollBar.SetPosition(SavedChoiceScroll);
-    SavedChoiceScroll := -1;
     PostMouseMoveMessage;
   end
   else
@@ -1435,19 +1359,8 @@ begin
     DialogText := ReplaceAllWideString(DialogText, #13#10, #13#10 + LocalizedTextLinePrefix);
     PresentedTextLength := Length(DialogText);
     DialogText := ReplaceAllWideString(DialogText, TextHighlightColorTag, DialogHighlightColorTag);
-    (GetByName('TalkText') as TLabelGI).SetText(DialogText);
     TextPanel := GetByName('TextScroll') as TPanelScrollBarGI;
-    TextPanel.SetScrollOffset(Point(0, 0));
-    TextPanel.UpdateScrollRanges;
-    TextPanel.VerticalScrollBar.SetActive(
-        (TextPanel.FindByNameRecursive('TalkText') as TLabelGI).ClientSize.Y
-            > TextPanel.ClientSize.Y
-    );
-    TextPanel.VerticalScrollBar.SetSmallChange(
-        (TextPanel.FindByNameRecursive('TalkText') as TLabelGI).GetLineHeight
-    );
-    TextPanel.VerticalScrollBar.SetLargeChange(TextPanel.ClientSize.Y);
-    TextPanel.VerticalScrollBar.SetPageSize(TextPanel.ClientSize.Y);
+    RefreshDialogueText(TextPanel, GetByName('TalkText') as TLabelGI, DialogText);
     (GetByName('UserMsgAdd') as TGraphButtonGI).SetDisabled(False);
   end;
 end;

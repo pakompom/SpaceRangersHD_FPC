@@ -126,6 +126,7 @@ type
     SpecialSlot2Timer: PCallbackTimerGI;
     SpecialSlot3Timer: PCallbackTimerGI;
     StorageImages: array[0..20] of TImageGI;
+    StorageVisibleCount: Integer;
     StorageUpButton: TGraphButtonGI;
     StorageSlideTimer: PCallbackTimerGI;
     StorageSlideOffset: Integer;
@@ -144,6 +145,7 @@ type
     SavedShipExperience: Integer;
     RemoteHoldMode: Boolean;
     RemoteHoldImages: array[0..54] of TImageGI;
+    RemoteHoldColumns, RemoteHoldRows: Integer;
     RemoteHoldFirstOrder: Integer;
     procedure ProcessWindowMessage(Message: Cardinal; WParam: Cardinal; LParam: Integer); override;
     procedure OnOpen; override;
@@ -196,6 +198,7 @@ type
     procedure HoldLeftReleased(Sender: TObjectGI);
     procedure HoldRightPressed(Sender: TObjectGI);
     procedure HoldRightReleased(Sender: TObjectGI);
+    procedure StopHoldScrolling;
     procedure ScrollHoldTimer(Timer: PCallbackTimerGI; UserData: PtrInt);
     procedure ReturnSelectedHoldEntry;
     procedure RefreshEquipmentConfigurationButtons;
@@ -287,6 +290,7 @@ type
     procedure StorageUpClicked(Sender: TObjectGI);
     procedure SlideStorageTimer(Timer: PCallbackTimerGI; UserData: PtrInt);
     procedure RefreshStorageView;
+    function GetStorageScrollLimit: Integer;
     procedure ScrollStorageUp(Sender: TObjectGI);
     procedure ScrollStorageDown(Sender: TObjectGI);
     procedure StorageItemMouseUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
@@ -319,8 +323,6 @@ type
   end;
 
 var
-
-  StorageImageCount: Integer = 21;
 
   PlayerHoldEntries: TList = nil;
 
@@ -402,6 +404,9 @@ uses
   ThreadCalc,
   SysUtils,
   GameInput,
+  GameWindow,
+  GI_ShipLayout,
+  GI_Inspection,
   fStarMap,
   aTranclucator,
   aRuins,
@@ -911,6 +916,9 @@ begin
   ShipLoopSound.Configure('Sound.ShipLoop', 0, True);
   ShipToInspect := nil;
   RemoteHoldMode := False;
+  StorageVisibleCount := Length(StorageImages);
+  RemoteHoldColumns := 5;
+  RemoteHoldRows := 11;
 end;
 
 destructor TfShip2.Destroy;
@@ -941,6 +949,15 @@ begin
     Self.ItemRaceImagePosition :=
         Classes.Point(LocalPosition.X - Parent.ClientSize.X, LocalPosition.Y - Parent.ClientSize.Y);
   inherited InitializeLayout;
+  StorageVisibleCount := Length(StorageImages);
+  RemoteHoldColumns := 5;
+  RemoteHoldRows := 11;
+  if GameMobileUiEnabled then
+  begin
+    StorageVisibleCount := 12;
+    RemoteHoldColumns := 3;
+    RemoteHoldRows := 5;
+  end;
   MainPanel.InitializeLayout(Self);
   AppendLogTextThreadSafe('fShip2... ');
   ViewportRect := Classes.Rect(0, 0, GameScreenWidth, GameScreenHeight);
@@ -971,7 +988,7 @@ begin
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
     with FindByNameRecursive('SC_Panel') do
@@ -985,7 +1002,7 @@ begin
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
   end;
@@ -1016,8 +1033,12 @@ begin
     SkillProgressImages[I] := GetByName('PDS_Skill' + IntToStr(I) + 'i') as TImageGI;
     SkillGainImages[I] := GetByName('PDS_Skill' + IntToStr(I) + 'g') as TImageGI;
   end;
-  for I := 0 to StorageImageCount - 1 do
+  for I := 0 to High(StorageImages) do
+  begin
     StorageImages[I] := GetByName('Storage_' + IntToStr(I) + 'i') as TImageGI;
+    if I >= StorageVisibleCount then
+      StorageImages[I].SetActive(False);
+  end;
   RewardsBuffer := GetByName('RewardsImg') as TGraphBufGI;
   RewardsWindow := GetByName('RewardWnd') as TWindowGI;
   ExitButton := GetByName('Exit') as TGraphButtonGI;
@@ -1027,8 +1048,12 @@ begin
   (GetByName('CustomBridgeInto') as TGraphButtonGI).UpCallback := EnterBridgeClicked;
   (GetByName('S_Left') as TGraphButtonGI).UpCallback := HoldLeftReleased;
   (GetByName('S_Left') as TGraphButtonGI).DownCallback := HoldLeftPressed;
+  (GetByName('S_Left') as TGraphButtonGI).TouchHold := True;
+  (GetByName('S_Left') as TGraphButtonGI).TouchCancelCallback := HoldLeftReleased;
   (GetByName('S_Right') as TGraphButtonGI).UpCallback := HoldRightReleased;
   (GetByName('S_Right') as TGraphButtonGI).DownCallback := HoldRightPressed;
+  (GetByName('S_Right') as TGraphButtonGI).TouchHold := True;
+  (GetByName('S_Right') as TGraphButtonGI).TouchCancelCallback := HoldRightReleased;
   GetByName('MainPanel').KeyDownCallback := MainKeyDown;
   GetByName('MainPanel').KeyUpCallback := MainKeyUp;
   GetByName('MainPanel').LeftButtonUpCallback := MainLeftButtonUp;
@@ -1065,15 +1090,16 @@ begin
   (GetByName('ToRH') as TGraphButtonGI).UpCallback := ToggleRemoteHoldClicked;
   Panel := GetByName('PanelItemRH') as TPanelGI;
   Panel.FreeOwnedChildren;
-  for Row := 0 to 10 do
-    for Column := 0 to 4 do
+  FillChar(RemoteHoldImages, SizeOf(RemoteHoldImages), 0);
+  for Row := 0 to RemoteHoldRows - 1 do
+    for Column := 0 to RemoteHoldColumns - 1 do
     begin
-      RemoteHoldImages[5 * Row + Column] := TImageGI.Create(Panel);
-      with RemoteHoldImages[5 * Row + Column] do
+      RemoteHoldImages[RemoteHoldColumns * Row + Column] := TImageGI.Create(Panel);
+      with RemoteHoldImages[RemoteHoldColumns * Row + Column] do
       begin
         SetPosition(Classes.Point(Column * GiScalePixelsEx(42, 33), Row * GiScalePixelsEx(42, 33)));
         SetSize(Classes.Point(GiScalePixelsEx(40, 31), GiScalePixelsEx(40, 31)));
-        SetName('RHItem' + IntToStr(Column + 5 * Row));
+        SetName('RHItem' + IntToStr(Column + RemoteHoldColumns * Row));
         LeftButtonDownCallback := RemoteHoldItemMouseDown;
       end;
     end;
@@ -1094,8 +1120,12 @@ begin
   end;
   (GetByName('UpRH') as TGraphButtonGI).DownCallback := RemoteHoldUpPressed;
   (GetByName('UpRH') as TGraphButtonGI).UpCallback := RemoteHoldUpReleased;
+  (GetByName('UpRH') as TGraphButtonGI).TouchHold := True;
+  (GetByName('UpRH') as TGraphButtonGI).TouchCancelCallback := RemoteHoldUpReleased;
   (GetByName('DownRH') as TGraphButtonGI).DownCallback := RemoteHoldDownPressed;
   (GetByName('DownRH') as TGraphButtonGI).UpCallback := RemoteHoldDownReleased;
+  (GetByName('DownRH') as TGraphButtonGI).TouchHold := True;
+  (GetByName('DownRH') as TGraphButtonGI).TouchCancelCallback := RemoteHoldDownReleased;
   (GetByName('StorageToShip') as TGraphButtonGI).UpCallback := StorageToShipClicked;
   (GetByName('SellAllFromStorage') as TGraphButtonGI).UpCallback := SellStorageClicked;
   (GetByName('ShipToStorage') as TGraphButtonGI).UpCallback := ShipToStorageClicked;
@@ -1118,6 +1148,15 @@ begin
   end;
   SelfSkillPointColor := GetStyleColorGI('Ship.ExpPointsToSpendOnSelf', 45, 105, 124);
   OtherSkillPointColor := GetStyleColorGI('Ship.ExpPointsToSpendOnOther', 180, 60, 60);
+  PrepareMobileShipInventory(
+      Self,
+      MainPanel.ContentBounds,
+      StorageVisibleCount,
+      RemoteHoldColumns,
+      RemoteHoldRows
+  );
+  if GameMobileUiEnabled then
+    StoragePanelRestTop := 0;
 end;
 
 procedure TfShip2.OnOpen;
@@ -1578,8 +1617,9 @@ begin
     end;
     if not GetPlayer.HasAccessibleStorageAt(nil) then
       StorageDownClicked(nil);
-    with GetByName('SC_Panel') as TPanelGI do
-      SetPosition(Classes.Point(0, LocalPosition.Y));
+    if not GameMobileUiEnabled then
+      with GetByName('SC_Panel') as TPanelGI do
+        SetPosition(Classes.Point(0, LocalPosition.Y));
   end;
   with GetByName('HullRepair') as TgaiGI do
     if Active then
@@ -1623,6 +1663,11 @@ begin
   end;
   RefreshLoadEquippedRocketsButton;
   GetByName('SC_Panel').SetActive(CanUseLocalStorage);
+  if GameMobileUiEnabled then
+  begin
+    GetByName('MobileStorage').SetActive(CanUseLocalStorage);
+    StorageDownClicked(nil);
+  end;
   CustomCursorEnabled := True;
   UpdateActionCursor(ReopenRequested);
   SetCursorActive(True);
@@ -1638,11 +1683,7 @@ end;
 procedure TfShip2.CancelPointerInput;
 begin
   inherited CancelPointerInput;
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
 end;
 
 procedure TfShip2.OnClose;
@@ -1665,11 +1706,7 @@ begin
       GetPlayer.ScriptItemsAct(satOnLeavingOtherShip, nil, nil, 0);
   end;
   BackgroundBuffer.GraphBuf.Clear;
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
   StopScriptVideo;
   if SpecialSlot1Timer <> nil then
   begin
@@ -1925,6 +1962,8 @@ end;
 
 procedure TfShip2.RewardsMouseLeave(Sender: TObjectGI);
 begin
+  if (Sender <> nil) and DeferMobileTooltipLeave(RewardsWindow, RewardsMouseLeave) then
+    Exit;
   HideRewardTooltip;
 end;
 
@@ -1932,6 +1971,7 @@ procedure TfShip2.ShowRewardTooltip(Ship: TNormalShip; Award: Integer);
 var
   Path: WideString;
 begin
+  CancelMobileTooltipLeave(RewardsWindow);
   if SelectedReward <> Award then
   begin
     SelectedReward := Award;
@@ -1983,9 +2023,10 @@ begin
     RewardsWindow.SetPosition(
         Classes.Point(
             ExtraScreenWidth div 2 + 680 - RewardsWindow.ClientSize.X,
-            ExtraScreenHeight div 2 + 160
+            MainPanel.VerticalContentOffset + 160
         )
     );
+    FitMobileTooltip(RewardsWindow, MainPanel.ContentBounds, GetCursorPoint);
     with RewardsWindow do
     begin
       Invalidate;
@@ -2188,7 +2229,9 @@ begin
         Position :=
             Classes.Point(
                 Sender.HitTestBounds.Left - 10,
-                Sender.HitTestBounds.Top + Sender.ClientSize.Y + 10
+                Sender.LogicalToScreenPoint(Sender.HitTestBounds.TopLeft).Y
+                    + Sender.ClientSize.Y
+                    + 10
             );
     end
     else if Sender is TImageGI then
@@ -2340,7 +2383,12 @@ begin
     Window.SetPosition(
         Classes.Point(
             Window.LocalPosition.X,
-            Max(10, Sender.HitTestBounds.Top - Sender.ClientSize.Y div 3 - 60)
+            Max(
+                10,
+                Sender.LogicalToScreenPoint(Sender.HitTestBounds.TopLeft).Y
+                    - Sender.ClientSize.Y div 3
+                    - 60
+            )
         )
     );
     Window.SetActive(True);
@@ -2364,6 +2412,7 @@ begin
       )
     else
       Window.SetPosition(Position);
+    FitMobileTooltip(Window, MainPanel.ContentBounds, GetCursorPoint);
     if PropertyInfoHideTimer <> nil then
     begin
       CancelCallbackTimer(PropertyInfoHideTimer);
@@ -2375,6 +2424,9 @@ end;
 
 procedure TfShip2.HideShipPropertyInfo(Sender: TObjectGI);
 begin
+  if (Sender <> nil)
+      and DeferMobileTooltipLeave(GetByName('RankWnd') as TWindowGI, HideShipPropertyInfo) then
+    Exit;
   GetByName('RankWnd').SetActive(False);
 end;
 
@@ -2855,15 +2907,15 @@ begin
       ZoneMouseDownCallback := RemoteHoldItemMouseDown;
     GetByName('S_' + IntToStr(I) + 'f').SetActive(SelectedHoldKind <> phkEmpty);
   end;
-  for Row := 0 to 10 do
-    for Column := 0 to 4 do
+  for Row := 0 to RemoteHoldRows - 1 do
+    for Column := 0 to RemoteHoldColumns - 1 do
     begin
-      I := FindPlayerHoldIndexByOrder(RemoteHoldFirstOrder + Column + Row * 5);
+      I := FindPlayerHoldIndexByOrder(RemoteHoldFirstOrder + Column + Row * RemoteHoldColumns);
       if I < 0 then
         Entry := nil
       else
         Entry := TPlayerHoldUnit(PlayerHoldEntries[I]);
-      with RemoteHoldImages[Row * 5 + Column] do
+      with RemoteHoldImages[Row * RemoteHoldColumns + Column] do
       begin
         if (Entry = nil) or (Entry.Kind = phkEmpty) then
           SetImagePath('')
@@ -4979,46 +5031,39 @@ begin
   end;
 end;
 
-procedure TfShip2.HoldLeftPressed(Sender: TObjectGI);
+procedure TfShip2.StopHoldScrolling;
 begin
-  Dec(HoldFirstIndex);
-  RefreshShipView;
   if HoldScrollTimer <> nil then
   begin
     CancelCallbackTimer(HoldScrollTimer);
     HoldScrollTimer := nil;
   end;
+end;
+
+procedure TfShip2.HoldLeftPressed(Sender: TObjectGI);
+begin
+  Dec(HoldFirstIndex);
+  RefreshShipView;
+  StopHoldScrolling;
   HoldScrollTimer := ScheduleCallbackTimer(500, 50, ScrollHoldTimer);
 end;
 
 procedure TfShip2.HoldLeftReleased(Sender: TObjectGI);
 begin
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
 end;
 
 procedure TfShip2.HoldRightPressed(Sender: TObjectGI);
 begin
   Inc(HoldFirstIndex);
   RefreshShipView;
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
   HoldScrollTimer := ScheduleCallbackTimer(500, 50, ScrollHoldTimer, 1);
 end;
 
 procedure TfShip2.HoldRightReleased(Sender: TObjectGI);
 begin
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
 end;
 
 procedure TfShip2.ScrollHoldTimer(Timer: PCallbackTimerGI; UserData: PtrInt);
@@ -5030,20 +5075,12 @@ begin
   if HoldFirstIndex <= 0 then
   begin
     HoldFirstIndex := 0;
-    if HoldScrollTimer <> nil then
-    begin
-      CancelCallbackTimer(HoldScrollTimer);
-      HoldScrollTimer := nil;
-    end;
+    StopHoldScrolling;
   end
   else if HoldFirstIndex + 6 >= PlayerHoldEntries.Count + 1 then
   begin
     HoldFirstIndex := Max(0, PlayerHoldEntries.Count + 1 - 6);
-    if HoldScrollTimer <> nil then
-    begin
-      CancelCallbackTimer(HoldScrollTimer);
-      HoldScrollTimer := nil;
-    end;
+    StopHoldScrolling;
   end;
   RefreshShipView;
 end;
@@ -5431,11 +5468,13 @@ procedure TfShip2.ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: In
 begin
   if Delta = WHEEL_DELTA then
   begin
-    if CanUseLocalStorage and GetByName('SC_Panel').ContainsPoint(Point) then
+    if CanUseLocalStorage
+        and (GetByName('SC_Panel').ContainsPoint(Point)
+            or (GameMobileUiEnabled and GetByName('MobileStorage').ContainsPoint(Point))) then
       ScrollStorageUp(nil)
     else if RemoteHoldMode and GetByName('PanelItemRH').ContainsPoint(Point) then
     begin
-      RemoteHoldFirstOrder := Max(0, RemoteHoldFirstOrder - 5);
+      RemoteHoldFirstOrder := Max(0, RemoteHoldFirstOrder - RemoteHoldColumns);
       RefreshShipView;
     end
     else if not RemoteHoldMode and GetByName('PanelAddInfo').ContainsPoint(Point) then
@@ -5452,11 +5491,14 @@ begin
   end
   else if Delta = -WHEEL_DELTA then
   begin
-    if CanUseLocalStorage and GetByName('SC_Panel').ContainsPoint(Point) then
+    if CanUseLocalStorage
+        and (GetByName('SC_Panel').ContainsPoint(Point)
+            or (GameMobileUiEnabled and GetByName('MobileStorage').ContainsPoint(Point))) then
       ScrollStorageDown(nil)
     else if RemoteHoldMode and GetByName('PanelItemRH').ContainsPoint(Point) then
     begin
-      RemoteHoldFirstOrder := Min(GetRemoteHoldScrollLimit, RemoteHoldFirstOrder + 5);
+      RemoteHoldFirstOrder :=
+          Min(GetRemoteHoldScrollLimit, RemoteHoldFirstOrder + RemoteHoldColumns);
       RefreshShipView;
     end
     else if not RemoteHoldMode and GetByName('PanelAddInfo').ContainsPoint(Point) then
@@ -5503,7 +5545,8 @@ begin
       Exit;
     if GetByName('CenterDamageImage').ContainsPoint(Point) then
       Exit;
-    if GetByName('SC_Panel').ContainsPoint(Point) then
+    if (GetByName('SC_Panel').ContainsPoint(Point)
+        or (GameMobileUiEnabled and GetByName('MobileStorage').ContainsPoint(Point))) then
       Exit;
     if GetByName('Forsage').ContainsPoint(Point) then
       Exit;
@@ -5751,7 +5794,7 @@ begin
           end;
         end;
       if not Changed and RemoteHoldMode then
-        for I := 0 to 54 do
+        for I := 0 to RemoteHoldColumns * RemoteHoldRows - 1 do
         begin
           if RemoteHoldImages[I].ContainsPoint(Point) then
           begin
@@ -5773,7 +5816,7 @@ begin
           end;
         end;
       if not Changed then
-        for I := 0 to StorageImageCount - 1 do
+        for I := 0 to StorageVisibleCount - 1 do
         begin
           if StorageImages[I].ContainsPoint(Point) then
           begin
@@ -5804,7 +5847,7 @@ begin
       Exit;
     end;
     if not Changed and RemoteHoldMode then
-      for I := 0 to 54 do
+      for I := 0 to RemoteHoldColumns * RemoteHoldRows - 1 do
       begin
         if RemoteHoldImages[I].ContainsPoint(Point) then
         begin
@@ -5849,7 +5892,7 @@ begin
         end;
       end;
     if not Changed then
-      for I := 0 to StorageImageCount - 1 do
+      for I := 0 to StorageVisibleCount - 1 do
       begin
         if StorageImages[I].ContainsPoint(Point) then
         begin
@@ -5878,7 +5921,7 @@ begin
     if IsVirtualKeyDown(VK_SHIFT) then
     begin
       if not Changed and RemoteHoldMode then
-        for I := 0 to 54 do
+        for I := 0 to RemoteHoldColumns * RemoteHoldRows - 1 do
         begin
           if RemoteHoldImages[I].ContainsPoint(Point) then
           begin
@@ -5951,7 +5994,7 @@ begin
         end;
       end;
       if not Changed and RemoteHoldMode then
-        for I := 0 to 54 do
+        for I := 0 to RemoteHoldColumns * RemoteHoldRows - 1 do
         begin
           if RemoteHoldImages[I].ContainsPoint(Point) then
           begin
@@ -7772,6 +7815,8 @@ var
   Reserved70:
       Int64; { Native frame retains an unused eight-byte slot before expression temporaries. }
 begin
+  if KeepMobileTooltipVisible(ItemInfoWindow, ItemInfoHideTimer) then
+    Exit;
   Found := False;
   CanTake := False;
   Animation := nil;
@@ -7791,9 +7836,11 @@ begin
           begin
             CenterX := True;
             Position :=
-                Classes.Point(
-                    HitTestBounds.Left + ClientSize.X div 2,
-                    HitTestBounds.Top + ClientSize.Y
+                LogicalToScreenPoint(
+                    Classes.Point(
+                        HitTestBounds.Left + ClientSize.X div 2,
+                        HitTestBounds.Top + ClientSize.Y
+                    )
                 );
             ShowEquipmentInfo(Item, False);
             Found := True;
@@ -7815,9 +7862,11 @@ begin
             begin
               CenterX := True;
               Position :=
-                  Classes.Point(
-                      HitTestBounds.Left + ClientSize.X div 2,
-                      HitTestBounds.Top + ClientSize.Y
+                  LogicalToScreenPoint(
+                      Classes.Point(
+                          HitTestBounds.Left + ClientSize.X div 2,
+                          HitTestBounds.Top + ClientSize.Y
+                      )
                   );
               ShowEquipmentInfo(Item, False);
               Found := True;
@@ -7834,8 +7883,12 @@ begin
       begin
         CenterX := True;
         Position :=
-            Classes
-                .Point(HitTestBounds.Left + ClientSize.X div 2, HitTestBounds.Top + ClientSize.Y);
+            LogicalToScreenPoint(
+                Classes.Point(
+                    HitTestBounds.Left + ClientSize.X div 2,
+                    HitTestBounds.Top + ClientSize.Y
+                )
+            );
         ShowEquipmentInfo(PlayerHoldShip.GetHull, False);
         Found := True;
         if IsHoldNormalShip then
@@ -7853,9 +7906,13 @@ begin
         begin
           CenterX := True;
           Position :=
-              Classes
-                  .Point(HitTestBounds.Left + ClientSize.X div 2, HitTestBounds.Top + ClientSize.Y);
-          CellSize := ClientSize;
+              LogicalToScreenPoint(
+                  Classes.Point(
+                      HitTestBounds.Left + ClientSize.X div 2,
+                      HitTestBounds.Top + ClientSize.Y
+                  )
+              );
+          CellSize := LogicalToScreenPoint(ClientSize);
           if (Hold <> nil) and ((Hold.Kind = phkEquipment) or (Hold.Kind = phkArtefact)) then
             ShowEquipmentInfo(Hold.Item, False)
           else if (Hold <> nil) and (Hold.Kind = phkGoods) then
@@ -7868,18 +7925,28 @@ begin
         end;
     end;
   if not Found and RemoteHoldMode then
-    for Row := 0 to 10 do
+    for Row := 0 to RemoteHoldRows - 1 do
     begin
       Column := 0;
-      while Column < 5 do
+      while Column < RemoteHoldColumns do
       begin
-        if RemoteHoldImages[Row * 5 + Column].ContainsPoint(GetCursorPoint) then
+        if RemoteHoldImages[Row * RemoteHoldColumns + Column].ContainsPoint(GetCursorPoint) then
         begin
           CenterY := True;
           Position.X := -(670 + ExtraScreenWidth div 2);
-          with RemoteHoldImages[Row * 5 + Column] do
+          with RemoteHoldImages[Row * RemoteHoldColumns + Column] do
             Position.Y := HitTestBounds.Top + ClientSize.Y div 2;
-          I := FindPlayerHoldIndexByOrder(RemoteHoldFirstOrder + Column + Row * 5);
+          if GameMobileUiEnabled then
+          begin
+            with RemoteHoldImages[Row * RemoteHoldColumns + Column] do
+              Position :=
+                  LogicalToScreenPoint(
+                      Classes.Point(HitTestBounds.Left, HitTestBounds.Top + ClientSize.Y div 2)
+                  );
+            with GetByName('PanelItemRH') do
+              Position.X := -LogicalToScreenPoint(HitTestBounds.TopLeft).X;
+          end;
+          I := FindPlayerHoldIndexByOrder(RemoteHoldFirstOrder + Column + Row * RemoteHoldColumns);
           if I >= 0 then
           begin
             Hold := PlayerHoldEntries[I];
@@ -7896,11 +7963,11 @@ begin
         end;
         Inc(Column);
       end;
-      if Column < 5 then
+      if Column < RemoteHoldColumns then
         Break;
     end;
-  if not Found and StorageUpButton.Active then
-    for I := 0 to StorageImageCount - 1 do
+  if not Found and CanUseLocalStorage and (GameMobileUiEnabled or StorageUpButton.Active) then
+    for I := 0 to StorageVisibleCount - 1 do
       if StorageImages[I].ContainsPoint(GetCursorPoint) then
       begin
         Slot :=
@@ -7912,6 +7979,16 @@ begin
           Position.X := 158;
           with GetByName('Storage_' + IntToStr(I) + 'i') as TImageGI do
             Position.Y := HitTestBounds.Top + ClientSize.Y div 2;
+          if GameMobileUiEnabled then
+          begin
+            with StorageImages[I] do
+              Position :=
+                  LogicalToScreenPoint(
+                      Classes.Point(HitTestBounds.Left, HitTestBounds.Top + ClientSize.Y div 2)
+                  );
+            with GetByName('MobileStorage') do
+              Position.X := LogicalToScreenPoint(Classes.Point(HitTestBounds.Right, 0)).X;
+          end;
           if Stored.Item is TGoods then
             ShowStoredGoodsInfo(Stored.Item as TGoods)
           else
@@ -7944,6 +8021,7 @@ begin
     end
     else
       InfoWindow.SetPosition(Classes.Point(10, 10));
+    FitMobileTooltip(InfoWindow, MainPanel.ContentBounds, GetCursorPoint);
   end;
   if SelectedHoldKind = phkEmpty then
     if CanTake then
@@ -7985,6 +8063,9 @@ end;
 
 procedure TfShip2.HideItemInfo(Timer: PCallbackTimerGI; UserData: PtrInt);
 begin
+  // Explicit calls still dismiss for a different property or gameplay action.
+  if (Timer <> nil) and KeepMobileTooltipVisible(ItemInfoWindow, ItemInfoHideTimer) then
+    Exit;
   DisplayedItemKey := 0;
   if ItemInfoHideTimer <> nil then
   begin
@@ -8015,6 +8096,7 @@ var
   TargetRatio, Ratio: Single;
   Borders: Types.TRect;
 begin
+  RestoreMobileTooltipBody(Window);
   TargetRatio := 1.6230366;
   Borders := Window.WorkSubRect;
   TargetSize := Window.AlignSizeToBorderTiles(Classes.Point(0, 0));
@@ -8153,6 +8235,7 @@ var
   end;
 
 begin
+  RestoreMobileTooltipBody(Window);
   TargetRatio := 1.6230366;
   LeftWidth := 0;
   RightWidth := 0;
@@ -9144,6 +9227,18 @@ end;
 
 procedure TfShip2.StorageDownClicked(Sender: TObjectGI);
 begin
+  if GameMobileUiEnabled then
+  begin
+    if StorageSlideTimer <> nil then
+    begin
+      CancelCallbackTimer(StorageSlideTimer);
+      StorageSlideTimer := nil;
+    end;
+    GetByName('SC_Storage_Panel').SetPosition(Classes.Point(0, 0));
+    StorageUpButton.SetActive(False);
+    GetByName('SC_Down').SetActive(False);
+    Exit;
+  end;
   if StorageSlideTimer <> nil then
   begin
     CancelCallbackTimer(StorageSlideTimer);
@@ -9156,6 +9251,8 @@ end;
 
 procedure TfShip2.StorageUpClicked(Sender: TObjectGI);
 begin
+  if GameMobileUiEnabled then
+    Exit;
   if StorageSlideTimer <> nil then
   begin
     CancelCallbackTimer(StorageSlideTimer);
@@ -9173,7 +9270,7 @@ begin
   Panel := GetByName('SC_Storage_Panel') as TPanelGI;
   if UserData = 1 then
   begin
-    Inc(StorageSlideOffset, StorageImageCount);
+    Inc(StorageSlideOffset, 21);
     if StoragePanelRestTop - StoragePanelSlideHeight <= StorageSlideOffset then
     begin
       StorageSlideOffset := StoragePanelRestTop - StoragePanelSlideHeight;
@@ -9186,7 +9283,7 @@ begin
   end
   else
   begin
-    Dec(StorageSlideOffset, StorageImageCount);
+    Dec(StorageSlideOffset, 21);
     if StorageSlideOffset <= 0 then
     begin
       StorageSlideOffset := 0;
@@ -9208,7 +9305,7 @@ var
   I, Index: Integer;
   Entry: PStorageEntry;
 begin
-  for I := 0 to StorageImageCount - 1 do
+  for I := 0 to StorageVisibleCount - 1 do
   begin
     Index :=
         GetPlayer.FindStorageIndexByLocationAndSlot(GetLocalStorageOwner, StorageFirstSlot + I);
@@ -9246,12 +9343,24 @@ begin
   end;
   with GetByName('Storage_Down') as TGraphButtonGI do
   begin
-    SetDisabled(
-        ((StorageImageCount - 3 + Self.StorageFirstSlot) div 3) * 3
-            > Max(0, (GetPlayer.GetStorageSlotExtent(Self.GetLocalStorageOwner) div 3) * 3 - 3)
-    );
+    if GameMobileUiEnabled then
+      SetDisabled(Self.StorageFirstSlot >= GetStorageScrollLimit)
+    else
+      SetDisabled(
+          ((StorageVisibleCount - 3 + Self.StorageFirstSlot) div 3) * 3 > GetStorageScrollLimit
+      );
     UpCallback := ScrollStorageDown;
   end;
+end;
+
+function TfShip2.GetStorageScrollLimit: Integer;
+begin
+  Result := GetPlayer.GetStorageSlotExtent(GetLocalStorageOwner);
+  if GameMobileUiEnabled then
+    // Keep an empty row available for dropping items beyond the occupied slots.
+    Result := Max(0, ((Result + 2) div 3 + 1) * 3 - StorageVisibleCount)
+  else
+    Result := Max(0, (Result div 3) * 3 - 3);
 end;
 
 procedure TfShip2.ScrollStorageUp(Sender: TObjectGI);
@@ -9265,7 +9374,7 @@ var
   Limit: Integer;
 begin
   StorageFirstSlot := ((StorageFirstSlot + 3) div 3) * 3;
-  Limit := Max(0, (GetPlayer.GetStorageSlotExtent(GetLocalStorageOwner) div 3) * 3 - 3);
+  Limit := GetStorageScrollLimit;
   if StorageFirstSlot > Limit then
     StorageFirstSlot := Limit;
   RefreshStorageView;
@@ -9277,7 +9386,7 @@ var
   Count, Slot, Index: Integer;
   Item: TItem;
 begin
-  if not StorageUpButton.Active then
+  if not GameMobileUiEnabled and not StorageUpButton.Active then
     StorageUpButton.SetActive(True);
   if (SelectedHoldKind in [phkEquipment, phkArtefact])
       and (SelectedHoldItem <> nil)
@@ -9966,69 +10075,45 @@ end;
 
 procedure TfShip2.RemoteHoldUpPressed(Sender: TObjectGI);
 begin
-  RemoteHoldFirstOrder := Max(0, RemoteHoldFirstOrder - 5);
+  RemoteHoldFirstOrder := Max(0, RemoteHoldFirstOrder - RemoteHoldColumns);
   RefreshShipView;
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
   HoldScrollTimer := ScheduleCallbackTimer(500, 50, ScrollRemoteHoldTimer);
 end;
 
 procedure TfShip2.RemoteHoldUpReleased(Sender: TObjectGI);
 begin
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
 end;
 
 procedure TfShip2.RemoteHoldDownPressed(Sender: TObjectGI);
 begin
-  RemoteHoldFirstOrder := Min(GetRemoteHoldScrollLimit, RemoteHoldFirstOrder + 5);
+  RemoteHoldFirstOrder := Min(GetRemoteHoldScrollLimit, RemoteHoldFirstOrder + RemoteHoldColumns);
   RefreshShipView;
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
   HoldScrollTimer := ScheduleCallbackTimer(500, 50, ScrollRemoteHoldTimer, 1);
 end;
 
 procedure TfShip2.RemoteHoldDownReleased(Sender: TObjectGI);
 begin
-  if HoldScrollTimer <> nil then
-  begin
-    CancelCallbackTimer(HoldScrollTimer);
-    HoldScrollTimer := nil;
-  end;
+  StopHoldScrolling;
 end;
 
 procedure TfShip2.ScrollRemoteHoldTimer(Timer: PCallbackTimerGI; UserData: PtrInt);
 begin
   if UserData = 0 then
-    Dec(RemoteHoldFirstOrder, 5)
+    Dec(RemoteHoldFirstOrder, RemoteHoldColumns)
   else
-    Inc(RemoteHoldFirstOrder, 5);
+    Inc(RemoteHoldFirstOrder, RemoteHoldColumns);
   if RemoteHoldFirstOrder <= 0 then
   begin
     RemoteHoldFirstOrder := 0;
-    if HoldScrollTimer <> nil then
-    begin
-      CancelCallbackTimer(HoldScrollTimer);
-      HoldScrollTimer := nil;
-    end;
+    StopHoldScrolling;
   end
   else if RemoteHoldFirstOrder >= GetRemoteHoldScrollLimit then
   begin
     RemoteHoldFirstOrder := GetRemoteHoldScrollLimit;
-    if HoldScrollTimer <> nil then
-    begin
-      CancelCallbackTimer(HoldScrollTimer);
-      HoldScrollTimer := nil;
-    end;
+    StopHoldScrolling;
   end;
   RefreshShipView;
 end;
@@ -10045,7 +10130,16 @@ begin
     if Entry.Kind <> phkEmpty then
       Result := Max(Result, Entry.DisplayOrder);
   end;
-  Result := Max(0, (Result div 5 + 1) * 5 - 50);
+  if GameMobileUiEnabled then
+    // Include an empty row so items can still be moved into unused hold slots.
+    Result :=
+        Max(
+            0,
+            (Result div RemoteHoldColumns + 2) * RemoteHoldColumns
+                - RemoteHoldColumns * RemoteHoldRows
+        )
+  else
+    Result := Max(0, (Result div 5 + 1) * 5 - 50);
 end;
 
 procedure TfShip2.SortRemoteHoldClicked(Sender: TObjectGI);

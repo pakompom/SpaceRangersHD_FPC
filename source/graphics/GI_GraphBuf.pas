@@ -162,7 +162,15 @@ begin
   if GraphBuf.Height < BufferRect.Bottom then
     Exit;
   if HardwareRenderingEnabled then
-    GraphBuf.LoadFromScreen(0)
+    GraphBuf.LoadFromScreen(
+        0,
+        (ScreenRect.Left = 0)
+            and (ScreenRect.Top = 0)
+            and (ScreenRect.Right = GameScreenWidth)
+            and (ScreenRect.Bottom = GameScreenHeight)
+            and (BufferRect.Left = 0)
+            and (BufferRect.Top = 0)
+    )
   else
     Ex_OKGR_Copy_XY_XY_WORD(
         GraphBuf.GetPixels,
@@ -232,6 +240,7 @@ var
   Buffer: TGraphBufGR;
   Clip: TRect;
 begin
+  Point := ScreenToLogicalPoint(Point);
   Result := False;
   if GraphBuf.GetPixels = nil then
     Exit;
@@ -304,6 +313,16 @@ begin
   else
   begin
     Result := False;
+    Exit;
+  end;
+  if SourceHasPerPixelAlpha and (GraphBuf.BytesPerPixel = 4) then
+  begin
+    if (Point.X < Left) or (Point.X >= Right) or (Point.Y < Top) or (Point.Y >= Bottom) then
+      Exit;
+    X := (Point.X - Left) mod Width;
+    Y := (Point.Y - Top) mod Height;
+    Result :=
+        PByte(AddPointerOffset(GraphBuf.GetPixels, Y * GraphBuf.PitchBytes + X * 4 + 3))^ <> 0;
     Exit;
   end;
   Pixels :=
@@ -557,10 +576,17 @@ procedure TGraphBufGI.Draw(ClipRect: TRect);
 var
   Width, Height, Left, Right, X, Top, Bottom, Y: Integer;
 begin
-  if GraphBuf.GetPixels = nil then
+  // A texture-backed buffer need not be locked just to check its availability.
+  // A write lock here dirties unchanged snapshots on every draw.
+  if (GraphBuf = nil) or not GraphBuf.HasPixels then
     Exit;
   Width := GraphBuf.Width;
   Height := GraphBuf.Height;
+  if HardwareRenderingEnabled and (GraphBuf.ScreenSnapshotSize.X > 0) then
+  begin
+    Width := GraphBuf.ScreenSnapshotSize.X;
+    Height := GraphBuf.ScreenSnapshotSize.Y;
+  end;
   if ImageKindX = ikxLeftFill then
   begin
     Left := HitTestBounds.Left;
@@ -631,10 +657,12 @@ begin
       X := Left;
       while X < Right do
       begin
-        DrawTexture(
+        DrawTextureSized(
             GraphBuf.GetTexture,
             X,
             Y,
+            GraphBuf.ScreenSnapshotSize.X,
+            GraphBuf.ScreenSnapshotSize.Y,
             255 - (Ord(HalfAlpha) shl 7),
             RgbWhite,
             @ClipRect,

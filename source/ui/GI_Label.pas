@@ -573,7 +573,7 @@ begin
     if HardwareRenderingEnabled then
       Position := Classes.Point(Item.X, Item.Y)
     else
-      Position := ToLocalPoint(Classes.Point(Item.X, Item.Y));
+      Position := LogicalToLocalPoint(Classes.Point(Item.X, Item.Y));
     Child := FirstChild;
     while Child <> nil do
     begin

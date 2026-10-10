@@ -307,6 +307,11 @@ var
   I: Integer;
   Bounds: TRect;
 begin
+  if GetDisplayScale <> 1 then
+  begin
+    MessageLoop.InvalidateViewport;
+    Exit;
+  end;
   for I := 0 to SegmentCapacity - 1 do
   begin
     Segment := @Segments[I];

@@ -56,6 +56,7 @@ uses
 constructor TSBPathGI.Create(Owner: TObjectGI);
 begin
   inherited Create(Owner);
+  TouchInteraction := tiDrag;
   ThumbImage := TImageGI.Create(Self);
   Minimum := 0;
   Maximum := 100;

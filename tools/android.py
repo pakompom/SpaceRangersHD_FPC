@@ -43,6 +43,8 @@ LIBRARIES = {
         "Java_io_github_pakompom_spacerangershd_GameActivity_nativeCancelTouch",
         "Java_io_github_pakompom_spacerangershd_GameActivity_nativeInputMode",
         "Java_io_github_pakompom_spacerangershd_GameActivity_nativeScroll",
+        "Java_io_github_pakompom_spacerangershd_GameActivity_nativeDensityChanged",
+        "Java_io_github_pakompom_spacerangershd_GameActivity_nativeArcadeInput",
     },
     "libRangers.so": {"sr_fpc_main"},
 }
@@ -369,6 +371,7 @@ def package_android(config: BuildConfig, native: Path, ndk: Path) -> Path:
             "--manifest", app / "AndroidManifest.xml", "--version-code", str(ANDROID_VERSION_CODE),
             "--rename-manifest-package", ANDROID_APPLICATION_ID,
             "--min-sdk-version", str(ANDROID_MIN_API), "--target-sdk-version", str(ANDROID_TARGET_API),
+            "-A", app / "assets",
             *([] if config.release else ["--debug-mode"]),
             "--version-name", ANDROID_VERSION_NAME, "--java", generated, "-o", unsigned, resources,
         ])  # fmt: skip

@@ -146,6 +146,7 @@ begin
             ExtraScreenHeight div 2 + Panel.LocalPosition.Y
         )
     );
+  FitMobileControl(Panel, Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12));
   AppendLogLineThreadSafe('ok');
   GetByName('MainPanel').KeyDownCallback := QuestListKeyDown;
   (GetByName('ButClose') as TGraphButtonGI).UpCallback := ReturnToMenu;
@@ -308,14 +309,11 @@ end;
 procedure TfLoadQuest.ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: Integer);
 var
   Panel: TPanelScrollBarGI;
-  Bounds: TRect;
 begin
-  Bounds := GetByName('MessageWindow').HitTestBounds;
-  with Bounds do
-    if (Point.X >= Left) and (Point.X < Right) and (Point.Y >= Top) and (Point.Y < Bottom) then
-      Panel := GetByName('MessageWindow') as TPanelScrollBarGI
-    else
-      Panel := GetByName('PanelSlot') as TPanelScrollBarGI;
+  if GetByName('MessageWindow').ContainsPoint(Point) then
+    Panel := GetByName('MessageWindow') as TPanelScrollBarGI
+  else
+    Panel := GetByName('PanelSlot') as TPanelScrollBarGI;
   if Delta = WHEEL_DELTA then
   begin
     if Panel.VerticalScrollBar.Active then

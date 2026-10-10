@@ -501,6 +501,7 @@ var
   Frame: TgiGR;
   Clip, Bounds, FirstBounds: TRect;
 begin
+  Point := ScreenToLogicalPoint(Point);
   Result := False;
   Pixel := 0;
   Clip.TopLeft := Point;
@@ -776,7 +777,7 @@ var
 begin
   inherited UpdateAutoGeometry;
   if (AutoUpdateFlags and agfPosition) = agfPosition then
-    SetPosition(Parent.ToLocalPoint(GetContentOrigin));
+    SetPosition(Parent.LogicalToLocalPoint(GetContentOrigin));
   if (AutoUpdateFlags and agfSize) = agfSize then
     SetSize(GetContentSize);
   if SequenceIndex >= 0 then

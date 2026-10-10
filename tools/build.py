@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import plistlib
-import resource
 import shlex
 import shutil
 import subprocess
@@ -216,9 +215,6 @@ def main() -> None:
     args = parser.parse_args()
     config = BuildConfig(args.target, args.release, args.lto)
     try:
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        desired = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
-        resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, desired), hard))
         builders = {
             "linux": build_linux,
             "macos": build_macos,

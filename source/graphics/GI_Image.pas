@@ -347,6 +347,8 @@ begin
     Result := GiImageControl.HitTestPixel(Point)
   else if GaiImageControl <> nil then
     Result := GaiImageControl.HitTestPixel(Point)
+  else if GraphBufControl <> nil then
+    Result := GraphBufControl.HitTestPixel(Point)
   else
     Result := False;
 end;
@@ -401,7 +403,7 @@ procedure TImageGI.UpdateAutoGeometry;
 begin
   inherited UpdateAutoGeometry;
   if (AutoUpdateFlags and agfPosition) = agfPosition then
-    SetPosition(Parent.ToLocalPoint(GetContentOrigin));
+    SetPosition(Parent.LogicalToLocalPoint(GetContentOrigin));
   if (AutoUpdateFlags and agfSize) = agfSize then
     SetSize(GetContentSize);
 end;

@@ -76,6 +76,7 @@ uses
 constructor TEditGI.Create(Owner: TObjectGI);
 begin
   inherited Create(Owner);
+  TouchInteraction := tiDrag;
   FontCache := TCFontControlEC.Create;
   GlobalCache.ResetControl(FontCache);
   BackgroundCache := nil;

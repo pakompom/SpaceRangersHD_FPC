@@ -248,6 +248,7 @@ begin
   Result := False;
   if inherited ContainsPoint(Point) then
   begin
+    Point := ScreenToLogicalPoint(Point);
     if HardwareRenderingEnabled then
     begin
       if FrameTexture <> nil then
@@ -371,10 +372,12 @@ var
   Rotation: TCRotateBufEC;
   OldClip: TRect;
 begin
-  if (HitTestBounds.Right < 0)
-      or (HitTestBounds.Left > GameScreenWidth)
-      or (HitTestBounds.Bottom < 0)
-      or (HitTestBounds.Top > GameScreenHeight) then
+  // Bounds and the incoming clip are in the same scaled control coordinates.
+  // Comparing against screen pixels would discard visible ships when zoomed out.
+  if (HitTestBounds.Right < ClipRect.Left)
+      or (HitTestBounds.Left > ClipRect.Right)
+      or (HitTestBounds.Bottom < ClipRect.Top)
+      or (HitTestBounds.Top > ClipRect.Bottom) then
     Exit;
   if HardwareRenderingEnabled then
   begin

@@ -66,12 +66,44 @@ function GetRectGI(RectText: WideString): TRect;
 
 function ParseAutoGeometryFlagsGI(Values: WideString): Integer;
 
+// Position is the rendered control origin in game-screen coordinates, not
+// physical pixels or HitTestBounds.TopLeft. EffectiveScale includes ancestors.
+// Retain fractional positions until the final rounding to control coordinates.
+procedure PlaceControlAtScreen(
+    Control: TObjectGI;
+    const Position: TPointF;
+    EffectiveScale: Single
+); overload;
+procedure PlaceControlAtScreen(
+    Control: TObjectGI;
+    const Position: TPoint;
+    EffectiveScale: Single
+); overload;
+
+// Anchor a scaled child to its parent's unscaled absolute origin. Used by
+// independently sized markers and inventory cells whose parent can move.
+function ScaledChildPosition(
+    const ParentPosition, ChildPosition: TPoint;
+    RelativeScale: Single
+): TPoint;
+function ControlViewportBounds(Control: TObjectGI): TRect;
+function ControlIntersectsViewport(Control: TObjectGI; Margin: Single = 0): Boolean;
+
+procedure FitMobileControl(
+    Control: TObjectGI;
+    const Bounds: TRect;
+    MaximumScale: Single = 0;
+    PreferredDpScale: Single = 1
+);
+
 procedure BreakUiMessage;
 
 implementation
 
 uses
   BreakMessageGIException,
+  GameWindow,
+  Math,
   GR_GraphBuf,
   GI_XviD,
   GI_PolyLine,
@@ -125,6 +157,7 @@ uses
   GI_PanelScrollBar,
   GI_Panel,
   GR_Main,
+  GlobalsV,
   EC_Str,
   Classes;
 
@@ -363,6 +396,117 @@ begin
       Flags := Flags or agfSize;
   end;
   Result := Flags;
+end;
+
+procedure PlaceControlAtScreen(Control: TObjectGI; const Position: TPointF; EffectiveScale: Single);
+var
+  InheritedScale: Single;
+  Local: TPoint;
+  ScaleChanged: Boolean;
+begin
+  if (Control = nil) or (EffectiveScale <= 0) then
+    Exit;
+  InheritedScale := 1;
+  if Control.Parent <> nil then
+  begin
+    InheritedScale := Control.Parent.GetDisplayScale;
+    if Control.PositionModeW then
+      InheritedScale := InheritedScale * Control.Parent.ChildWorldScale;
+  end;
+  ScaleChanged := Control.DisplayScale <> EffectiveScale / InheritedScale;
+  Control.DisplayScale := EffectiveScale / InheritedScale;
+  Control.UpdateAbsolutePosition;
+  Local := Control.LocalPosition;
+  Inc(Local.X, Round(Position.X / EffectiveScale) - Control.AbsolutePosition.X);
+  Inc(Local.Y, Round(Position.Y / EffectiveScale) - Control.AbsolutePosition.Y);
+  Control.SetPosition(Local);
+  Control.UpdateAbsolutePosition;
+  Control.UpdateSubtreeHitBounds;
+  // SetPosition may be a no-op when only scale changes at the same origin.
+  if ScaleChanged and (Control.MessageLoop <> nil) then
+    Control.MessageLoop.InvalidateViewport;
+end;
+
+procedure PlaceControlAtScreen(Control: TObjectGI; const Position: TPoint; EffectiveScale: Single);
+begin
+  PlaceControlAtScreen(Control, MakePointF(Position.X, Position.Y), EffectiveScale);
+end;
+
+function ScaledChildPosition(
+    const ParentPosition, ChildPosition: TPoint;
+    RelativeScale: Single
+): TPoint;
+begin
+  Result :=
+      Point(
+          Round(ParentPosition.X / RelativeScale) + ChildPosition.X,
+          Round(ParentPosition.Y / RelativeScale) + ChildPosition.Y
+      );
+end;
+
+function ControlViewportBounds(Control: TObjectGI): TRect;
+var
+  Scale: Single;
+begin
+  Scale := Control.GetDisplayScale;
+  Result := Rect(0, 0, Ceil(GameScreenWidth / Scale), Ceil(GameScreenHeight / Scale));
+end;
+
+function ControlIntersectsViewport(Control: TObjectGI; Margin: Single): Boolean;
+var
+  Scale: Single;
+begin
+  Scale := Control.GetDisplayScale;
+  with Control.HitTestBounds do
+    Result :=
+        not ((Cardinal(GameScreenWidth) * -Margin > Right * Scale)
+            or (Cardinal(GameScreenWidth) * (1 + Margin) < Left * Scale)
+            or (Cardinal(GameScreenHeight) * -Margin > Bottom * Scale)
+            or (Cardinal(GameScreenHeight) * (1 + Margin) < Top * Scale));
+end;
+
+procedure FitMobileControl(
+    Control: TObjectGI;
+    const Bounds: TRect;
+    MaximumScale: Single;
+    PreferredDpScale: Single
+);
+var
+  ControlBounds: TRect;
+  Width, Height: Integer;
+  Scale: Single;
+  Position: TPointF;
+begin
+  if not GameMobileUiEnabled or not HardwareRenderingEnabled or (Control = nil) then
+    Exit;
+  // Inactive panels defer geometry updates until shown, but still need fitting.
+  Control.UpdateAbsolutePosition;
+  Control.UpdateSubtreeHitBounds;
+  ControlBounds := Control.HitTestBounds;
+  Width := ControlBounds.Right - ControlBounds.Left;
+  Height := ControlBounds.Bottom - ControlBounds.Top;
+  if (Width <= 0)
+      or (Height <= 0)
+      or (Bounds.Right <= Bounds.Left)
+      or (Bounds.Bottom <= Bounds.Top) then
+    Exit;
+  // Desired size is in dp, independently of the display's pixel resolution.
+  // Tight bounds can reduce it continuously; integer-first fitting discarded
+  // useful room and changed size abruptly at physical-resolution thresholds.
+  Scale :=
+      Min(
+          GetGameMobileUiScale(PreferredDpScale),
+          Min((Bounds.Right - Bounds.Left) / Width, (Bounds.Bottom - Bounds.Top) / Height)
+      );
+  if MaximumScale > 0 then
+    Scale := Min(Scale, MaximumScale);
+  Position.X :=
+      (Bounds.Left + Bounds.Right) / 2
+          + (Control.AbsolutePosition.X - (ControlBounds.Left + ControlBounds.Right) / 2) * Scale;
+  Position.Y :=
+      (Bounds.Top + Bounds.Bottom) / 2
+          + (Control.AbsolutePosition.Y - (ControlBounds.Top + ControlBounds.Bottom) / 2) * Scale;
+  PlaceControlAtScreen(Control, Position, Scale);
 end;
 
 procedure BreakUiMessage;

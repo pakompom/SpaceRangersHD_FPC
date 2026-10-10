@@ -23,6 +23,7 @@ const
   SDL_INIT_AUDIO = $00000010;
   SDL_INIT_VIDEO = $00000020;
   SDL_WINDOW_SHOWN = $00000004;
+  SDL_WINDOW_HIDDEN = $00000008;
   SDL_WINDOW_RESIZABLE = $00000020;
   SDL_WINDOW_ALLOW_HIGHDPI = $00002000;
   SDL_WINDOW_FULLSCREEN_DESKTOP = $00001001;
@@ -302,6 +303,15 @@ function SDL_SetTextureScaleMode(
     Texture: PSDL_Texture;
     Mode: Integer
 ): Integer; cdecl; external SDL2Library;
+function SDL_GetTextureScaleMode(
+    Texture: PSDL_Texture;
+    out Mode: Integer
+): Integer; cdecl; external SDL2Library;
+function SDL_GL_BindTexture(
+    Texture: PSDL_Texture;
+    TexWidth, TexHeight: PSingle
+): Integer; cdecl; external SDL2Library;
+function SDL_GL_UnbindTexture(Texture: PSDL_Texture): Integer; cdecl; external SDL2Library;
 function SDL_SetRenderTarget(
     Renderer: PSDL_Renderer;
     Texture: PSDL_Texture

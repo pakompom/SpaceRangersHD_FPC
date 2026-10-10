@@ -405,6 +405,7 @@ var
   GraphBuf: TGraphBufGR;
   ByteCount, Offset: Integer;
   OldHeader: TGaiHeader;
+  LayoutSize: TPoint;
 
   procedure LogGaiRescaleStart;
   begin
@@ -438,11 +439,12 @@ begin
     GraphBuf.AllocateRgbaTight(Image.GetContentSize.X, Image.GetContentSize.Y);
     Image.DecodeToGraphBuf(GraphBuf, False);
     Image.ClearData;
-    GraphBuf.RescaleRgbaLinear(GameScreenWidth, GameScreenHeight, True, 1, 1);
+    LayoutSize := GetNormalGameLayoutSize;
+    GraphBuf.RescaleRgbaLinear(LayoutSize.X, LayoutSize.Y, True, 1, 1);
     Image.CreateFromGraphBuf(GraphBuf, 1);
     GraphBuf.Clear;
-    OldHeader.Bounds.Right := GameScreenWidth;
-    OldHeader.Bounds.Bottom := GameScreenHeight;
+    OldHeader.Bounds.Right := LayoutSize.X;
+    OldHeader.Bounds.Bottom := LayoutSize.Y;
     SourceBuffer.Clear;
     SourceBuffer.AddBytes(@OldHeader, SizeOf(TGaiHeader));
     SourceBuffer.AddDWord(SizeOf(TGaiHeader) + SizeOf(TGaiFrameEntry));

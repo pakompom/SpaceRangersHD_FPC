@@ -42,7 +42,11 @@ type
     Position: TPoint;
   end;
 
-  TTouchDragKindGI = (tdNone, tdControl, tdPan, tdDeferred);
+  TTouchDragKindGI = (tdNone, tdControl, tdPan, tdDeferred, tdScroll, tdPress);
+
+  // Tap controls defer actions until release. Held controls explicitly opt into
+  // an early reversible press; drag controls retain their legacy mouse capture.
+  TTouchInteractionGI = (tiNone, tiTap, tiHold, tiDrag, tiScroll);
 
   TObjectGI = class(TObjectEx)
     FirstChild: TObjectGI;
@@ -66,12 +70,17 @@ type
     SkipOwnQueuedDraw: Integer;
     HitTestBounds: TRect;
     AbsolutePosition: TPoint;
+    // Uniform display scaling belongs to a UI subtree; layout coordinates stay unchanged.
+    DisplayScale: Single;
+    // Applies only across a PositionModeW child link; fixed UI keeps its scale.
+    ChildWorldScale: Single;
     ControlName: WideString;
     HelpText: WideString;
     HelpCallback: TObjectHelpEventGI;
     MouseInside: Boolean;
     MouseBlocking: Boolean;
     MouseBlockingTest: Boolean;
+    TouchInteraction: TTouchInteractionGI;
     ScrollUpdate: Boolean;
     // Untyped runtime payloads: callers store both numbers and object addresses.
     UserValue: PtrInt;
@@ -118,6 +127,12 @@ type
     procedure OnDeactivate; virtual;
     procedure OnModalSuspend; virtual;
     procedure CancelPointerInput; virtual;
+    function GetTouchInteraction: TTouchInteractionGI; virtual;
+    function AllowsTouchActivation: Boolean;
+    function TouchPressContains(Point: TPoint): Boolean; virtual;
+    function BeginTouchPress(Point: TPoint): Boolean; virtual;
+    procedure CancelTouchPress; virtual;
+    procedure ScrollByTouch(DX, DY: Double; var RemainderX, RemainderY: Double); virtual;
     procedure ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint); virtual;
     procedure ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint); virtual;
     procedure ProcessRightButtonDown(KeyState: Cardinal; Point: TPoint); virtual;
@@ -135,6 +150,10 @@ type
     procedure OnCaretBlink; virtual;
     function ToLocalPoint(Point: TPoint): TPoint; virtual;
     function ToAbsolutePoint(Point: TPoint): TPoint; virtual;
+    function LogicalToLocalPoint(Point: TPoint): TPoint; virtual;
+    function GetDisplayScale: Single;
+    function ScreenToLogicalPoint(Point: TPoint): TPoint;
+    function LogicalToScreenPoint(Point: TPoint): TPoint;
     procedure InvalidateRect(Rect: TRect); virtual;
     procedure Invalidate; virtual;
     procedure Draw(ClipRect: TRect); virtual;
@@ -269,8 +288,16 @@ type
     TouchDragKind: TTouchDragKindGI;
     TouchButton: Cardinal;
     TouchAnchor: TPoint;
+    // Borrowed controls owned by the UI tree; their destructors clear these references.
+    TouchScrollControl: TObjectGI;
+    // Retained after physical release so the synthesized click validates the same owner.
+    TouchPressControl: TObjectGI;
+    // Suppresses the queued click after a hold, drag or cancellation, until the next touch.
+    TouchPressConsumed: Boolean;
+    TouchScrollX, TouchScrollY: Double;
     PanWheelRemainder: Double;
     GesturePanValid: Boolean;
+    TouchPinchAllowed: Boolean;
     GesturePanX, GesturePanY: Double;
     GesturePanPosition: TPoint;
     function Run: Integer; virtual;
@@ -293,7 +320,10 @@ type
     function CanPanGesture(Point: TPoint): Boolean; virtual;
     function DeferTouchDrag(Point: TPoint): Boolean; virtual;
     procedure ProcessPanGesture(DX, DY: Double; Point: TPoint); virtual;
+    procedure ProcessPinchGesture(Factor: Double; Point: TPoint); virtual;
+    procedure EndPinchGesture; virtual;
     function AccumulatePanGesture(DX, DY: Double; Position: TPoint): TPoint;
+    procedure CancelTouchPress;
     procedure CancelPointerInput; virtual;
     procedure InitializeLayout; virtual;
     procedure UpdateActionCursor(CanTake: Boolean); virtual;
@@ -384,6 +414,7 @@ implementation
 
 uses
   Math,
+  GameGraphics,
   GameWindow,
   PopUp,
   BreakMessageGIException,
@@ -431,6 +462,8 @@ end;
 constructor TObjectGI.Create(Owner: TObjectGI);
 begin
   inherited Create;
+  DisplayScale := 1;
+  ChildWorldScale := 1;
   Active := True;
   HitTestDisabled := False;
   MouseBlocking := False;
@@ -456,6 +489,16 @@ begin
       MessageLoop.SetFocusedControl(nil);
     if MessageLoop.HoveredControl = Self then
       MessageLoop.HoveredControl := nil;
+    if MessageLoop.TouchScrollControl = Self then
+    begin
+      MessageLoop.TouchScrollControl := nil;
+      MessageLoop.TouchDragKind := tdNone;
+    end;
+    if MessageLoop.TouchPressControl = Self then
+    begin
+      MessageLoop.TouchPressControl := nil;
+      MessageLoop.TouchPressConsumed := True;
+    end;
   end;
   Clear;
   FreeOwnedChildren;
@@ -474,6 +517,8 @@ end;
 
 procedure TObjectGI.Clear;
 begin
+  DisplayScale := 1;
+  ChildWorldScale := 1;
   LocalPosition.X := 0;
   LocalPosition.Y := 0;
   ClientSize.X := 0;
@@ -966,11 +1011,60 @@ begin
   end;
 end;
 
+function TObjectGI.GetTouchInteraction: TTouchInteractionGI;
+begin
+  Result := TouchInteraction;
+end;
+
+function FindTouchPressOwner(Control: TObjectGI): TObjectGI;
+begin
+  Result := nil;
+  while Control <> nil do
+  begin
+    // State images use their stable parent as the tap owner. Buttons embedded
+    // in sliders instead participate in the slider's captured drag.
+    if Control.GetTouchInteraction = tiDrag then
+      Exit(nil);
+    if (Result = nil) and (Control.GetTouchInteraction in [tiTap, tiHold]) then
+      Result := Control;
+    Control := Control.Parent;
+  end;
+end;
+
+function TObjectGI.AllowsTouchActivation: Boolean;
+var
+  Owner: TObjectGI;
+begin
+  Result := True;
+  if not GamePointerInputIsTouch then
+    Exit;
+  Owner := FindTouchPressOwner(Self);
+  Result := (Owner = nil) or (MessageLoop.TouchPressControl = Owner);
+end;
+
+function TObjectGI.TouchPressContains(Point: TPoint): Boolean;
+begin
+  Result := ContainsPoint(Point) and not IsOccludedAtPoint(Point);
+end;
+
+function TObjectGI.BeginTouchPress(Point: TPoint): Boolean;
+begin
+  Result := TouchPressContains(Point);
+end;
+
+procedure TObjectGI.CancelTouchPress;
+begin
+end;
+
+procedure TObjectGI.ScrollByTouch(DX, DY: Double; var RemainderX, RemainderY: Double);
+begin
+end;
+
 procedure TObjectGI.ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint);
 var
   Child: TObjectGI;
 begin
-  if Assigned(LeftButtonDownCallback) then
+  if AllowsTouchActivation and Assigned(LeftButtonDownCallback) then
     LeftButtonDownCallback(Self, KeyState, Point);
   Child := FirstChild;
   while Child <> nil do
@@ -985,7 +1079,7 @@ procedure TObjectGI.ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint);
 var
   Child: TObjectGI;
 begin
-  if Assigned(LeftButtonUpCallback) then
+  if AllowsTouchActivation and Assigned(LeftButtonUpCallback) then
     LeftButtonUpCallback(Self, KeyState, Point);
   Child := FirstChild;
   while Child <> nil do
@@ -1032,7 +1126,7 @@ procedure TObjectGI.ProcessLeftButtonDoubleClick(KeyState: Cardinal; Point: TPoi
 var
   Child: TObjectGI;
 begin
-  if Assigned(LeftButtonDoubleClickCallback) then
+  if AllowsTouchActivation and Assigned(LeftButtonDoubleClickCallback) then
     LeftButtonDoubleClickCallback(Self, KeyState, Point);
   Child := FirstChild;
   while Child <> nil do
@@ -1123,6 +1217,7 @@ begin
     Result := False;
     Exit;
   end;
+  Point := ScreenToLogicalPoint(Point);
   if (Point.X >= HitTestBounds.Left)
       and (Point.Y >= HitTestBounds.Top)
       and (Point.X < HitTestBounds.Right)
@@ -1162,6 +1257,11 @@ end;
 
 function TObjectGI.ToLocalPoint(Point: TPoint): TPoint;
 begin
+  Result := LogicalToLocalPoint(ScreenToLogicalPoint(Point));
+end;
+
+function TObjectGI.LogicalToLocalPoint(Point: TPoint): TPoint;
+begin
   Result.X := Point.X - AbsolutePosition.X;
   Result.Y := Point.Y - AbsolutePosition.Y;
 end;
@@ -1170,6 +1270,44 @@ function TObjectGI.ToAbsolutePoint(Point: TPoint): TPoint;
 begin
   Result.X := Point.X + AbsolutePosition.X;
   Result.Y := Point.Y + AbsolutePosition.Y;
+  Result := LogicalToScreenPoint(Result);
+end;
+
+function TObjectGI.GetDisplayScale: Single;
+var
+  Control: TObjectGI;
+begin
+  Result := 1;
+  Control := Self;
+  while Control <> nil do
+  begin
+    Result := Result * Control.DisplayScale;
+    if Control.PositionModeW and (Control.Parent <> nil) then
+      Result := Result * Control.Parent.ChildWorldScale;
+    Control := Control.Parent;
+  end;
+end;
+
+function TObjectGI.ScreenToLogicalPoint(Point: TPoint): TPoint;
+var
+  Scale: Single;
+begin
+  Scale := GetDisplayScale;
+  if Scale = 1 then
+    Exit(Point);
+  Result.X := Floor(Point.X / Scale);
+  Result.Y := Floor(Point.Y / Scale);
+end;
+
+function TObjectGI.LogicalToScreenPoint(Point: TPoint): TPoint;
+var
+  Scale: Single;
+begin
+  Scale := GetDisplayScale;
+  if Scale = 1 then
+    Exit(Point);
+  Result.X := Round(Point.X * Scale);
+  Result.Y := Round(Point.Y * Scale);
 end;
 
 procedure TObjectGI.DispatchNamedEvent(EventKind, Param1, Param2: Integer);
@@ -1184,6 +1322,13 @@ var
 begin
   if Active <> True then
     Exit;
+  if GetDisplayScale <> 1 then
+  begin
+    // Parent dirty rectangles use normal coordinates and would clip enlarged
+    // pixels. Redraw the complete normal viewport for scaled subtrees.
+    MessageLoop.InvalidateViewport;
+    Exit;
+  end;
   if Parent = nil then
     MessageLoop.QueueUpdateRect(Rect)
   else
@@ -1247,18 +1392,55 @@ begin
   Result := StartControl;
 end;
 
+function ScaleClipRect(const Rect: TRect; Scale: Single): TRect;
+begin
+  if Scale = 1 then
+    Exit(Rect);
+  Result.Left := Floor(Rect.Left * Scale);
+  Result.Top := Floor(Rect.Top * Scale);
+  Result.Right := Ceil(Rect.Right * Scale);
+  Result.Bottom := Ceil(Rect.Bottom * Scale);
+end;
+
+procedure DrawControl(Control: TObjectGI; ClipRect: TRect; Queued: Boolean);
+var
+  Saved: TGameGraphicsTransform;
+  Scale: Single;
+  Intersection: TRect;
+begin
+  Saved := GameGraphicsTransform;
+  Scale := Control.GetDisplayScale;
+  // Parent clipping is expressed in its logical coordinates. Change domains
+  // before intersecting a child whose complete subtree has a display scale.
+  ClipRect := ScaleClipRect(ClipRect, Saved.ScaleX / Scale);
+  Intersection := ClipRect;
+  if not Queued and not IntersectRects(Intersection, ClipRect, Control.HitTestBounds) then
+    Exit;
+  GameGraphicsTransform := GameGraphicsIdentityTransform;
+  GameGraphicsTransform.ScaleX := Scale;
+  GameGraphicsTransform.ScaleY := Scale;
+  GameGraphicsTransform.PixelAligned := Scale <> 1;
+  try
+    if Queued then
+      Control.DrawUpdateRects(Intersection)
+    else
+      Control.Draw(Intersection);
+  finally
+    GameGraphicsTransform := Saved;
+  end;
+end;
+
 procedure TObjectGI.Draw(ClipRect: TRect);
 var
   Child: TObjectGI;
-  Intersection: TRect;
 begin
   if MessageLoop.PendingRedraw then
     Exit;
   Child := FirstChild;
   while Child <> nil do
   begin
-    if Child.Active and IntersectRects(Intersection, ClipRect, Child.HitTestBounds) then
-      Child.Draw(Intersection);
+    if Child.Active then
+      DrawControl(Child, ClipRect, False);
     Child := Child.NextSibling;
   end;
 end;
@@ -1281,7 +1463,7 @@ begin
       begin
         Stage := 2;
         if Child.Active then
-          Child.DrawUpdateRects(Intersection);
+          DrawControl(Child, Intersection, True);
         Child := Child.NextSibling;
       end;
       Stage := 3;
@@ -1292,8 +1474,11 @@ begin
         while RectNode <> nil do
         begin
           Stage := 5;
-          if IntersectRects(DrawRect, RectNode.Bounds, Intersection) then
-            Draw(DrawRect);
+          if IntersectRects(
+              DrawRect,
+              ScaleClipRect(RectNode.Bounds, 1 / GetDisplayScale),
+              Intersection) then
+            DrawControl(Self, DrawRect, False);
           RectNode := RectNode.Next;
         end;
       end;
@@ -1822,6 +2007,8 @@ begin
       Stage := 10;
       while (GR_WinMessage(ProcessWindowMessage) <> 0) and (ExitCode = 0) do
       begin
+        if ApplyPendingDisplayChange then
+          Break;
         Stage := 11;
         Tick := GameTickCount;
         if Tick - LastCaretTick > 200 then
@@ -1997,6 +2184,8 @@ begin
         SoundManager.PlaySound(OpenSoundName);
       while (GR_WinMessage(ProcessWindowMessage) <> 0) and (ExitCode = 0) do
       begin
+        if ApplyPendingDisplayChange then
+          Break;
         Stage := 13;
         if not MemorySnapshotActive then
         begin
@@ -2188,6 +2377,51 @@ begin
   end;
 end;
 
+function FindTouchControl(Control: TObjectGI; Point: TPoint): TObjectGI;
+var
+  Child: TObjectGI;
+begin
+  Result := nil;
+  if not Control.ContainsPoint(Point) then
+    Exit;
+  Child := Control.LastChild;
+  while Child <> nil do
+  begin
+    Result := FindTouchControl(Child, Point);
+    if Result <> nil then
+      Exit;
+    Child := Child.PrevSibling;
+  end;
+  // Decorative images and the cursor overlay must not hide the interactive
+  // control underneath. Widgets declare gesture ownership, without class tests.
+  if Control.MouseBlocking
+      or Assigned(Control.LeftButtonDownCallback)
+      or Assigned(Control.LeftButtonUpCallback)
+      or (Control.GetTouchInteraction <> tiNone) then
+    Result := Control;
+end;
+
+function FindTouchScrollControl(Root: TObjectGI; Point: TPoint): TObjectGI;
+var
+  Control: TObjectGI;
+begin
+  Result := nil;
+  Control := FindTouchControl(Root, Point);
+  while Control <> nil do
+  begin
+    case Control.GetTouchInteraction of
+      tiDrag: Exit;
+      tiScroll: Exit(Control);
+    end;
+    Control := Control.Parent;
+  end;
+end;
+
+function FindTouchPressControl(Root: TObjectGI; Point: TPoint): TObjectGI;
+begin
+  Result := FindTouchPressOwner(FindTouchControl(Root, Point));
+end;
+
 procedure TMessageLoopGI.ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer);
 var
   Point: TPoint;
@@ -2195,6 +2429,8 @@ var
   BreakAfterDoubleClick: Boolean;
   Stage, Index: Integer;
   NewOffset: TPoint;
+  DX, DY, Scale: Double;
+  TouchControl: TObjectGI;
   // Native reserves twelve unreferenced bytes at EBP-$4C..EBP-$41.
   // DCC32 O- allocates unused locals after live ones; original types are unknown.
   UnusedLocals: array[0..11] of Byte;
@@ -2214,9 +2450,7 @@ var
       end;
   end;
 
-  procedure ProcessViewportPan(Anchor: TPoint);
-  var
-    DX, DY: Double;
+  procedure GetViewportPan(out DX, DY: Double);
   begin
     DX := SmallInt(WParam) / 64;
     DY := SmallInt(WParam shr 16) / 64;
@@ -2227,6 +2461,13 @@ var
       DX := DX * GameScreenWidth / PresentationWidth;
       DY := DY * GameScreenHeight / PresentationHeight;
     end;
+  end;
+
+  procedure ProcessViewportPan(Anchor: TPoint);
+  var
+    DX, DY: Double;
+  begin
+    GetViewportPan(DX, DY);
     ProcessPanGesture(DX, DY, Anchor);
   end;
 
@@ -2238,13 +2479,82 @@ begin
   Stage := 0;
   try
     // WM_GAME_CANCEL_INPUT is broadcast to every loop by MainWindowProc.
-    if Message = WM_GAME_TOUCH_DRAG_BEGIN then
+    if GamePointerInputIsTouch
+        and TouchPressConsumed
+        and ((Message = WM_LBUTTONDOWN)
+            or (Message = WM_LBUTTONUP)
+            or (Message = WM_LBUTTONDBLCLK)) then
+      Exit;
+    if Message = WM_GAME_TOUCH_BEGIN then
+    begin
+      CancelTouchPress;
+      TouchPressConsumed := False;
+      TouchPinchAllowed := False;
+      Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
+      ConvertMousePointToViewport;
+      TouchAnchor := Point;
+      if WParam = MK_LBUTTON then
+      begin
+        TouchControl := FindTouchPressControl(RootUiObject, Point);
+        if TouchControl <> nil then
+        begin
+          TouchPressControl := TouchControl;
+          TouchPressConsumed := (TouchControl.GetTouchInteraction = tiHold);
+          if not TouchControl.BeginTouchPress(Point) then
+          begin
+            TouchPressControl := nil;
+            TouchPressConsumed := False;
+          end;
+        end;
+      end;
+    end
+    else if Message = WM_GAME_TOUCH_MOVE then
+    begin
+      if TouchPressControl <> nil then
+      begin
+        Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
+        ConvertMousePointToViewport;
+        if not TouchPressControl.TouchPressContains(Point)
+            or (FindTouchPressControl(RootUiObject, Point) <> TouchPressControl) then
+        begin
+          TouchPressConsumed := True;
+          CancelTouchPress;
+        end;
+      end;
+    end
+    else if Message = WM_GAME_TOUCH_END then
+    begin
+      // Physical release precedes the recognizer's synthesized down/up events.
+      // Clear only the preview: AllowsTouchActivation still needs the borrowed owner.
+      if TouchPressControl <> nil then
+        TouchPressControl.CancelTouchPress;
+    end
+    else if Message = WM_GAME_TOUCH_DRAG_BEGIN then
     begin
       Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
       ConvertMousePointToViewport;
       TouchButton := WParam;
       TouchAnchor := Point;
-      if (TouchButton = MK_LBUTTON) and CanPanGesture(Point) then
+      TouchScrollControl := nil;
+      if TouchButton = MK_LBUTTON then
+        TouchScrollControl := FindTouchScrollControl(RootUiObject, Point);
+      if (TouchPressControl <> nil) and (TouchPressControl.GetTouchInteraction = tiHold) then
+        TouchDragKind := tdPress
+      else if TouchScrollControl <> nil then
+      begin
+        CancelTouchPress;
+        TouchPressConsumed := True;
+        TouchDragKind := tdScroll;
+        TouchScrollX := 0;
+        TouchScrollY := 0;
+      end
+      else if (TouchPressControl <> nil) or TouchPressConsumed then
+      begin
+        CancelTouchPress;
+        TouchPressConsumed := True;
+        TouchDragKind := tdPress;
+      end
+      else if (TouchButton = MK_LBUTTON) and CanPanGesture(Point) then
         TouchDragKind := tdPan
       else if DeferTouchDrag(Point) then
         TouchDragKind := tdDeferred
@@ -2264,12 +2574,22 @@ begin
     begin
       if TouchDragKind = tdNone then
         Exit;
-      if TouchDragKind = tdPan then
+      if TouchDragKind = tdScroll then
+      begin
+        ProcessWindowMessage(WM_MOUSEMOVE, 0, LParam);
+        if TouchScrollControl <> nil then
+        begin
+          GetViewportPan(DX, DY);
+          Scale := TouchScrollControl.GetDisplayScale;
+          TouchScrollControl.ScrollByTouch(DX / Scale, DY / Scale, TouchScrollX, TouchScrollY);
+        end;
+      end
+      else if TouchDragKind = tdPan then
       begin
         ProcessWindowMessage(WM_MOUSEMOVE, 0, LParam);
         ProcessViewportPan(TouchAnchor)
       end
-      else if TouchDragKind = tdDeferred then
+      else if TouchDragKind in [tdDeferred, tdPress] then
         ProcessWindowMessage(WM_MOUSEMOVE, 0, LParam)
       else
         ProcessWindowMessage(WM_MOUSEMOVE, TouchButton, LParam);
@@ -2296,23 +2616,45 @@ begin
         if TouchDragKind = tdNone then
           Exit;
       end;
-      if TouchDragKind <> tdPan then
+      if not (TouchDragKind in [tdPan, tdScroll, tdPress]) then
         if TouchButton = MK_RBUTTON then
           ProcessWindowMessage(WM_RBUTTONUP, 0, LParam)
         else
           ProcessWindowMessage(WM_LBUTTONUP, 0, LParam);
       TouchDragKind := tdNone;
+      TouchScrollControl := nil;
     end
     else if Message = WM_GAME_PAN_BEGIN then
     begin
-      PanWheelRemainder := 0;
-      GesturePanValid := False;
+      // A second finger may arrive after an ordinary drag has already begun.
+      // Cancel the control, without discarding the recognizer's finger state.
+      CancelPointerInput;
+      Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
+      ConvertMousePointToViewport;
+      // Hover mode has no touch-down notification or button capture.
+      TouchPinchAllowed :=
+          (GamePointerInputIsTouchHover or CanPanGesture(TouchAnchor)) and CanPanGesture(Point);
     end
     else if Message = WM_GAME_PAN then
     begin
       Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
       ConvertMousePointToViewport;
       ProcessViewportPan(Point);
+    end
+    else if Message = WM_GAME_PINCH then
+    begin
+      if TouchPinchAllowed then
+      begin
+        Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
+        ConvertMousePointToViewport;
+        ProcessPinchGesture(WParam / 65536.0, Point);
+      end;
+    end
+    else if Message = WM_GAME_PAN_END then
+    begin
+      if TouchPinchAllowed then
+        EndPinchGesture;
+      TouchPinchAllowed := False;
     end
     else if Message = WM_MOUSEMOVE then
     begin
@@ -2663,7 +3005,7 @@ begin
     Buffer := TGraphBufGR.Create(False);
     try
       if HardwareRenderingEnabled then
-        Buffer.LoadFromScreen(0)
+        Buffer.LoadFromScreen(0, True)
       else
       begin
         Buffer.AllocateRgbaTight(GameScreenWidth, GameScreenHeight);
@@ -3188,11 +3530,37 @@ begin
   end;
 end;
 
+procedure TMessageLoopGI.CancelTouchPress;
+var
+  Control: TObjectGI;
+begin
+  Control := TouchPressControl;
+  // Drop the borrowed reference before callbacks can change the control tree.
+  TouchPressControl := nil;
+  if Control <> nil then
+    Control.CancelTouchPress;
+end;
+
+procedure TMessageLoopGI.ProcessPinchGesture(Factor: Double; Point: TPoint);
+begin
+  // Only screens with an explicit zoom implementation consume pinches.
+end;
+
+procedure TMessageLoopGI.EndPinchGesture;
+begin
+end;
+
 procedure TMessageLoopGI.CancelPointerInput;
 begin
+  if TouchPinchAllowed then
+    EndPinchGesture;
+  CancelTouchPress;
+  TouchPressConsumed := True;
   TouchDragKind := tdNone;
+  TouchScrollControl := nil;
   PanWheelRemainder := 0;
   GesturePanValid := False;
+  TouchPinchAllowed := False;
   if RootUiObject <> nil then
     RootUiObject.CancelPointerInput;
 end;

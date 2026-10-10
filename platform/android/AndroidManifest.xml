@@ -10,6 +10,6 @@
       </intent-filter>
     </activity>
     <!-- SDL2 consumes legacy back-key events; GameActivity maps gesture callbacks to Escape. -->
-    <activity android:name="io.github.pakompom.spacerangershd.GameActivity" android:exported="false" android:process=":game" android:screenOrientation="sensorLandscape" android:launchMode="singleTask" android:enableOnBackInvokedCallback="false" android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density"/>
+    <activity android:name="io.github.pakompom.spacerangershd.GameActivity" android:exported="false" android:process=":game" android:screenOrientation="sensorLandscape" android:launchMode="singleTask" android:enableOnBackInvokedCallback="false" android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density|fontScale|fontWeightAdjustment"/>
   </application>
 </manifest>

@@ -154,6 +154,7 @@ var
   Buffer: TGraphBufGR;
   Clip: TRect;
 begin
+  Point := ScreenToLogicalPoint(Point);
   Result := False;
   Pixel := 0;
   Clip.Left := Point.X;

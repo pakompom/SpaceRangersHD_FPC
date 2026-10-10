@@ -7,7 +7,79 @@ This changelog records game-source changes for Free Pascal compatibility.
   Unicode manager in place of `cwstring` on Android.
 - Translate SDL touchscreen input into deferred taps, dragging and camera
   gestures. Cancel pressed controls and screen-owned drag/repeat state on focus
-  loss and modal transitions without invoking release actions.
+  loss and modal transitions without invoking release actions. Disable mouse
+  edge scrolling on Android, where camera movement uses explicit gestures.
+- Fit Android layouts to the surface size and display density in landscape.
+  Rebuild the UI after surface changes at safe screen boundaries, retaining
+  the current game and keeping active dialogs fitted in the meantime.
+- Default mobile dialogue text to the second-largest size and quest text to the
+  largest size, retaining saved font choices. Seed Android profiles from bundled
+  defaults instead of importing desktop preferences with game files.
+- Scan explicit mod directories so a missing Mods folder cannot list the game's
+  CFG and Data directories as mods. Preserve the working directory during scans.
+- Scale the shared Android bottom panel and radar independently of the world,
+  including their hit testing. Adjust centered screen content for the taller bar,
+  and render directly at the display's pixel resolution. Preserve that resolution
+  in captured backgrounds, with separate captures for nested quantity dialogs.
+- Enlarge Android quantity and confirmation dialogs and shop panels within the
+  available screen area. Let touch drags scroll list content directly while
+  retaining taps and slider dragging.
+- Use completed touch taps to inspect equipment and galaxy destinations before
+  acting on the selected object. Keep existing purchase confirmations and mouse
+  actions. Bound inspection text within scrollable original frames.
+- Keep touch taps tied to the original control so swiping across dialogue answers
+  cannot select a different answer, including lists without scrolling overflow.
+  Share gesture ownership across buttons, clickable rows, sliders and scroll panes.
+- Adapt mobile settings with a taller list inside the original skin, readable
+  spacing and radio indicators beside their labels. Include slider end buttons
+  in the full-height touch rows and fit sidebar actions into one height budget.
+  Give ship cargo actions more room below the grid.
+- Keep long plain-description tooltip headers and footers fixed while the body
+  scrolls; use the available content area when space beside the target is too narrow.
+  Preserve the description through icon-leave callbacks, hover polling and pending
+  hide timers while the player reads or scrolls it; dismiss it after leaving.
+- Show pressed button feedback on touch-down without activating ordinary buttons.
+  Let quantity and cargo-scroll buttons repeat while held and stop them on release
+  or cancellation.
+- Use continuous density-based UI fitting and one shared mobile presentation/input
+  viewport. Preserve queued draws when changing SDL texture filtering, and avoid
+  writable pixel locks when drawing unchanged captured backgrounds. Resize the
+  screen raster at frame boundaries so drawing and modal capture retain the frame.
+  Match clipping to pixel-center coverage to avoid seams between scaled UI images.
+  Preserve smooth filtering for rotated sprites even at integer UI scales.
+- Enlarge mobile government/station dialogue without widening its original
+  artwork. Size the answer area to its content and keep both panes above the
+  bottom panel. Compose quest artwork once per layout.
+- Separate mobile ship services and storage, enlarge inventory cells and use
+  fewer visible rows/columns with paging. Keep hit testing and tooltip positions
+  aligned while the cargo panel slides.
+- Enlarge mobile probe/scanner panels and object tooltips within the available
+  screen area. Keep the inspected object clear of its tooltip for another tap.
+- Inspect floating cargo on the first touch tap and use a second tap to assign
+  the cargo hook. Enlarge space action markers without changing their world
+  positions or camera zoom; preserve desktop and special targeting actions.
+- Add configurable space zoom and optional pinch zoom, keeping the HUD and
+  action markers at their own sizes. Retain the desktop zoom default and use a
+  slightly closer mobile view; preserve object hit testing and camera anchors.
+- Use the compact main-menu arrangement on Android, with larger entries centered
+  below the title. Enlarge the in-game pause menu too.
+- Enlarge Android arcade controls and result panels independently of the battle
+  view. Add simultaneous touch steering toward the stick's screen direction
+  and weapon-group firing.
+- Adapt Android text quests using the original artwork, larger text and a choices
+  panel sized to its content. Fit statistics as a complete block, preserving fixed
+  fonts, spacing and grids; shrink the illustration when statistics need the space.
+  Offer a labelled enlargement action beside statistics when needed. Left-align
+  mobile prose and keep fixed-width narrative diagrams in complete, uniformly
+  scaled blocks. Use slim scroll indicators, a compact style toolbar and a
+  separately sized exit button.
+- Ensure text wrapping advances past oversized glyphs and tags instead of
+  allocating lines indefinitely.
+- Preserve glyph edge colors when filtering Android text, and use actual texture
+  dimensions for small UI tiles to prevent dark seams from unused padding.
+- Position the bottom HUD background when only the screen height changes, and
+  index texture tiles by the column count so tall images stay within their cache.
+- Release the achievements screen when rebuilding the UI after resolution changes.
 - Remove empty placeholder units, the unused VFW unit, inactive Delphi exception
   hook and unused registry/Direct3D helpers. Drop empty nonvirtual compatibility
   hooks and statements after unconditional returns or breaks, preserving RNG
@@ -63,6 +135,11 @@ This changelog records game-source changes for Free Pascal compatibility.
   on Unix.
 - Update cursor image and hotspot together. Rebuilding a new cropped image with
   the previous hotspot could fail SDL's bounds check during cursor transitions.
+- Pad native cursor images when their hotspot lies outside the artwork, fixing
+  the alcohol market cursor without shifting its position.
+- Add a Mobile UI setting with automatic, enabled and disabled choices on every
+  platform. Reload the interface when applying it, keeping Android windowing and
+  touch input independent of the selected layout.
 - Preserve full pointer width when inspecting a missile owner's tranclucator
   and comparing missile ownership in point-defense targeting.
 - Cancel and join script-request work before destroying UI/calculation state;

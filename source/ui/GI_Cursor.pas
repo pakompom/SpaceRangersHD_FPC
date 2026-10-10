@@ -44,6 +44,7 @@ uses
   EC_CacheGI,
   EC_Str,
   GR_Main,
+  Math,
   SysUtils,
   SDL2;
 
@@ -287,29 +288,57 @@ end;
 function TCursorGI.CreateNativeCursor(Buffer: TGraphBufGR; Hotspot: TPoint): Pointer;
 var
   Surface: Pointer;
+  Padded: TGraphBufGR;
+  Offset: TPoint;
 begin
-  // The game's cursor images use the same BGRA bytes as the original DIB.
-  // SDL copies the surface into the cursor, so the decoded frame can be reused.
-  Surface :=
-      SDL_CreateRGBSurfaceFrom(
-          Buffer.GetPixels,
-          Buffer.Width,
-          Buffer.Height,
-          32,
-          Buffer.PitchBytes,
-          $FF0000,
-          $FF00,
-          $FF,
-          $FF000000
-      );
-  if Surface = nil then
-    RaiseWideMessage('Cursor surface: ' + string(SDL_GetError));
+  Padded := nil;
   try
-    Result := SDL_CreateColorCursor(Surface, Hotspot.X, Hotspot.Y);
-    if Result = nil then
-      RaiseWideMessage('Cursor: ' + string(SDL_GetError));
+    // Commodity icons and cropped animation frames can put the game's hotspot
+    // outside their bitmap. SDL requires it inside the surface. Transparent
+    // padding preserves the image's position relative to the pointer; clamping
+    // the hotspot would visibly move it.
+    if (Hotspot.X < 0)
+        or (Hotspot.Y < 0)
+        or (Hotspot.X >= Buffer.Width)
+        or (Hotspot.Y >= Buffer.Height) then
+    begin
+      Offset := Classes.Point(Max(0, -Hotspot.X), Max(0, -Hotspot.Y));
+      Padded := TGraphBufGR.Create(False);
+      Padded.AllocateRgbaTight(
+          Max(Buffer.Width, Hotspot.X + 1) + Offset.X,
+          Max(Buffer.Height, Hotspot.Y + 1) + Offset.Y
+      );
+      Padded.FillRect32(Classes.Rect(0, 0, Padded.Width, Padded.Height), 0);
+      Padded.CopyRect32(Offset, Buffer, Classes.Rect(0, 0, Buffer.Width, Buffer.Height));
+      Inc(Hotspot.X, Offset.X);
+      Inc(Hotspot.Y, Offset.Y);
+      Buffer := Padded;
+    end;
+    // The game's cursor images use the same BGRA bytes as the original DIB.
+    // SDL copies the surface into the cursor, so the decoded frame can be reused.
+    Surface :=
+        SDL_CreateRGBSurfaceFrom(
+            Buffer.GetPixels,
+            Buffer.Width,
+            Buffer.Height,
+            32,
+            Buffer.PitchBytes,
+            $FF0000,
+            $FF00,
+            $FF,
+            $FF000000
+        );
+    if Surface = nil then
+      RaiseWideMessage('Cursor surface: ' + string(SDL_GetError));
+    try
+      Result := SDL_CreateColorCursor(Surface, Hotspot.X, Hotspot.Y);
+      if Result = nil then
+        RaiseWideMessage('Cursor: ' + string(SDL_GetError));
+    finally
+      SDL_FreeSurface(Surface);
+    end;
   finally
-    SDL_FreeSurface(Surface);
+    Padded.Free;
   end;
 end;
 

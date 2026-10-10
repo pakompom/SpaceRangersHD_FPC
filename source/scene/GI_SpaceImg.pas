@@ -279,6 +279,11 @@ var
   I: Integer;
   Bounds: TRect;
 begin
+  if GetDisplayScale <> 1 then
+  begin
+    MessageLoop.InvalidateViewport;
+    Exit;
+  end;
   Image := Images;
   for I := 0 to ImageCount - 1 do
   begin

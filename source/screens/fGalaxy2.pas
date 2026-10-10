@@ -17,6 +17,7 @@ uses
   GI_Label,
   GI_MessageLoop,
   GI_Panel,
+  GI_PanelScrollBar,
   aGalaxy,
   aShip,
   fPanelMain;
@@ -26,6 +27,16 @@ type
   TfGalaxy2 = class;
 
   TfGalaxy2 = class(TMessageLoopGIWithMainPanel)
+  private
+    TouchStar, TouchOrigin: TStar;
+    TouchStarId: Cardinal;
+    TouchTurn: Integer;
+    StarInfoScroll: TPanelScrollBarGI;
+    function TouchInspectionEnabled: Boolean;
+    function StarAtPoint(Point: TPoint): TStar;
+    procedure ClearTouchSelection;
+    procedure MapLeftButtonUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
+  public
     MapPanel: TPanelGI;
     ViewMode: Byte;
     HideBuffer: TGraphBufGI;
@@ -51,6 +62,7 @@ type
     procedure OnOpen; override;
     procedure OnClose; override;
     procedure CancelPointerInput; override;
+    procedure ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer); override;
     procedure ProcessCallbackTimers; override;
     procedure SelectMusic; override;
     procedure InitializeLayout; override;
@@ -120,6 +132,8 @@ uses
   EC_Str,
   GR_Music,
   GI_Main,
+  GI_Inspection,
+  GameWindow,
   GlobalsV,
   aPlanet,
   fStarMap,
@@ -165,6 +179,8 @@ end;
 procedure TfGalaxy2.InitializeLayout;
 begin
   inherited InitializeLayout;
+  TouchStar := nil;
+  StarInfoScroll := nil;
   MainPanel.InitializeLayout(Self);
   AppendLogTextThreadSafe('fGalaxy2... ');
   ViewportRect := Classes.Rect(0, 0, GameScreenWidth, GameScreenHeight);
@@ -176,7 +192,7 @@ begin
       SetPosition(
           Classes.Point(
               LocalPosition.X + ExtraScreenWidth div 2,
-              LocalPosition.Y + ExtraScreenHeight div 2
+              LocalPosition.Y + MainPanel.VerticalContentOffset
           )
       );
   end;
@@ -810,7 +826,37 @@ procedure TfGalaxy2.CancelPointerInput;
 begin
   inherited CancelPointerInput;
   // Inspection ends on cancellation too, without a synthetic button release.
+  TouchStar := nil;
   ShowStarInfo(nil);
+end;
+
+procedure TfGalaxy2.ClearTouchSelection;
+begin
+  if TouchStar = nil then
+    Exit;
+  TouchStar := nil;
+  ShowStarInfo(nil);
+end;
+
+procedure TfGalaxy2.ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer);
+begin
+  if TouchStar <> nil then
+  begin
+    if not GamePointerInputIsTouch
+        and ((Message = WM_LBUTTONDOWN)
+            or (Message = WM_RBUTTONDOWN)
+            or (Message = WM_LBUTTONDBLCLK)
+            or (Message = WM_MOUSEWHEEL)) then
+      ClearTouchSelection
+    else if (Message = WM_GAME_PAN_BEGIN)
+        or ((Message = WM_GAME_TOUCH_BEGIN) and (WParam = MK_RBUTTON)) then
+      ClearTouchSelection;
+  end;
+  inherited ProcessWindowMessage(Message, WParam, LParam);
+  if (TouchStar <> nil)
+      and (Message = WM_GAME_TOUCH_DRAG_BEGIN)
+      and not GetByName('InfoStar').ContainsPoint(TouchAnchor) then
+    ClearTouchSelection;
 end;
 
 procedure TfGalaxy2.OnClose;
@@ -851,6 +897,11 @@ end;
 
 procedure TfGalaxy2.MainPanelKeyDown(Sender: TObjectGI; Key: Cardinal);
 begin
+  if (Key = VK_ESCAPE) and (TouchStar <> nil) then
+  begin
+    ClearTouchSelection;
+    BreakUiMessage;
+  end;
   if not IsVirtualKeyDown(VK_CONTROL)
       and not IsVirtualKeyDown(VK_SHIFT)
       and not IsVirtualKeyDown(VK_MENU) then
@@ -872,6 +923,16 @@ end;
 
 procedure TfGalaxy2.MainPanelMouseUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
 begin
+  if GamePointerInputIsTouch and (TouchStar <> nil) then
+  begin
+    if GetByName('InfoStar').ContainsPoint(Point) then
+      Exit;
+    if not MapPanel.ContainsPoint(Point) then
+    begin
+      ClearTouchSelection;
+      Exit;
+    end;
+  end;
   if ClickAutoCloseForm then
     if not (GetByName('ImagePanel') as TImageGI).HitTestPixel(Point)
         and not GetByName('HideBuf').ContainsPoint(Point)
@@ -1143,7 +1204,7 @@ begin
     MouseLeaveCallback := nil;
   end;
   MapPanel.LeftButtonDownCallback := MapLeftButtonDown;
-  MapPanel.LeftButtonUpCallback := MapButtonUp;
+  MapPanel.LeftButtonUpCallback := MapLeftButtonUp;
   MapPanel.MouseMoveCallback := MapMouseMove;
   MapPanel.RightButtonDownCallback := MapRightButtonDown;
   MapPanel.RightButtonUpCallback := MapButtonUp;
@@ -1160,7 +1221,7 @@ end;
 procedure TfGalaxy2.ConfigureJumpSelection;
 begin
   MapPanel.LeftButtonDownCallback := MapLeftButtonDown;
-  MapPanel.LeftButtonUpCallback := MapButtonUp;
+  MapPanel.LeftButtonUpCallback := MapLeftButtonUp;
   MapPanel.MouseMoveCallback := MapMouseMove;
   MapPanel.RightButtonDownCallback := MapRightButtonDown;
   MapPanel.RightButtonUpCallback := MapButtonUp;
@@ -1213,35 +1274,96 @@ begin
           and not MapPanel.IsOccludedAtPoint(Point);
 end;
 
-procedure TfGalaxy2.MapLeftButtonDown(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
+function TfGalaxy2.TouchInspectionEnabled: Boolean;
+begin
+  // Teleport/black-hole selectors and marker editing retain their own actions.
+  Result :=
+      (ViewMode in [1, 2])
+          and not CreateMarkerMode
+          and not IsVirtualKeyDown(VK_CONTROL)
+          and not IsVirtualKeyDown(VK_SHIFT)
+          and not IsVirtualKeyDown(VK_MENU);
+end;
+
+function TfGalaxy2.StarAtPoint(Point: TPoint): TStar;
 var
-  Selected, Star: TStar;
+  Star: TStar;
   GalaxyPoint: TPointF;
   BestDistance, Distance: Double;
   I: Integer;
 begin
-  if not IsVirtualKeyDown(VK_MENU) then
-    MapRightButtonDown(Sender, KeyState, Point);
-  if Sender.IsOccludedAtPoint(Point) then
-    Exit;
-  Point := MapPanel.ToLocalPoint(Point);
-  GalaxyPoint := MapPointToGalaxyPoint(Point);
-  Selected := nil;
-  BestDistance := 1.0e20;
+  GalaxyPoint := MapPointToGalaxyPoint(MapPanel.ToLocalPoint(Point));
+  BestDistance := Sqr(GalaxySizeY * 0.1);
+  Result := nil;
   for I := 0 to Galaxy.Stars.Count - 1 do
   begin
     Star := Galaxy.Stars[I];
     if not Star.IsConstellationVisible then
       Continue;
-    Distance :=
-        (Star.Position.X - GalaxyPoint.X) * (Star.Position.X - GalaxyPoint.X)
-            + (Star.Position.Y - GalaxyPoint.Y) * (Star.Position.Y - GalaxyPoint.Y);
+    Distance := Sqr(Star.Position.X - GalaxyPoint.X) + Sqr(Star.Position.Y - GalaxyPoint.Y);
     if Distance < BestDistance then
     begin
-      Selected := Star;
+      Result := Star;
       BestDistance := Distance;
     end;
   end;
+end;
+
+procedure TfGalaxy2.MapLeftButtonUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
+var
+  Star: TStar;
+begin
+  if not GamePointerInputIsTouch or not TouchInspectionEnabled then
+  begin
+    MapButtonUp(Sender, KeyState, Point);
+    Exit;
+  end;
+  if Sender.IsOccludedAtPoint(Point) then
+    Exit;
+  Star := StarAtPoint(Point);
+  if Star = nil then
+  begin
+    ClearTouchSelection;
+    Exit;
+  end;
+  if (Star = TouchStar)
+      and (Star.Id = TouchStarId)
+      and (TouchOrigin = GetPlayer.CurrentStar)
+      and (Galaxy.CurrentTurn = TouchTurn)
+      and (SelectedJumpStar = Star)
+      and (ViewMode = 2)
+      and (TouchDragKind = tdNone)
+      and not GetPlayer.NoJump
+      and not JumpButton.Disabled then
+  begin
+    ClearTouchSelection;
+    JumpClicked(nil);
+    Exit;
+  end;
+  ClearTouchSelection;
+  TouchStar := Star;
+  TouchStarId := Star.Id;
+  TouchOrigin := GetPlayer.CurrentStar;
+  TouchTurn := Galaxy.CurrentTurn;
+  SelectedJumpStar := Star;
+  RouteStars.Clear;
+  RebuildJumpPath;
+  JumpButton.SetDisabled((Star = GetPlayer.CurrentStar) or (ViewMode = 1) or GetPlayer.NoJump);
+  ShowStarInfo(Star);
+end;
+
+procedure TfGalaxy2.MapLeftButtonDown(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
+var
+  Selected: TStar;
+begin
+  if GamePointerInputIsTouch and TouchInspectionEnabled then
+    Exit;
+  ClearTouchSelection;
+  if not IsVirtualKeyDown(VK_MENU) then
+    MapRightButtonDown(Sender, KeyState, Point);
+  if Sender.IsOccludedAtPoint(Point) then
+    Exit;
+  Selected := StarAtPoint(Point);
   if (SelectedJumpStar <> nil)
       and (GetPlayer.CurrentStar <> SelectedJumpStar)
       and (CreateMarkerMode
@@ -1249,7 +1371,7 @@ begin
           or IsVirtualKeyDown(VK_SHIFT)
           or IsVirtualKeyDown(VK_MENU)) then
   begin
-    if BestDistance < (GalaxySizeY * 0.1) * (GalaxySizeY * 0.1) then
+    if Selected <> nil then
     begin
       if (RouteStars.Count < 1) or (RouteStars[RouteStars.Count - 1] <> Selected) then
       begin
@@ -1266,7 +1388,7 @@ begin
   else
   begin
     RouteStars.Clear;
-    if BestDistance < (GalaxySizeY * 0.1) * (GalaxySizeY * 0.1) then
+    if Selected <> nil then
       SelectedJumpStar := Selected
     else
       SelectedJumpStar := GetPlayer.CurrentStar;
@@ -1281,39 +1403,17 @@ begin
 end;
 
 procedure TfGalaxy2.MapRightButtonDown(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
-var
-  Selected, Star: TStar;
-  GalaxyPoint: TPointF;
-  BestDistance, Distance: Double;
-  I: Integer;
 begin
   if Sender.IsOccludedAtPoint(Point) then
     Exit;
-  Point := MapPanel.ToLocalPoint(Point);
-  GalaxyPoint := MapPointToGalaxyPoint(Point);
-  BestDistance := 1.0e20;
-  Selected := nil;
-  for I := 0 to Galaxy.Stars.Count - 1 do
-  begin
-    Star := Galaxy.Stars[I];
-    if not Star.IsConstellationVisible then
-      Continue;
-    Distance :=
-        (Star.Position.X - GalaxyPoint.X) * (Star.Position.X - GalaxyPoint.X)
-            + (Star.Position.Y - GalaxyPoint.Y) * (Star.Position.Y - GalaxyPoint.Y);
-    if Distance < BestDistance then
-    begin
-      Selected := Star;
-      BestDistance := Distance;
-    end;
-  end;
-  if BestDistance >= (GalaxySizeY * 0.1) * (GalaxySizeY * 0.1) then
-    Selected := nil;
-  ShowStarInfo(Selected);
+  ClearTouchSelection;
+  ShowStarInfo(StarAtPoint(Point));
 end;
 
 procedure TfGalaxy2.MapButtonUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
 begin
+  if TouchStar <> nil then
+    Exit;
   if StarInfoHideTimer <> nil then
   begin
     CancelCallbackTimer(StarInfoHideTimer);
@@ -1324,6 +1424,8 @@ end;
 
 procedure TfGalaxy2.MapDoubleClick(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);
 begin
+  if GamePointerInputIsTouch and TouchInspectionEnabled then
+    Exit;
   if ViewMode in [0, 2, 3] then
     if not GetPlayer.NoJump then
       JumpClicked(nil);
@@ -1341,6 +1443,7 @@ var
   Angle, Radius: Double;
   Event: TGalaxyEvent;
 begin
+  ClearTouchSelection;
   if (GetPlayer.CurrentStar = SelectedJumpStar) or (SelectedJumpStar = nil) then
     Exit;
   if ViewMode = 2 then
@@ -1472,6 +1575,8 @@ var
   Planet: TPlanet;
   CustomInfo: TCustomSystemInfo;
   Value: WideString;
+  Target: TRect;
+  Position, Radius: TPoint;
 begin
   if (Star <> nil) and (GetPlayer <> nil) then
     GetPlayer.ScriptItemsAct(satOnShowingStarInfo, Star, nil, 0);
@@ -1915,6 +2020,29 @@ begin
     );
   end;
   Objects.Free;
+  if GameMobileUiEnabled then
+  begin
+    Position := GalaxyPointToMapPoint(Star.Position);
+    // Keep the whole StarAtPoint selection radius clear, not just the sprite.
+    // Otherwise a second tap near the star can land on its new info window.
+    Radius.X :=
+        Ceil(GalaxySizeY * 0.1 / GalaxyExtent.X * (MapPixelBounds.Right - MapPixelBounds.Left + 1));
+    Radius.Y :=
+        Ceil(GalaxySizeY * 0.1 / GalaxyExtent.Y * (MapPixelBounds.Bottom - MapPixelBounds.Top + 1));
+    Target.TopLeft :=
+        MapPanel.ToAbsolutePoint(Classes.Point(Position.X - Radius.X, Position.Y - Radius.Y));
+    Target.BottomRight :=
+        MapPanel.ToAbsolutePoint(Classes.Point(Position.X + Radius.X, Position.Y + Radius.Y));
+    FitInspectionWindow(InfoPanel, Owner, StarInfoScroll, MainPanel.ContentBounds, Target, False);
+    with GetByName('InfoStarName') as TLabelGI do
+      SetSize(
+          Classes.Point(
+              InfoPanel.ClientSize.X - InfoPanel.WorkSubRect.Right - LocalPosition.X - 15,
+              ClientSize.Y
+          )
+      );
+    Exit;
+  end;
   for I := 0 to 3 do
   begin
     if I = 0 then
@@ -2552,6 +2680,7 @@ end;
 
 procedure TfGalaxy2.CreateMarkerClicked(Sender: TObjectGI);
 begin
+  ClearTouchSelection;
   CreateMarkerMode := not CreateMarkerMode;
   if CreateMarkerMode then
   begin
@@ -2567,6 +2696,7 @@ end;
 
 procedure TfGalaxy2.UndoMarkerClicked(Sender: TObjectGI);
 begin
+  ClearTouchSelection;
   if RouteStars.Count > 0 then
   begin
     RouteStars.Delete(RouteStars.Count - 1);
@@ -2576,6 +2706,7 @@ end;
 
 procedure TfGalaxy2.ClearMarkersClicked(Sender: TObjectGI);
 begin
+  ClearTouchSelection;
   if RouteStars.Count > 0 then
   begin
     RouteStars.Clear;

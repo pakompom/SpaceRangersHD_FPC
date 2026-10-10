@@ -29,6 +29,7 @@ type
     procedure OnActivate; override;
     procedure OnDeactivate; override;
     procedure ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint); override;
+    function GetTouchInteraction: TTouchInteractionGI; override;
     procedure LoadFromBlock(Block: TBlockParEC); override;
     constructor Create(Owner: TObjectGI);
     destructor Destroy; override;
@@ -170,8 +171,18 @@ begin
   end;
 end;
 
+function TDoorGI.GetTouchInteraction: TTouchInteractionGI;
+begin
+  if Assigned(ClickCallback) then
+    Result := tiTap
+  else
+    Result := inherited GetTouchInteraction;
+end;
+
 procedure TDoorGI.ProcessLeftButtonUp(KeyState: Cardinal; Point: TPoint);
 begin
+  if not AllowsTouchActivation then
+    Exit;
   inherited ProcessLeftButtonUp(KeyState, Point);
   if not IsOccludedAtPoint(MessageLoop.GetCursorPoint) then
     if Assigned(ClickCallback) then

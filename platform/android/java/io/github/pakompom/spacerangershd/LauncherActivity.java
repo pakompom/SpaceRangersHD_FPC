@@ -529,7 +529,6 @@ public final class LauncherActivity extends Activity {
                 tree, DocumentsContract.getTreeDocumentId(tree));
             Map<String, Resource> files = children(root, "");
             Resource install = require(files, "INSTALL.TXT", false);
-            Resource settings = require(files, "CFG.TXT", false);
             Resource cfg = require(files, "CFG", true);
             Resource data = require(files, "DATA", true);
             require(children(cfg.uri, cfg.path + "/"), "CFG/Main.dat", false);
@@ -545,7 +544,11 @@ public final class LauncherActivity extends Activity {
                 if (!stage.mkdir())
                     throw new GameFiles.Failure(R.string.launcher_error_create_resources);
                 copy(install, new File(stage, "INSTALL.TXT"));
-                copy(settings, new File(stage, "CFG.TXT"));
+                // First-run preferences belong to this port, not the PC install.
+                // Replacing game assets never touches the existing user profile.
+                try (InputStream defaults = context.getAssets().open("default-settings.txt")) {
+                    Files.copy(defaults, new File(stage, "CFG.TXT").toPath());
+                }
                 for (Resource file : files.values())
                     if (isLanguageFile(file))
                         copy(file, new File(stage, file.name));

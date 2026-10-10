@@ -327,10 +327,11 @@ begin
     Result := nil;
     Exit;
   end;
-  if Width < 16 then
-    Width := 16;
-  if Height < 16 then
-    Height := 16;
+  // SDL accepts small textures on every platform. Padding a repeated border
+  // tile changes its drawn extent and makes linear filtering sample transparent
+  // padding between copies, especially in scaled windows and mobile previews.
+  Width := Max(Width, 1);
+  Height := Max(Height, 1);
   ErrorCode := Direct3DDevice.CreateTexture(Width, Height, 1, 0, Format, Pool, Texture, nil);
   if ErrorCode = LongInt($8007000E) then
   begin

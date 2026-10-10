@@ -21,6 +21,8 @@ type
     Position: Integer;
     Orientation: Integer;
     Step: Integer;
+    // Keep artwork-width end buttons, but use the complete padded slider row.
+    FullHeightEndButtons: Boolean;
     DecreaseButton: TGraphButtonGI;
     IncreaseButton: TGraphButtonGI;
     AfterThumbImage: TImageGI;
@@ -60,6 +62,7 @@ uses
 constructor TCountBarGI.Create(Owner: TObjectGI);
 begin
   inherited Create(Owner);
+  TouchInteraction := tiDrag;
   Orientation := 1;
   Minimum := 0;
   Maximum := 100;
@@ -197,8 +200,13 @@ begin
               + ThumbSize.X div 2;
     ThumbRight := ThumbLeft + ThumbSize.X;
     DecreaseButton.SetPosition(Classes.Point(0, 0));
-    DecreaseButton.SetSize(DecreaseSize);
     IncreaseButton.SetPosition(Classes.Point(ClientSize.X - IncreaseSize.X, 0));
+    if FullHeightEndButtons then
+    begin
+      DecreaseSize.Y := ClientSize.Y;
+      IncreaseSize.Y := ClientSize.Y;
+    end;
+    DecreaseButton.SetSize(DecreaseSize);
     IncreaseButton.SetSize(IncreaseSize);
     BeforeThumbImage.SetPosition(Classes.Point(DecreaseSize.X, 0));
     BeforeThumbImage
