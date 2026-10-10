@@ -246,6 +246,50 @@ class NativeBuildTests(BuildFixture):
         after = compiler.recipe_revision("source revision", command, (self.compiler,))
         self.assertNotEqual(before, after)
 
+    def test_bootstrap_revision_survives_restored_tool_metadata(self):
+        command = [self.compiler, "compiler_cycle"]
+        before = compiler.recipe_revision("source revision", command, (self.compiler,))
+        original = self.compiler.read_bytes()
+        self.compiler.write_bytes(original)
+        stat = self.compiler.stat()
+        os.utime(self.compiler, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000_000))
+        self.assertEqual(
+            compiler.recipe_revision("source revision", command, (self.compiler,)), before
+        )
+        self.edit(self.compiler)
+        self.assertNotEqual(
+            compiler.recipe_revision("source revision", command, (self.compiler,)), before
+        )
+
+    def test_cmake_cache_survives_restore_and_checkout_timestamps(self):
+        directory = self.work / "native"
+        directory.mkdir()
+        recipe = self.root / "native/CMakeLists.txt"
+        recipe.parent.mkdir()
+        recipe.write_text("add_library(example example.c)")
+        command = [self.clang, "configure"]
+
+        def configure_step(*args):
+            (directory / "CMakeCache.txt").write_text(f"CMAKE_C_COMPILER:FILEPATH={self.clang}\n")
+
+        with (
+            patch.object(native, "ROOT", self.root),
+            patch.object(native, "run_step", side_effect=configure_step) as runner,
+        ):
+            self.assertFalse(native.configure_native(self.work, directory, command))
+            for path in (self.clang, recipe):
+                path.write_bytes(path.read_bytes())
+                stat = path.stat()
+                os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000_000))
+            self.assertFalse(native.configure_native(self.work, directory, command))
+            self.assertEqual(runner.call_count, 1)
+            self.edit(recipe)
+            self.assertFalse(native.configure_native(self.work, directory, command))
+            self.assertEqual(runner.call_count, 2)
+            self.edit(self.clang)
+            self.assertTrue(native.configure_native(self.work, directory, command))
+            self.assertEqual(runner.call_count, 3)
+
     def test_failed_configure_retries_and_requires_clean_build(self):
         directory = self.work / "native"
         directory.mkdir()

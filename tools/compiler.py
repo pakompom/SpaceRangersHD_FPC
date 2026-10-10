@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from build_support import BuildStamp, run_step
+from build_support import BuildStamp, content_state, require_tool, run_step
 from targets import ANDROID_MIN_API, ROOT, TARGETS, desktop_target, host_cpu
 
 VENDOR = ROOT / "vendor/fpc"
@@ -80,11 +80,7 @@ def source_revision() -> str:
 
 
 def recipe_revision(source: str, command: list[str | Path], tools: tuple[str | Path, ...]) -> str:
-    identities = []
-    for tool in tools:
-        path = Path(shutil.which(str(tool)) or tool).resolve()
-        stat = path.stat()
-        identities.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+    identities = content_state(require_tool(str(tool)) for tool in tools)
     return hashlib.sha256(
         json.dumps([source, list(map(str, command)), identities]).encode()
     ).hexdigest()

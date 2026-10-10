@@ -1,5 +1,6 @@
 """Command execution and incremental native builds shared by the build recipes."""
 
+import hashlib
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 
 from targets import ROOT
@@ -48,7 +50,6 @@ def run_step(work: Path, name: str, command: list[str | Path]) -> None:
 def command_signature(command: list[str | Path]) -> str:
     """Track arguments, executable replacement, and build-affecting environment."""
     compiler = require_tool(str(command[0]))
-    stat = compiler.stat()
     environment = {
         key: os.environ.get(key)
         for key in (
@@ -72,13 +73,34 @@ def command_signature(command: list[str | Path]) -> str:
     return json.dumps(
         [
             list(map(str, command)),
-            str(compiler),
-            stat.st_mtime_ns,
-            stat.st_ctime_ns,
-            stat.st_size,
+            content_state([compiler]),
             environment,
         ]
     )
+
+
+@lru_cache(maxsize=128)
+def _content_digest(path: Path, _metadata: tuple[int, ...]) -> str:
+    # Metadata only avoids rehashing unchanged files within this process. It is
+    # not part of the persistent identity: restoring an archive changes ctime.
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def content_state(paths: Iterable[str | Path]) -> list:
+    """Inventory contents for build tools and recipes restored across runners."""
+    result = []
+    for path in sorted(set(map(Path, paths))):
+        try:
+            stat = path.stat()
+            metadata = (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            result.append([str(path), _content_digest(path, metadata)])
+        except FileNotFoundError:
+            result.append([str(path), None])
+    return result
 
 
 def file_state(paths: Iterable[str | Path]) -> list:
@@ -179,8 +201,8 @@ def configure_native(work: Path, directory: Path, command: list[str | Path]) -> 
         return json.dumps(
             [
                 command_signature(command),
-                file_state(inputs),
-                file_state(Path(path).resolve() for path in compilers),
+                content_state(inputs),
+                content_state(Path(path).resolve() for path in compilers),
             ]
         )
 

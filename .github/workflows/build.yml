@@ -68,8 +68,10 @@ jobs:
         include:
           - target: linux
             platform: linux-x86_64
+            compiler: x86_64-linux
           - target: android
             platform: android-arm64
+            compiler: aarch64-android
     env:
       CC: clang
       CXX: clang++
@@ -121,10 +123,11 @@ jobs:
           sudo apt-get install --no-install-recommends -y "${packages[@]}"
           echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
 
-      - name: Install Android toolchain
+      - name: Locate Android toolchain
+        id: android-toolchain
         if: matrix.target == 'android'
         run: |
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.1' 'ndk;28.2.13676358'
+          echo "ndk=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_OUTPUT"
           {
             echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358"
             echo "ANDROID_BUILD_TOOLS_VERSION=35.0.1"
@@ -133,8 +136,93 @@ jobs:
             echo "ANDROID_VERSION_NAME=0.1+${GITHUB_SHA:0:12}"
           } >> "$GITHUB_ENV"
 
+      - name: Restore Android NDK
+        id: ndk-cache
+        if: matrix.target == 'android'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.android-toolchain.outputs.ndk }}
+          key: ndk-v1-${{ runner.os }}-${{ runner.arch }}-28.2.13676358
+
+      - name: Install Android toolchain
+        if: matrix.target == 'android'
+        # The hosted image installs sdkmanager without adding it to PATH.
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.1" "ndk;28.2.13676358"'
+
+      - name: Save Android NDK
+        if: matrix.target == 'android' && steps.ndk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.android-toolchain.outputs.ndk }}
+          key: ${{ steps.ndk-cache.outputs.cache-primary-key }}
+
       - name: Test build tooling
         run: python -m unittest discover -s tests
+
+      - name: Identify cache inputs
+        id: cache-inputs
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          # CMake and FPC caches contain absolute paths and host-specific tools.
+          {
+            printf '%s\n' "$ImageOS" "$ImageVersion" "$GITHUB_WORKSPACE" "$TARGET"
+            python -c 'import os; print(min(6, os.cpu_count() or 1))'
+            dpkg-query -W
+            clang --version
+            fpc -iV
+            cmake --version
+            if [[ "$TARGET" == android ]]; then
+              cat "$ANDROID_NDK_HOME/source.properties"
+            fi
+          } > "$RUNNER_TEMP/toolchain.txt"
+          {
+            echo "toolchain=$(sha256sum "$RUNNER_TEMP/toolchain.txt" | cut -d ' ' -f 1)"
+            echo "fpc=$(git -C vendor/fpc rev-parse HEAD)"
+            echo "okgf=$(git -C vendor/okgf rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore FPC compiler and runtime
+        id: compiler-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .local/fpc/${{ matrix.compiler }}
+          key: fpc-v1-${{ matrix.compiler }}-${{ steps.cache-inputs.outputs.toolchain }}-${{ steps.cache-inputs.outputs.fpc }}-${{ hashFiles('tools/compiler.py', 'tools/build_support.py', 'tools/targets.py') }}
+
+      - name: Prepare FPC compiler and runtime
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'tools')
+          from android import discover_ndk, ndk_toolchain
+          from compiler import prepare_compiler
+
+          target = os.environ['TARGET']
+          toolchain = ndk_toolchain(discover_ndk()) / 'bin' if target == 'android' else None
+          prepare_compiler(target, toolchain)
+          PY
+
+      # Preserve a successful bootstrap even if game compilation later fails.
+      - name: Save FPC compiler and runtime
+        if: steps.compiler-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .local/fpc/${{ matrix.compiler }}
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+
+      - name: Cache Android native dependencies
+        if: matrix.target == 'android'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .local/downloads
+            .local/android-sources
+            .local/android-arm64/release/dependencies
+            .local/android-arm64/release/native
+          key: android-native-v1-${{ steps.cache-inputs.outputs.toolchain }}-${{ steps.cache-inputs.outputs.okgf }}-${{ hashFiles('tools/android.py', 'tools/build_support.py', 'tools/targets.py', 'native/CMakeLists.txt', 'native/sdl2-android.patch') }}
 
       - name: Build release binaries
         env:
