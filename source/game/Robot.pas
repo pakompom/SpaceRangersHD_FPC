@@ -277,7 +277,198 @@ uses
   EC_CacheFont,
   GI_MessageLoop,
   EC_HsFile,
+{$IFDEF UNIX}
+  BaseUnix,
+  GameInput,
+{$ENDIF}
   aGalaxy;
+
+{$IFDEF UNIX}
+// Native planetary battles: the MatrixGame engine runs as a separate process
+// (matrixgame-rs). The interface below mirrors the four MatrixGame.dll entry
+// points; Run passes its arguments through MG_* environment variables and
+// reads the exit state and player statistics back from a result file.
+
+var
+  NativeRobotInterface: TRobotInterfacePrefix;
+  NativeRobotEngine: AnsiString;
+  NativeRobotGameRoot: AnsiString;
+
+function FindNativeRobotEngine: AnsiString;
+begin
+  Result := GetEnvironmentVariable('SR_MATRIXGAME');
+  if Result = '' then
+    Result := ExtractFilePath(ParamStr(0)) + 'matrixgame-rs';
+  if not FileExists(Result) then
+    Result := '';
+end;
+
+procedure NativeRobotInitialize(Callbacks: PRobotCallbacks); stdcall;
+begin
+end;
+
+procedure NativeRobotFinalize; stdcall;
+begin
+end;
+
+function NativeRobotSupport: Integer; stdcall;
+begin
+  Result := 0;
+end;
+
+procedure WriteNativeRobotText(const FileName: AnsiString; Text: PWideChar);
+var
+  Stream: TFileStream;
+  Data: UTF8String;
+begin
+  Data := UTF8Encode(WideString(Text));
+  Stream := TFileStream.Create(FileName, fmCreate);
+  try
+    if Data <> '' then
+      Stream.WriteBuffer(Data[1], Length(Data));
+  finally
+    Stream.Free;
+  end;
+end;
+
+function NativeRobotRun(
+    Instance: Cardinal;
+    Window: Cardinal;
+    MapName: PWideChar;
+    Settings: PRobotDisplaySettings;
+    Language: PWideChar;
+    StartText: PWideChar;
+    WinText: PWideChar;
+    LossText: PWideChar;
+    TerronName: PWideChar;
+    Statistics: PPlanetBattleStatistics
+): Integer; stdcall;
+var
+  Root, Prefix, ResultFile, EngineLog: AnsiString;
+  Environment, Lines: TStringList;
+  Arguments, EnvironmentBlock: array of PAnsiChar;
+  MapArgument: AnsiString;
+  VolumeText: AnsiString;
+  Index, Status: Integer;
+  LogHandle: cint;
+  Child, Waited: TPid;
+  Message: TGameMessage;
+begin
+  // 1 = back to the game without a win, as when the battle is cancelled.
+  Result := 1;
+  Root := IncludeTrailingPathDelimiter(NativeRobotGameRoot);
+  Prefix := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'srhd-battle-' + IntToStr(FpGetPid);
+  ResultFile := Prefix + '-result.txt';
+  EngineLog := Prefix + '-engine.log';
+  DeleteFile(ResultFile);
+  WriteNativeRobotText(Prefix + '-begin.txt', StartText);
+  WriteNativeRobotText(Prefix + '-win.txt', WinText);
+  WriteNativeRobotText(Prefix + '-loss.txt', LossText);
+  MapArgument := UTF8Encode(WideString(MapName));
+
+  Environment := TStringList.Create;
+  Lines := TStringList.Create;
+  try
+    for Index := 1 to GetEnvironmentVariableCount do
+      Environment.Add(GetEnvironmentString(Index));
+    Environment.Add('MG_PKG=' + AnsiString(NativeGamePath(Root + 'DATA\robots.pkg')));
+    Environment.Add(
+        'MG_DAT='
+            + AnsiString(
+                NativeGamePath(Root + 'CFG\' + UTF8Encode(WideString(Language)) + '\robots.dat')
+            )
+    );
+    Environment.Add(
+        'MG_SOUND_PKGS='
+            + AnsiString(NativeGamePath(Root + 'DATA\Sound.pkg'))
+            + ':'
+            + AnsiString(
+                NativeGamePath(Root + 'DATA\voices' + UTF8Encode(WideString(Language)) + '.pkg')
+            )
+    );
+    if RobotSound then
+      Str(SoundVolume:0:3, VolumeText)
+    else
+      VolumeText := '0';
+    Environment.Add('MG_SOUND_VOL=' + VolumeText);
+    Environment.Add('MG_TXT_BEGIN=' + Prefix + '-begin.txt');
+    Environment.Add('MG_TXT_WIN=' + Prefix + '-win.txt');
+    Environment.Add('MG_TXT_LOSS=' + Prefix + '-loss.txt');
+    Environment.Add('MG_RESULT=' + ResultFile);
+    Environment.Add('MG_WIDTH=' + IntToStr(Settings.ScreenWidth));
+    Environment.Add('MG_HEIGHT=' + IntToStr(Settings.ScreenHeight));
+    if not Direct3DPresentParameters.Windowed then
+      Environment.Add('MG_FULLSCREEN=1');
+    if Environment.IndexOfName('RUST_LOG') < 0 then
+      Environment.Add('RUST_LOG=info');
+
+    SetLength(EnvironmentBlock, Environment.Count + 1);
+    for Index := 0 to Environment.Count - 1 do
+      EnvironmentBlock[Index] := PAnsiChar(Environment.Strings[Index]);
+    EnvironmentBlock[Environment.Count] := nil;
+    SetLength(Arguments, 3);
+    Arguments[0] := PAnsiChar(NativeRobotEngine);
+    Arguments[1] := PAnsiChar(MapArgument);
+    Arguments[2] := nil;
+
+    AppendLogLineThreadSafe('Starting native MatrixGame: ' + NativeRobotEngine + ' ' + MapArgument);
+    Child := FpFork;
+    if Child = 0 then
+    begin
+      LogHandle := FpOpen(PAnsiChar(EngineLog), O_WRONLY or O_CREAT or O_TRUNC, &644);
+      if LogHandle >= 0 then
+        FpDup2(LogHandle, 2);
+      FpExecve(PAnsiChar(NativeRobotEngine), @Arguments[0], @EnvironmentBlock[0]);
+      FpExit(127);
+    end;
+    if Child < 0 then
+      raise Exception.Create('Cannot start native MatrixGame');
+
+    // The soundtrack stays with the game: the engine process only plays effects.
+    RobotPlayMusic;
+    // Keep the game window responsive while the battle owns the screen.
+    repeat
+      Waited := FpWaitPid(Child, Status, WNOHANG);
+      if Waited = 0 then
+      begin
+        while PollGameMessage(Message) do
+          ;
+        Sleep(30);
+      end;
+    until (Waited = Child) or ((Waited < 0) and (fpgeterrno <> ESysEINTR));
+
+    if FileExists(ResultFile) then
+    begin
+      Lines.LoadFromFile(ResultFile);
+      Result := StrToIntDef(Lines.Values['exit'], 1);
+      Statistics.SignedTimeMs := StrToIntDef(Lines.Values['time'], 0);
+      Statistics.RobotsBuilt := StrToIntDef(Lines.Values['robot_build'], 0);
+      Statistics.RobotsDestroyed := StrToIntDef(Lines.Values['robot_kill'], 0);
+      Statistics.TurretsBuilt := StrToIntDef(Lines.Values['turret_build'], 0);
+      Statistics.TurretsDestroyed := StrToIntDef(Lines.Values['turret_kill'], 0);
+      Statistics.BuildingsDestroyed := StrToIntDef(Lines.Values['building_kill'], 0);
+      // The engine reports surrender as 4; the game only knows loss.
+      if Result = 4 then
+        Result := 2;
+      // 0 would terminate the whole game; a closed battle returns to it.
+      if Result = 0 then
+        Result := 1;
+    end
+    else
+      AppendLogLineThreadSafe(
+          'Native MatrixGame left no result, wait status=' + IntToStr(Status)
+      );
+    AppendLogLineThreadSafe('Native MatrixGame finished, result=' + IntToStr(Result));
+  finally
+    Environment.Free;
+    Lines.Free;
+    DeleteFile(Prefix + '-begin.txt');
+    DeleteFile(Prefix + '-win.txt');
+    DeleteFile(Prefix + '-loss.txt');
+    DeleteFile(ResultFile);
+  end;
+end;
+{$ENDIF}
 
 function GetRobotMultiSampleIndex: Integer;
 var
@@ -348,6 +539,20 @@ begin
         end;
       end;
     end;
+{$ELSEIF Defined(UNIX)}
+    NativeRobotEngine := FindNativeRobotEngine;
+    if NativeRobotEngine <> '' then
+    begin
+      NativeRobotInterface.Initialize := NativeRobotInitialize;
+      NativeRobotInterface.Finalize := NativeRobotFinalize;
+      NativeRobotInterface.Support := NativeRobotSupport;
+      NativeRobotInterface.Run := NativeRobotRun;
+      RobotInterface := @NativeRobotInterface;
+      RobotInterface.Initialize(@RobotCallbacks);
+      AppendLogLineThreadSafe('Load native MatrixGame .... ok: ' + NativeRobotEngine);
+    end
+    else
+      AppendLogLineThreadSafe('Native MatrixGame not found; planetary battles are disabled');
 {$ENDIF}
   end;
 end;
@@ -754,6 +959,9 @@ begin
     MusicManager.RequestFadeOut;
   AppendLogLineThreadSafe('Preparing to start planetary battle');
   SavedDirectory := GetCurrentDir;
+{$IFDEF UNIX}
+  NativeRobotGameRoot := SavedDirectory;
+{$ENDIF}
   LooseFileRoot := SavedDirectory + '\';
   try
     TMessageLoopGI(RegisteredScreens[CurrentScreenId]).CaptureCursorState(@CursorState);
