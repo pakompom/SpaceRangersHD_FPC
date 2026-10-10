@@ -93,7 +93,7 @@ var
 implementation
 
 uses
-{$IFDEF DARWIN}
+{$IF Defined(DARWIN) and not Defined(SRHD_IOS)}
   GameCocoaCursor,
 {$ENDIF}
   SysUtils,
@@ -174,7 +174,7 @@ begin
   // show/hide call is a no-op when it already records the requested state.
   SDL_ShowCursor(Ord(CursorCount >= 0));
   SDL_SetCursor(nil);
-{$IFDEF DARWIN}
+{$IF Defined(DARWIN) and not Defined(SRHD_IOS)}
   // SDL's Cocoa backend only queues cursor-rectangle invalidation. After an
   // application switch, AppKit's current cursor can still be the game's cursor
   // while macOS displays the other application's arrow. Set it immediately so
@@ -222,7 +222,7 @@ begin
   Driver := LowerCase(string(SDL_GetCurrentVideoDriver));
   DesktopMouseAvailable := (Driver = 'cocoa') or (Driver = 'windows') or (Driver = 'x11');
   BrowserWindow := Driver = 'emscripten';
-  MobileWindow := Driver = 'android';
+  MobileWindow := (Driver = 'android') or (Driver = 'uikit');
   Format := DefaultFormatSettings;
   Format.DecimalSeparator := '.';
   MobileDensity := StrToFloatDef(string(SDL_GetHint('SRHD_UI_DENSITY')), 1, Format);

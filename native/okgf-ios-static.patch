@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2060be6..a72d44c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -28,7 +28,7 @@ if(OKGF_MATH_BACKEND STREQUAL "NATIVE" AND OKGF_PORTABLE_MATH)
+   message(FATAL_ERROR "OKGF_PORTABLE_MATH applies to COMPATIBLE, not NATIVE")
+ endif()
+ message(STATUS "OKGF math backend: ${OKGF_MATH_BACKEND}")
+-if(EMSCRIPTEN)
++if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+   set(OKGF_LIBRARY_TYPE STATIC)
+ else()
+   set(OKGF_LIBRARY_TYPE SHARED)

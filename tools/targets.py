@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGETS = ("linux", "macos", "wasm", "android")
+TARGETS = ("linux", "macos", "wasm", "android", "ios", "ios-simulator")
 # Installed Android identity, independent of the Java/JNI class namespace.
 ANDROID_APPLICATION_ID = "io.github.pakompom.spacerangershd"
 # Package versions change for releases, not local rebuilds.
@@ -64,12 +64,17 @@ class BuildConfig:
             directory /= "wasm"
         elif self.target == "android":
             directory /= "android-arm64"
+        elif self.target in ("ios", "ios-simulator"):
+            cpu = "aarch64" if self.target == "ios" else host_cpu()
+            directory /= f"{self.target}-{cpu}"
         return directory / self.profile
 
     @property
     def binary_directory(self) -> Path:
         if self.target == "macos":
             return self.work / "Space Rangers HD.app/Contents/MacOS"
+        if self.target in ("ios", "ios-simulator"):
+            return self.work / "SpaceRangersHD.app"
         return self.work / "bin"
 
     @property
@@ -84,6 +89,8 @@ class BuildConfig:
             return self.binary_directory / "index.html"
         if self.target == "android":
             return self.work / "Rangers.apk"
+        if self.target in ("ios", "ios-simulator"):
+            return self.binary_directory
         return self.binary_directory / "Rangers"
 
     def create_directories(self) -> None:

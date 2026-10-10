@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from android import build_android
+from ios import build_ios
 from build_support import (
     BuildStamp,
     build_okgf,
@@ -220,6 +221,8 @@ def main() -> None:
             "macos": build_macos,
             "wasm": build_wasm,
             "android": build_android,
+            "ios": build_ios,
+            "ios-simulator": build_ios,
         }
         artifact = builders[config.target](config, args.rebuild)
     except subprocess.CalledProcessError as error:

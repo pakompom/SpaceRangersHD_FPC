@@ -8,7 +8,7 @@ program Rangers;
 {$IMAGEBASE $00400000}
 {$SETPEFLAGS $20}
 {$I-}
-{$IF not Defined(WASI) and not Defined(ANDROID)}
+{$IF not Defined(WASI) and not Defined(ANDROID) and not Defined(SRHD_IOS)}
   {$R Rangers.res}
 {$ENDIF}
 
@@ -19,11 +19,11 @@ uses
 {$IFDEF UNIX}
   cthreads,
 {$ENDIF}
-{$IF Defined(WASI) or Defined(ANDROID)}
+{$IF Defined(WASI) or Defined(ANDROID) or Defined(SRHD_IOS)}
   unicodeducet,
   fpwidestring,
 {$ENDIF}
-{$IF Defined(UNIX) and not Defined(ANDROID)}
+{$IF Defined(UNIX) and not Defined(ANDROID) and not Defined(SRHD_IOS)}
   cwstring,
 {$ENDIF}
 {$IFDEF MSWINDOWS}

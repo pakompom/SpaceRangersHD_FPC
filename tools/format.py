@@ -35,7 +35,7 @@ def format_sources(check: bool) -> None:
         (["pasfmt", "--mode", "check" if check else "files"], source_files(".pas", ".dpr", ".lpr")),
         (
             ["clang-format", *(["--dry-run", "--Werror"] if check else ["-i"])],
-            source_files(".c", ".cpp", ".h", ".java"),
+            source_files(".c", ".cpp", ".h", ".java", ".m", ".mm"),
         ),
         (
             ["ruff", "format", "--line-length", "100", *(["--check"] if check else [])],

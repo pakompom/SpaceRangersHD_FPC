@@ -17,6 +17,21 @@ def main() -> None:
     )
     args, game_options = parser.parse_known_args()
     config = BuildConfig(args.target, args.release, args.lto)
+    if args.target == "ios":
+        parser.error("Sign and install the iOS app on your device; see BUILDING.md.")
+    if args.target == "ios-simulator":
+        if game_options:
+            parser.error("The iOS launcher does not accept extra game options.")
+        from ios import run_simulator
+
+        directory = args.game_dir.expanduser().resolve()
+        if directory == ROOT / "game" and not directory.is_dir():
+            directory = None
+        try:
+            run_simulator(config, directory)
+        except (OSError, RuntimeError) as error:
+            parser.exit(1, f"{error}\n")
+        return
     if args.target == "android":
         parser.error(
             "Android runs from its launcher. Build with ./tools/build.py --target=android, "

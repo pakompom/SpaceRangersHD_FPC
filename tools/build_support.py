@@ -265,6 +265,7 @@ def build_okgf(
     rebuild: bool = False,
     wasm: bool = False,
     android: bool = False,
+    ios: bool = False,
 ) -> Path:
     directory = work / "native"
     # Browser native dependencies use -O2 in both game profiles.
@@ -289,7 +290,7 @@ def build_okgf(
             "--build",
             directory,
             "--parallel",
-            *(["6"] if wasm or android else []),
+            *(["6"] if wasm or android or ios else []),
             *(["--clean-first"] if rebuild or compiler_changed else []),
         ],
     )
