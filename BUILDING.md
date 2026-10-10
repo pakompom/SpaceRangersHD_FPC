@@ -78,4 +78,7 @@ updates with the same key.
 Release symbols are kept in `build/android-symbols/<build-id>/` for crash diagnostics.
 Android builds currently omit Xvid, so AVI cinematics do not play.
 
-The package ID and version are defined in `tools/targets.py`; rebuilding does not bump the version.
+The package ID and default version are defined in `tools/targets.py`; local rebuilds
+do not bump the version. `ANDROID_VERSION_CODE` and `ANDROID_VERSION_NAME` override
+the APK version; `ANDROID_BUILD_TOOLS_VERSION` selects an installed SDK build-tools
+version instead of the newest one.

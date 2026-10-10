@@ -12,6 +12,9 @@ Supported platforms:
 
 See [BUILDING.md](BUILDING.md) for dependencies and build/run instructions.
 
+[Download Linux x86_64 and Android ARM64 builds](https://github.com/pakompom/SpaceRangersHD_FPC/releases).
+You need your own game data. Releases are built automatically from source changes on `main`.
+
 On Android, automatic resolution sizes the interface for the display density and
 fits the complete view in landscape. The shared bottom panel and radar
 scale independently of the world, with rendering at the display's pixel resolution.

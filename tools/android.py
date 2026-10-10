@@ -325,12 +325,32 @@ def verify_library(library: Path, readelf: Path) -> None:
     )
 
 
+def package_version() -> tuple[int, str]:
+    """Allow CI releases to identify the commit and install as newer updates."""
+    try:
+        code = int(os.environ.get("ANDROID_VERSION_CODE", str(ANDROID_VERSION_CODE)))
+    except ValueError as error:
+        raise RuntimeError("ANDROID_VERSION_CODE must be an integer") from error
+    if not 1 <= code <= 2_100_000_000:
+        raise RuntimeError("ANDROID_VERSION_CODE must be between 1 and 2100000000")
+    name = os.environ.get("ANDROID_VERSION_NAME", ANDROID_VERSION_NAME)
+    if not name.strip():
+        raise RuntimeError("ANDROID_VERSION_NAME must not be empty")
+    return code, name
+
+
 def package_android(config: BuildConfig, native: Path, ndk: Path) -> Path:
     work = config.work / "package"
     work.mkdir(parents=True, exist_ok=True)
     sdk = android_sdk()
     android = sdk / f"platforms/android-{ANDROID_TARGET_API}/android.jar"
-    build_tools = newest_version(sdk / "build-tools")
+    version_code, version_name = package_version()
+    tools_version = os.environ.get("ANDROID_BUILD_TOOLS_VERSION")
+    build_tools = (
+        sdk / "build-tools" / tools_version
+        if tools_version
+        else newest_version(sdk / "build-tools")
+    )
     java = java_home()
     # SDK launchers may invoke java from PATH without consulting JAVA_HOME.
     # Keep d8/apksigner on the same JDK as javac in either case.
@@ -368,12 +388,12 @@ def package_android(config: BuildConfig, native: Path, ndk: Path) -> Path:
         unsigned = work / "unsigned.apk"
         run_step(work, "apk", [
             build_tools / "aapt2", "link", "-I", android,
-            "--manifest", app / "AndroidManifest.xml", "--version-code", str(ANDROID_VERSION_CODE),
+            "--manifest", app / "AndroidManifest.xml", "--version-code", str(version_code),
             "--rename-manifest-package", ANDROID_APPLICATION_ID,
             "--min-sdk-version", str(ANDROID_MIN_API), "--target-sdk-version", str(ANDROID_TARGET_API),
             "-A", app / "assets",
             *([] if config.release else ["--debug-mode"]),
-            "--version-name", ANDROID_VERSION_NAME, "--java", generated, "-o", unsigned, resources,
+            "--version-name", version_name, "--java", generated, "-o", unsigned, resources,
         ])  # fmt: skip
         run_step(work, "java", [
             java / "bin/javac", "-encoding", "UTF-8", "--release", "8",
