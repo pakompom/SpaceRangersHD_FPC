@@ -5522,6 +5522,17 @@ begin
       end;
       AppendLogLineThreadSafe('Re-initializing Direct3D device... ok!');
     end;
+    // SDL drivers can report their real limits only after a renderer exists.
+    // Resource tiling must use those limits rather than pre-creation estimates.
+    if Direct3D.GetDeviceCaps(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, Caps) = 0 then
+    begin
+      MaxTextureSize.X := Caps.MaxTextureWidth;
+      MaxTextureSize.Y := Caps.MaxTextureHeight;
+      AppendLogLineThreadSafe(
+          'Active Max Texture Size=' + IntToStr(MaxTextureSize.X)
+              + 'x' + IntToStr(MaxTextureSize.Y)
+      );
+    end;
     AvailableTextureBytes := Direct3DDevice.GetAvailableTextureMem;
     ReservedTextureBytes :=
         ExtractDigitsToIntW(UserSettingsConfig.GetParamByPathOrMarker('VideoMemSizeLimit'));
