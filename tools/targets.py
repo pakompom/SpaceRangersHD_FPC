@@ -15,12 +15,18 @@ ANDROID_VERSION_NAME = "0.1"
 ANDROID_MIN_API = 26
 ANDROID_TARGET_API = 35
 ANDROID_PAGE_SIZE = 16384
+IOS_MIN_VERSION = "15.0"
 
 
 def add_build_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--target", choices=TARGETS, default=desktop_target())
     parser.add_argument("--release", action="store_true", help="Select the optimized build.")
     parser.add_argument("--lto", action="store_true", help="Select LLVM link-time optimization.")
+    parser.add_argument(
+        "--simulator-arch",
+        choices=("arm64", "x86_64"),
+        help="Simulator CPU; defaults to the host CPU.",
+    )
 
 
 def desktop_target() -> str:
@@ -46,10 +52,31 @@ class BuildConfig:
     release: bool = False
     lto: bool = False
     root: Path = ROOT
+    simulator_arch: str | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.target not in TARGETS:
             raise ValueError(f"Unsupported target: {self.target}")
+        if self.simulator_arch is not None and (
+            self.target != "ios-simulator" or self.simulator_arch not in ("arm64", "x86_64")
+        ):
+            raise ValueError(
+                "--simulator-arch requires --target=ios-simulator and arm64 or x86_64."
+            )
+
+    @property
+    def cpu(self) -> str:
+        if self.target == "wasm":
+            return "wasm32"
+        if self.target in ("android", "ios"):
+            return "aarch64"
+        if self.simulator_arch:
+            return "aarch64" if self.simulator_arch == "arm64" else "x86_64"
+        return host_cpu()
+
+    @property
+    def ios_arch(self) -> str:
+        return "arm64" if self.cpu == "aarch64" else self.cpu
 
     @property
     def profile(self) -> str:
@@ -59,14 +86,13 @@ class BuildConfig:
     def work(self) -> Path:
         directory = self.root / ".local"
         if self.target == "linux":
-            directory /= f"linux-{host_cpu()}"
+            directory /= f"linux-{self.cpu}"
         elif self.target == "wasm":
             directory /= "wasm"
         elif self.target == "android":
             directory /= "android-arm64"
         elif self.target in ("ios", "ios-simulator"):
-            cpu = "aarch64" if self.target == "ios" else host_cpu()
-            directory /= f"{self.target}-{cpu}"
+            directory /= f"{self.target}-{self.cpu}"
         return directory / self.profile
 
     @property

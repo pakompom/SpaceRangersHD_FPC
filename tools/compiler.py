@@ -10,7 +10,14 @@ import subprocess
 from pathlib import Path
 
 from build_support import BuildStamp, content_state, output, require_tool, run_step
-from targets import ANDROID_MIN_API, ROOT, TARGETS, desktop_target, host_cpu
+from targets import (
+    ANDROID_MIN_API,
+    IOS_MIN_VERSION,
+    ROOT,
+    BuildConfig,
+    desktop_target,
+    host_cpu,
+)
 
 VENDOR = ROOT / "vendor/fpc"
 WORK = ROOT / ".local/fpc"
@@ -87,14 +94,11 @@ def recipe_revision(source: str, command: list[str | Path], tools: tuple[str | P
 
 
 def prepare_compiler(
-    target: str,
+    config: BuildConfig,
     toolchain: Path | None = None,
-    *,
-    lto: bool = False,
 ) -> tuple[Path, list[str]]:
     """Build the LLVM compiler and the game's Delphi-compatible runtime."""
-    if target not in TARGETS:
-        raise ValueError(f"Unsupported target: {target}")
+    target, lto = config.target, config.lto
     apple_mobile = target in ("ios", "ios-simulator")
     if apple_mobile and platform.system() != "Darwin":
         raise RuntimeError("iOS compilation requires macOS with Xcode installed.")
@@ -105,9 +109,7 @@ def prepare_compiler(
             "Initialize dependencies with: git submodule update --init --recursive"
         )
     native_cpu = host_cpu()
-    cpu = (
-        "wasm32" if target == "wasm" else "aarch64" if target in ("android", "ios") else native_cpu
-    )
+    cpu = config.cpu
     system = {
         "linux": "linux",
         "macos": "darwin",
@@ -135,14 +137,10 @@ def prepare_compiler(
     bootstrap_sdk = None
     if platform.system() == "Darwin":
         bootstrap_sdk = output("xcrun", "--sdk", "macosx", "--show-sdk-path")
-        sdk_name = (
-            "iphoneos"
-            if target == "ios"
-            else "iphonesimulator"
-            if target == "ios-simulator"
-            else "macosx"
-        )
-        sdk = output("xcrun", "--sdk", sdk_name, "--show-sdk-path")
+        sdk = bootstrap_sdk
+        if apple_mobile:
+            sdk_name = "iphoneos" if target == "ios" else "iphonesimulator"
+            sdk = output("xcrun", "--sdk", sdk_name, "--show-sdk-path")
     make = shutil.which("gmake") or shutil.which("make")
     if make is None:
         raise FileNotFoundError("Install GNU Make to build the vendored compiler.")
@@ -157,10 +155,12 @@ def prepare_compiler(
     elif target == "android" and native_cpu != cpu:
         compiler_name = "ppcrossa64"
         cross_flags = ["CPU_TARGET=aarch64", "CROSSINSTALL=1", "OS_TARGET=android"]
-    elif target == "ios" and native_cpu != cpu:
-        compiler_name = "ppcrossa64"
+    elif apple_mobile and native_cpu != cpu:
+        compiler_name = "ppcrossa64" if cpu == "aarch64" else "ppcrossx64"
         # The compiler runs on the host. Select iOS only when compiling the RTL/game.
-        cross_flags = ["CPU_TARGET=aarch64", "CROSSINSTALL=1", "OS_TARGET=darwin"]
+        cross_flags = [f"CPU_TARGET={cpu}", "CROSSINSTALL=1", "OS_TARGET=darwin"]
+    # An ARM host needs software Extended arithmetic to emit Intel constants.
+    soft_fpu = " -dFPC_SOFT_FPUX80" if cpu == "x86_64" and native_cpu == "aarch64" else ""
     compiler = source / "compiler" / compiler_name
     bootstrap = shutil.which(os.environ.get("FPC_BOOTSTRAP", "fpc"))
     if bootstrap is None:
@@ -172,36 +172,18 @@ def prepare_compiler(
         "compiler_cycle",
         "NOWPOCYCLE=1",
         f"PP={bootstrap}",
-        "OPT=-O2" + (f" -XR{bootstrap_sdk}" if bootstrap_sdk else ""),
+        "OPT=-O2" + (f" -XR{bootstrap_sdk}" if bootstrap_sdk else "") + soft_fpu,
         "LLVM=1",
-        "OPTNEW=" + " ".join(bootstrap_flags),
+        "OPTNEW=" + " ".join(bootstrap_flags) + soft_fpu,
         *cross_flags,
     ]
-    revision = source_revision()
-    ios_patch = ROOT / "native/fpc-ios-simulator.patch"
-    if apple_mobile:
-        revision += hashlib.sha256(ios_patch.read_bytes()).hexdigest()
-    revision = recipe_revision(revision, compiler_command, (make, bootstrap, "clang"))
+    revision = recipe_revision(source_revision(), compiler_command, (make, bootstrap, "clang"))
     stamp = BuildStamp(work / "compiler.stamp")
     if not stamp.matches(revision, compiler):
         with stamp.recording(revision):
             if source.exists():
                 shutil.rmtree(source)
             shutil.copytree(VENDOR, source, ignore=shutil.ignore_patterns(".git"))
-            if apple_mobile:
-                run_step(
-                    work,
-                    "compiler-patch",
-                    [
-                        require_tool("patch"),
-                        "-d",
-                        source,
-                        "-p1",
-                        "--batch",
-                        "-i",
-                        ios_patch,
-                    ],
-                )
             run_step(work, "compiler", compiler_command)
 
     runtime = work / ("runtime-lto" if lto else "runtime")
@@ -245,7 +227,7 @@ def prepare_compiler(
         options += ["-Aclang-llvm-darwin", f"-XR{sdk}"]
         target_flags = []
     elif apple_mobile:
-        options += ["-Aclang-llvm-darwin", f"-T{system}", f"-XR{sdk}", "-WP15.0"]
+        options += ["-Aclang-llvm-darwin", f"-T{system}", f"-XR{sdk}", f"-WP{IOS_MIN_VERSION}"]
         target_flags = [f"CPU_TARGET={cpu}", f"OS_TARGET={system}"]
     else:
         target_flags = [f"CPU_TARGET={cpu}", "OS_TARGET=linux"]
@@ -321,7 +303,7 @@ def prepare_compiler(
         "-n", *llvm_flags, *(["-Clflto"] if lto else []),
         *(["-XLL"] if target in ("linux", "android") else []),
         *(["-Tandroid", "-Cg", "-XP", f"-FD{toolchain}"] if target == "android" else []),
-        *([f"-T{system}", f"-XR{sdk}", "-WP15.0", "-Aclang-llvm-darwin"] if apple_mobile else []),
+        *([f"-T{system}", f"-XR{sdk}", f"-WP{IOS_MIN_VERSION}", "-Aclang-llvm-darwin"] if apple_mobile else []),
         *(["-Twasip1threads", "-dFPC_WASM_EMSCRIPTEN", "-Aclang-llvm", "-XP", f"-FD{toolchain}"] if target == "wasm" else []),
         *(f"-Fu{path}" for path in paths),
         f"-Fi{packages}/fcl-process/src/unix",

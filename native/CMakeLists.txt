@@ -18,8 +18,7 @@ if(ANDROID
         OFF
         CACHE BOOL "" FORCE)
   elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    set(SDL_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-ios-src")
-    set(SDL_PATCH_COMMAND "")
+    set(SDL_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/sdl2-ios.patch")
     set(SDL_SHARED
         OFF
         CACHE BOOL "" FORCE)
@@ -27,9 +26,6 @@ if(ANDROID
         ON
         CACHE BOOL "" FORCE)
     set(SDL_HIDAPI
-        OFF
-        CACHE BOOL "" FORCE)
-    set(SDL_JOYSTICK_HIDAPI
         OFF
         CACHE BOOL "" FORCE)
   else()
@@ -52,18 +48,15 @@ if(ANDROID
         CACHE BOOL "" FORCE)
   endif()
   # A changed platform patch needs pristine sources in existing build trees.
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    file(SHA256 "${SDL_PATCH}" SDL_PATCH_HASH)
-    set(SDL_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-${SDL_PATCH_HASH}-src")
-    set(SDL_PATCH_COMMAND patch -p1 -i "${SDL_PATCH}")
-  endif()
+  file(SHA256 "${SDL_PATCH}" SDL_PATCH_HASH)
+  set(SDL_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/sdl2-${SDL_PATCH_HASH}-src")
   FetchContent_Declare(
     SDL2
     SOURCE_DIR "${SDL_SOURCE_DIR}"
     URL https://codeload.github.com/libsdl-org/SDL/zip/refs/tags/release-2.32.10
     URL_HASH
       SHA512=001738b610b42a8f8badfd6af3402f0a1a8601034adef0b8c702dd2b1951dc1b71b733a6779d97499b6f7314d226ec0c8dcffeb753f35a5c51e995ca20bdd459
-    PATCH_COMMAND ${SDL_PATCH_COMMAND})
+    PATCH_COMMAND patch -p1 -i "${SDL_PATCH}")
   set(SDL_TEST
       OFF
       CACHE BOOL "" FORCE)
@@ -91,17 +84,6 @@ endif()
 set(OKGF_MATH_BACKEND
     NATIVE
     CACHE STRING "OKGF arithmetic backend" FORCE)
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-  # Keep the pinned submodule pristine; apply the static-library fix to a build copy.
-  set(OKGF_IOS_ROOT "${CMAKE_BINARY_DIR}/_deps/okgf-ios-src")
-  file(
-    COPY "${OKGF_ROOT}/"
-    DESTINATION "${OKGF_IOS_ROOT}"
-    PATTERN ".git" EXCLUDE)
-  execute_process(COMMAND patch -p1 --batch -i "${CMAKE_CURRENT_SOURCE_DIR}/okgf-ios-static.patch"
-                  WORKING_DIRECTORY "${OKGF_IOS_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
-  set(OKGF_ROOT "${OKGF_IOS_ROOT}")
-endif()
 add_subdirectory("${OKGF_ROOT}" okgf)
 set_target_properties(okgf PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
                                       ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

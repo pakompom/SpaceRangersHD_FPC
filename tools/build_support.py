@@ -7,13 +7,34 @@ import re
 import shlex
 import shutil
 import subprocess
+import tarfile
 import time
+import urllib.request
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
 from targets import ROOT
+
+DEPENDENCY_SOURCES = {
+    "jpeg": (
+        "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.2/libjpeg-turbo-3.1.2.tar.gz",
+        "8f0012234b464ce50890c490f18194f913a7b1f4e6a03d6644179fa0f867d0cf",
+    ),
+    "png": (
+        "https://download.sourceforge.net/libpng/libpng-1.6.50.tar.gz",
+        "708f4398f996325819936d447f982e0db90b6b8212b7507e7672ea232210949a",
+    ),
+    "ogg": (
+        "https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.xz",
+        "c4d91be36fc8e54deae7575241e03f4211eb102afb3fc0775fbbc1b740016705",
+    ),
+    "vorbis": (
+        "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz",
+        "b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b",
+    ),
+}
 
 
 def require_tool(name: str) -> Path:
@@ -24,7 +45,8 @@ def require_tool(name: str) -> Path:
 
 
 def output(*command: str) -> str:
-    return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT).strip()
+    # Callers parse stdout as paths, versions, or JSON. Keep diagnostics separate.
+    return subprocess.check_output(command, text=True).strip()
 
 
 def run_step(work: Path, name: str, command: list[str | Path]) -> None:
@@ -258,14 +280,88 @@ def copy_if_changed(source: Path, destination: Path) -> bool:
     return True
 
 
+def dependency_source(name: str) -> Path:
+    url, checksum = DEPENDENCY_SOURCES[name]
+    # Keep the path already recorded in existing Android CMake caches.
+    source = ROOT / ".local/android-sources" / f"{name}-{checksum[:12]}"
+    if (source / ".complete").is_file():
+        return source
+    downloads = ROOT / ".local/downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    archive = downloads / url.rsplit("/", 1)[1]
+    if not archive.is_file():
+        partial = archive.with_suffix(archive.suffix + ".partial")
+        print(f"Downloading {url}", flush=True)
+        urllib.request.urlretrieve(url, partial)
+        partial.replace(archive)
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != checksum:
+        raise RuntimeError(f"Dependency checksum mismatch: {archive}")
+    source.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive) as contents:
+        for member in contents.getmembers():
+            parts = member.name.split("/", 1)
+            if len(parts) == 2 and parts[1]:
+                member.name = parts[1]
+                contents.extract(member, source, filter="data")
+    (source / ".complete").write_text(checksum)
+    return source
+
+
+def build_codecs(work: Path, options: list[str], rebuild: bool) -> None:
+    """Build pinned codec archives with the platform's CMake toolchain and prefix."""
+    dependencies = {
+        "jpeg": [
+            "-DENABLE_SHARED=OFF",
+            "-DENABLE_STATIC=ON",
+            "-DWITH_TURBOJPEG=OFF",
+            "-DWITH_SIMD=ON",
+            "-DWITH_TOOLS=OFF",
+        ],
+        "png": [
+            "-DPNG_SHARED=OFF",
+            "-DPNG_STATIC=ON",
+            "-DPNG_FRAMEWORK=OFF",
+            "-DPNG_TESTS=OFF",
+            "-DPNG_TOOLS=OFF",
+        ],
+        "ogg": [],
+        "vorbis": [],
+    }
+    for name, extra in dependencies.items():
+        directory = work / "dependencies" / name
+        build = directory / "build"
+        directory.mkdir(parents=True, exist_ok=True)
+        changed = configure_native(directory, build, [
+            "cmake", "-S", dependency_source(name), "-B", build, "-G", "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release", *options, "-DBUILD_SHARED_LIBS=OFF", *extra,
+        ])  # fmt: skip
+        run_step(directory, name, [
+            "cmake", "--build", build, "--parallel", "6",
+            *(["--clean-first"] if rebuild or changed else []),
+        ])  # fmt: skip
+        # On Darwin, reinstalling also runs ranlib on the archives. Avoid
+        # changing their timestamps and forcing a game relink on every build.
+        manifest = build / "install_manifest.txt"
+        stamp = BuildStamp(directory / "install-inputs.json")
+
+        def install_state(build: Path = build, manifest: Path = manifest) -> str:
+            installed = manifest.read_text().splitlines() if manifest.is_file() else []
+            return json.dumps(file_state([
+                build / "configure-command.json", manifest, *build.rglob("*.a"), *installed,
+            ]))  # fmt: skip
+
+        if not stamp.matches(install_state(), manifest):
+            with stamp.recording(install_state):
+                run_step(directory, "install", ["cmake", "--install", build])
+
+
 def build_okgf(
     work: Path,
     release: bool,
     *options: str,
     rebuild: bool = False,
     wasm: bool = False,
-    android: bool = False,
-    ios: bool = False,
+    jobs: int | None = None,
 ) -> Path:
     directory = work / "native"
     # Browser native dependencies use -O2 in both game profiles.
@@ -290,7 +386,7 @@ def build_okgf(
             "--build",
             directory,
             "--parallel",
-            *(["6"] if wasm or android or ios else []),
+            *([str(jobs)] if jobs is not None else []),
             *(["--clean-first"] if rebuild or compiler_changed else []),
         ],
     )

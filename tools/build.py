@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Space Rangers HD for Linux, macOS, Android ARM64, or the browser."""
+"""Build Space Rangers HD for Linux, macOS, Android, iOS, or the browser."""
 
 import argparse
 import json
@@ -11,7 +11,6 @@ import subprocess
 from pathlib import Path
 
 from android import build_android
-from ios import build_ios
 from build_support import (
     BuildStamp,
     build_okgf,
@@ -25,12 +24,13 @@ from build_support import (
     sdl_source,
 )
 from compiler import prepare_compiler
+from ios import build_ios
 from pascal import build_paszlib, compile_pascal, pascal_flags
 from targets import ROOT, BuildConfig, add_build_arguments
 
 
 def build_macos(config: BuildConfig, rebuild: bool) -> Path:
-    compiler, compiler_flags = prepare_compiler(config.target, lto=config.lto)
+    compiler, compiler_flags = prepare_compiler(config)
     clang = require_tool("clang")
     sdk = output("xcrun", "--show-sdk-path")
     work, libraries, units = config.work, config.binary_directory, config.units
@@ -109,7 +109,7 @@ def build_linux(config: BuildConfig, rebuild: bool) -> Path:
     )
     native = build_okgf(work, config.release, rebuild=rebuild)
     copy_if_changed(native / "libokgf.so", libraries / "libokgf.so")
-    compiler, compiler_flags = prepare_compiler(config.target, lto=config.lto)
+    compiler, compiler_flags = prepare_compiler(config)
     # FPC's LLVM exception runtime uses libgcc; -n disables system fpc.cfg.
     libgcc = Path(output("clang", "-print-libgcc-file-name"))
     if not libgcc.is_file():
@@ -139,7 +139,7 @@ def build_wasm(config: BuildConfig, rebuild: bool) -> Path:
     os.environ.setdefault("EM_CACHE", str(ROOT / ".local/emscripten-cache"))
     os.environ.setdefault("EMCC_CORES", "6")
     os.environ.setdefault("BINARYEN_CORES", "6")
-    compiler, flags = prepare_compiler(config.target, toolchain, lto=config.lto)
+    compiler, flags = prepare_compiler(config, toolchain)
     paszlib = build_paszlib(work, compiler, flags, rebuild)
     native = build_okgf(
         work,
@@ -147,6 +147,7 @@ def build_wasm(config: BuildConfig, rebuild: bool) -> Path:
         *(["-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"] if config.lto else []),
         rebuild=rebuild,
         wasm=True,
+        jobs=6,
     )
     compile_pascal(work, [
         compiler, *flags, *pascal_flags(config.release, paszlib, ROOT / "platform/wasm"),
@@ -214,7 +215,12 @@ def main() -> None:
         "--rebuild", action="store_true", help="Rebuild all game units and native code."
     )
     args = parser.parse_args()
-    config = BuildConfig(args.target, args.release, args.lto)
+    try:
+        config = BuildConfig(
+            args.target, args.release, args.lto, simulator_arch=args.simulator_arch
+        )
+    except ValueError as error:
+        parser.error(str(error))
     try:
         builders = {
             "linux": build_linux,

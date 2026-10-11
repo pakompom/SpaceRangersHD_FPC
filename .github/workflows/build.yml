@@ -199,10 +199,11 @@ jobs:
           sys.path.insert(0, 'tools')
           from android import discover_ndk, ndk_toolchain
           from compiler import prepare_compiler
+          from targets import BuildConfig
 
           target = os.environ['TARGET']
           toolchain = ndk_toolchain(discover_ndk()) / 'bin' if target == 'android' else None
-          prepare_compiler(target, toolchain)
+          prepare_compiler(BuildConfig(target), toolchain)
           PY
 
       # Preserve a successful bootstrap even if game compilation later fails.

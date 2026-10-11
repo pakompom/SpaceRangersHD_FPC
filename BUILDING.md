@@ -85,40 +85,28 @@ version instead of the newest one.
 
 ## iOS (experimental)
 
-Requires macOS with full Xcode, an iOS SDK, Python 3.10+, FPC 3.2.2, GNU Make,
-CMake 3.24+ and Ninja. The C dependencies are built for the selected iOS SDK;
-desktop SDL and codec packages are not used. For MacPorts:
+Requires macOS, full Xcode, Python 3.10+ with current patch updates, FPC 3.2.2,
+GNU Make, CMake and Ninja. Targets iOS 15+; SDL2 and codecs are downloaded during
+the build. Select Xcode with `xcode-select` or `DEVELOPER_DIR` and install an iOS
+simulator runtime in Xcode's Components settings.
 
 ```sh
-sudo port install fpc python313 cmake gmake ninja pkgconfig
-export DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer
-export PATH=/opt/local/bin:/opt/local/sbin:$PATH
-python3.13 tools/build.py --target=ios-simulator
-python3.13 tools/run.py --target=ios-simulator --game-dir=/path/to/game
+./tools/build.py --target=ios-simulator
+./tools/run.py --target=ios-simulator --simulator="iPhone 15" --game-dir=/path/to/game
 ```
 
-The simulator uses the host CPU (`x86_64` on Intel or `aarch64` on Apple Silicon).
-The app is `.local/ios-simulator-<cpu>/debug/SpaceRangersHD.app`. The run command
-boots an available iPhone simulator, installs the app, and copies the supplied
-game directory into its sandbox. Without resources, the launcher displays
-instructions for importing them through Files.
+The simulator uses the host CPU; pass `--simulator-arch=x86_64` or `arm64` to both
+commands to override it. Select a device by name or UDID with `--simulator`;
+otherwise the single booted device is used. `xcrun simctl list devices available`
+lists installed devices. Use `--game-dir` for the initial asset import; omit it
+on later runs to reuse them. Reinstalling preserves assets and saves.
 
 ```sh
-python3.13 tools/build.py --target=ios
+./tools/build.py --target=ios
 ```
 
-The device output is an unsigned ARM64 app at
-`.local/ios-aarch64/debug/SpaceRangersHD.app`, targeting iOS 15+. It needs an
-Apple development/distribution identity and provisioning profile before it can
-be installed on an iPhone or iPad. Simulator ad-hoc signing does not provide
-device signing. Original game assets are not bundled. On a device, put them in
-`Documents/Game` using Files or Finder file sharing; saves live in
-`Library/Application Support/SpaceRangersHD` inside the app sandbox.
-
-The port is experimental. AVI cinematics and the original Windows planetary
-battle DLL are unavailable. Building an app does not verify gameplay on hardware.
-
-The pinned FPC and OKGF submodules stay unchanged. The iOS build applies the
-patches in `native/` to isolated build copies: FPC needs a current LLVM simulator
-triple, and OKGF needs a static library. Neither patch affects desktop or Android
-builds.
+Apps are in `.local/<target>-<cpu>/debug/SpaceRangersHD.app`; `--release` and `--lto`
+select other profiles. Device builds use ARM64 and require signing with an Apple
+identity and provisioning profile before installation. Copy game files to
+`Documents/Game` through Files or Finder file sharing. Saves and logs are in
+`Library/Application Support/SpaceRangersHD` within the app sandbox.

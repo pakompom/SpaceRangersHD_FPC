@@ -1,6 +1,5 @@
 """Build, package, and verify the ARM64 Android application."""
 
-import hashlib
 import json
 import os
 import platform
@@ -8,15 +7,14 @@ import re
 import secrets
 import shutil
 import subprocess
-import tarfile
 import tempfile
-import urllib.request
 import zipfile
 from pathlib import Path
 
 from build_support import (
+    build_codecs,
     build_okgf,
-    configure_native,
+    dependency_source,
     output,
     require_tool,
     run_step,
@@ -60,24 +58,6 @@ SYSTEM_LIBRARIES = {
     "libEGL.so",
     "libOpenSLES.so",
     "libaaudio.so",
-}
-SOURCES = {
-    "jpeg": (
-        "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.2/libjpeg-turbo-3.1.2.tar.gz",
-        "8f0012234b464ce50890c490f18194f913a7b1f4e6a03d6644179fa0f867d0cf",
-    ),
-    "png": (
-        "https://download.sourceforge.net/libpng/libpng-1.6.50.tar.gz",
-        "708f4398f996325819936d447f982e0db90b6b8212b7507e7672ea232210949a",
-    ),
-    "ogg": (
-        "https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.xz",
-        "c4d91be36fc8e54deae7575241e03f4211eb102afb3fc0775fbbc1b740016705",
-    ),
-    "vorbis": (
-        "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz",
-        "b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b",
-    ),
 }
 
 
@@ -137,32 +117,6 @@ def ndk_toolchain(ndk: Path) -> Path:
     return toolchain
 
 
-def dependency_source(name: str) -> Path:
-    url, checksum = SOURCES[name]
-    source = ROOT / ".local/android-sources" / f"{name}-{checksum[:12]}"
-    if (source / ".complete").is_file():
-        return source
-    downloads = ROOT / ".local/downloads"
-    downloads.mkdir(parents=True, exist_ok=True)
-    archive = downloads / url.rsplit("/", 1)[1]
-    if not archive.is_file():
-        partial = archive.with_suffix(archive.suffix + ".partial")
-        print(f"Downloading {url}", flush=True)
-        urllib.request.urlretrieve(url, partial)
-        partial.replace(archive)
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != checksum:
-        raise RuntimeError(f"Dependency checksum mismatch: {archive}")
-    source.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive) as contents:
-        for member in contents.getmembers():
-            parts = member.name.split("/", 1)
-            if len(parts) == 2 and parts[1]:
-                member.name = parts[1]
-                contents.extract(member, source, filter="data")
-    (source / ".complete").write_text(checksum)
-    return source
-
-
 def cmake_options(ndk: Path, prefix: Path) -> list[str]:
     return [
         f"-DCMAKE_TOOLCHAIN_FILE={ndk}/build/cmake/android.toolchain.cmake",
@@ -180,52 +134,22 @@ def cmake_options(ndk: Path, prefix: Path) -> list[str]:
     ]
 
 
-def build_dependencies(config: BuildConfig, ndk: Path, rebuild: bool) -> Path:
-    prefix = config.work / "dependencies/prefix"
-    options = {
-        "jpeg": ["-DENABLE_SHARED=OFF", "-DENABLE_STATIC=ON", "-DWITH_TURBOJPEG=OFF"],
-        "png": [
-            "-DPNG_SHARED=OFF",
-            "-DPNG_STATIC=ON",
-            "-DPNG_TESTS=OFF",
-            "-DPNG_TOOLS=OFF",
-        ],
-        "ogg": [],
-        "vorbis": [],
-    }
-    for name, extra in options.items():
-        source = dependency_source(name)
-        work = config.work / "dependencies" / name
-        directory = work / "build"
-        work.mkdir(parents=True, exist_ok=True)
-        changed = configure_native(work, directory, [
-            "cmake", "-S", source, "-B", directory, "-G", "Ninja",
-            "-DCMAKE_BUILD_TYPE=Release",
-            *cmake_options(ndk, prefix), "-DBUILD_SHARED_LIBS=OFF", *extra,
-        ])  # fmt: skip
-        run_step(work, name, [
-            "cmake", "--build", directory, "--parallel", "6",
-            *(["--clean-first"] if rebuild or changed else []),
-        ])  # fmt: skip
-        run_step(work, "install", ["cmake", "--install", directory])
-    return prefix
-
-
 def build_android(config: BuildConfig, rebuild: bool) -> Path:
     ndk = discover_ndk()
     toolchain = ndk_toolchain(ndk)
     config.create_directories()
     require_tool("cmake")
     require_tool("ninja")
-    compiler, flags = prepare_compiler("android", toolchain / "bin", lto=config.lto)
-    prefix = build_dependencies(config, ndk, rebuild)
+    compiler, flags = prepare_compiler(config, toolchain / "bin")
+    prefix = config.work / "dependencies/prefix"
+    build_codecs(config.work, cmake_options(ndk, prefix), rebuild)
     native = build_okgf(
         config.work,
         config.release,
         *cmake_options(ndk, prefix),
         "-DBUILD_SHARED_LIBS=ON",
         rebuild=rebuild,
-        android=True,
+        jobs=6,
     )
     paszlib = build_paszlib(config.work, compiler, flags, rebuild)
     syslibs = toolchain / "sysroot/usr/lib/aarch64-linux-android"

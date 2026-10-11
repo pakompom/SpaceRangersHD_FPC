@@ -1,20 +1,18 @@
 """Build an iOS app with the pinned Pascal compiler and static C dependencies."""
 
 import json
-import os
 import platform
 import plistlib
-import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
-from android import dependency_source
 from build_support import (
+    BuildStamp,
+    build_codecs,
     build_okgf,
     compile_native,
-    configure_native,
-    link_native,
+    file_state,
     output,
     require_tool,
     run_step,
@@ -22,9 +20,8 @@ from build_support import (
 )
 from compiler import prepare_compiler
 from pascal import build_paszlib, compile_pascal, pascal_flags
-from targets import ROOT, BuildConfig, host_cpu
+from targets import IOS_MIN_VERSION, ROOT, BuildConfig
 
-MINIMUM_IOS = "15.0"
 APPLICATION_ID = "io.github.pakompom.spacerangershd"
 
 
@@ -33,8 +30,8 @@ def apple_tools(config: BuildConfig) -> tuple[str, str, str]:
         raise RuntimeError("iOS builds require macOS and Xcode.")
     sdk_name = "iphoneos" if config.target == "ios" else "iphonesimulator"
     sdk = output("xcrun", "--sdk", sdk_name, "--show-sdk-path")
-    arch = "arm64" if config.target == "ios" or host_cpu() == "aarch64" else "x86_64"
-    triple = f"{arch}-apple-ios{MINIMUM_IOS}"
+    arch = config.ios_arch
+    triple = f"{arch}-apple-ios{IOS_MIN_VERSION}"
     if config.target == "ios-simulator":
         triple += "-simulator"
     return sdk, arch, triple
@@ -46,9 +43,8 @@ def cmake_options(sdk: str, arch: str, prefix: Path) -> list[str]:
         f"-DCMAKE_OSX_SYSROOT={sdk}",
         f"-DCMAKE_OSX_ARCHITECTURES={arch}",
         f"-DCMAKE_SYSTEM_PROCESSOR={arch}",
-        f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MINIMUM_IOS}",
+        f"-DCMAKE_OSX_DEPLOYMENT_TARGET={IOS_MIN_VERSION}",
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
-        "-DBUILD_SHARED_LIBS=OFF",
         "-DBUILD_TESTING=OFF",
         "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
         f"-DCMAKE_INSTALL_PREFIX={prefix}",
@@ -61,74 +57,26 @@ def cmake_options(sdk: str, arch: str, prefix: Path) -> list[str]:
     ]
 
 
-def build_dependencies(config: BuildConfig, sdk: str, arch: str, rebuild: bool) -> Path:
-    prefix = config.work / "dependencies/prefix"
-    options = {
-        "jpeg": [
-            "-DENABLE_SHARED=OFF",
-            "-DENABLE_STATIC=ON",
-            "-DWITH_TURBOJPEG=OFF",
-            "-DWITH_SIMD=OFF",
-            "-DWITH_TOOLS=OFF",
-            "-DWITH_TESTS=OFF",
-        ],
-        "png": [
-            "-DPNG_SHARED=OFF",
-            "-DPNG_STATIC=ON",
-            "-DPNG_FRAMEWORK=OFF",
-            "-DPNG_TESTS=OFF",
-            "-DPNG_TOOLS=OFF",
-        ],
-        "ogg": [],
-        "vorbis": [],
-    }
-    for name, extra in options.items():
-        work = config.work / "dependencies" / name
-        directory = work / "build"
-        work.mkdir(parents=True, exist_ok=True)
-        changed = configure_native(
-            work,
-            directory,
-            [
-                "cmake",
-                "--fresh",
-                "-S",
-                dependency_source(name),
-                "-B",
-                directory,
-                "-G",
-                "Ninja",
-                "-DCMAKE_BUILD_TYPE=Release",
-                *cmake_options(sdk, arch, prefix),
-                *extra,
-            ],
-        )
-        run_step(
-            work,
-            name,
-            [
-                "cmake",
-                "--build",
-                directory,
-                "--parallel",
-                "4",
-                *(["--clean-first"] if rebuild or changed else []),
-            ],
-        )
-        run_step(work, "install", ["cmake", "--install", directory])
-    return prefix
-
-
 def build_ios(config: BuildConfig, rebuild: bool) -> Path:
     sdk, arch, triple = apple_tools(config)
     for name in ("cmake", "ninja", "clang"):
         require_tool(name)
     config.create_directories()
-    compiler, flags = prepare_compiler(config.target, lto=config.lto)
-    os.environ["SDKROOT"] = sdk
-    prefix = build_dependencies(config, sdk, arch, rebuild)
+    compiler, flags = prepare_compiler(config)
+    # Native @available checks need Clang's platform-version helpers. FPC invokes
+    # ld directly, so it does not add the target's compiler runtime automatically.
+    compiler_runtime = Path(output("xcrun", "clang", "-target", triple, "-print-libgcc-file-name"))
+    if not compiler_runtime.is_file():
+        raise FileNotFoundError(f"Clang compiler runtime not found: {compiler_runtime}")
+    prefix = config.work / "dependencies/prefix"
+    build_codecs(config.work, cmake_options(sdk, arch, prefix), rebuild)
     native = build_okgf(
-        config.work, config.release, *cmake_options(sdk, arch, prefix), rebuild=rebuild, ios=True
+        config.work,
+        config.release,
+        *cmake_options(sdk, arch, prefix),
+        "-DBUILD_SHARED_LIBS=OFF",
+        rebuild=rebuild,
+        jobs=6,
     )
     paszlib = build_paszlib(config.work, compiler, flags, rebuild)
     launcher = config.work / "ios-main.o"
@@ -157,6 +105,7 @@ def build_ios(config: BuildConfig, rebuild: bool) -> Path:
         native / "libSDL2.a",
         *sorted((prefix / "lib").glob("*.a")),
         launcher,
+        compiler_runtime,
     ]
     frameworks = (
         "UIKit",
@@ -173,8 +122,6 @@ def build_ios(config: BuildConfig, rebuild: bool) -> Path:
         "CoreHaptics",
     )
     executable = config.binary_directory / "Rangers"
-    pascal_output = config.work / "pascal"
-    pascal_output.mkdir(exist_ok=True)
     compile_pascal(
         config.work,
         [
@@ -183,9 +130,8 @@ def build_ios(config: BuildConfig, rebuild: bool) -> Path:
             *pascal_flags(config.release, paszlib),
             "-dSRHD_IOS",
             "-XMSRGameMain",
-            "-Cn",
             f"-FU{config.units}",
-            f"-FE{pascal_output}",
+            f"-FE{config.binary_directory}",
             f"-Fl{native}",
             f"-Fl{prefix / 'lib'}",
             f'-k"{launcher}"',
@@ -193,20 +139,22 @@ def build_ios(config: BuildConfig, rebuild: bool) -> Path:
             "-k-ljpeg",
             "-k-lpng16",
             "-k-lz",
-            "-k-lvorbisfile",
-            "-k-lvorbis",
-            "-k-logg",
             "-k-lobjc",
             "-k-ObjC",
             *(arg for name in frameworks for arg in ("-k-framework", f"-k{name}")),
+            f'-k"{compiler_runtime}"',
             ROOT / "source/Rangers.dpr",
         ],
         rebuild,
-        pascal_output / "ppas.sh",
+        executable,
         tuple(libraries),
     )
-    link_ios(config, executable, libraries, rebuild)
     verify_executable(executable, config.target, arch)
+    package_ios(config)
+    return config.artifact
+
+
+def package_ios(config: BuildConfig) -> None:
     info = {
         "CFBundleExecutable": "Rangers",
         "CFBundleIdentifier": APPLICATION_ID,
@@ -215,7 +163,7 @@ def build_ios(config: BuildConfig, rebuild: bool) -> Path:
         "CFBundlePackageType": "APPL",
         "CFBundleVersion": "1",
         "CFBundleShortVersionString": "0.1",
-        "MinimumOSVersion": MINIMUM_IOS,
+        "MinimumOSVersion": IOS_MIN_VERSION,
         "UIDeviceFamily": [1, 2],
         "UIFileSharingEnabled": True,
         "LSSupportsOpeningDocumentsInPlace": True,
@@ -223,48 +171,40 @@ def build_ios(config: BuildConfig, rebuild: bool) -> Path:
         "UIRequiresFullScreen": True,
         "UIStatusBarHidden": True,
         "UILaunchScreen": {},
+        "UIApplicationSceneManifest": {
+            "UIApplicationSupportsMultipleScenes": False,
+            "UISceneConfigurations": {
+                "UIWindowSceneSessionRoleApplication": [
+                    {
+                        "UISceneConfigurationName": "SDL",
+                        "UISceneDelegateClassName": "SDLUIKitSceneDelegate",
+                    }
+                ],
+            },
+        },
         "UISupportedInterfaceOrientations": [
             "UIInterfaceOrientationLandscapeLeft",
             "UIInterfaceOrientationLandscapeRight",
         ],
     }
-    (config.artifact / "Info.plist").write_bytes(plistlib.dumps(info))
+    info_file = config.artifact / "Info.plist"
+    contents = plistlib.dumps(info)
+    if not info_file.is_file() or info_file.read_bytes() != contents:
+        info_file.write_bytes(contents)
     # Simulator installs accept ad-hoc signatures. Device signing is a separate
     # user identity step; this recipe deliberately produces an unsigned app.
     if config.target == "ios-simulator":
-        run_step(config.work, "sign", ["codesign", "--force", "--sign", "-", config.artifact])
-    return config.artifact
+        stamp = BuildStamp(config.work / "sign-inputs.json")
 
+        def signature() -> str:
+            return json.dumps(file_state([config.binary_directory / "Rangers", info_file]))
 
-def link_ios(config: BuildConfig, executable: Path, libraries: list[Path], rebuild: bool) -> None:
-    """Use FPC's complete object list with Xcode's current platform-version flags."""
-    script = config.work / "pascal/ppas.sh"
-    commands = [
-        shlex.split(line) for line in script.read_text().splitlines() if "-filelist " in line
-    ]
-    command = next((line for line in commands if line and Path(line[0]).name == "ld"), None)
-    if command is None:
-        raise RuntimeError("FPC did not write a Darwin linker command to ppas.sh.")
-    legacy = "-iphoneos_version_min" if config.target == "ios" else "-ios_simulator_version_min"
-    index = command.index(legacy)
-    sdk_name = "iphoneos" if config.target == "ios" else "iphonesimulator"
-    sdk_version = output("xcrun", "--sdk", sdk_name, "--show-sdk-version")
-    platform_name = "ios" if config.target == "ios" else "ios-simulator"
-    command[index : index + 2] = ["-platform_version", platform_name, MINIMUM_IOS, sdk_version]
-    command[0] = output("xcrun", "--find", "ld")
-    if config.target == "ios":
-        # FPC emits pointers in packed constants without 8-byte alignment.
-        # Classic dyld relocations support these; chained fixups do not.
-        command.append("-no_fixup_chains")
-    filelist = Path(command[command.index("-filelist") + 1])
-    objects = [
-        Path(line) if Path(line).is_absolute() else config.work / line
-        for line in filelist.read_text().splitlines()
-        if line
-    ]
-    link_native(
-        config.work, command, [script, filelist, *objects, *libraries], [executable], rebuild
-    )
+        if not stamp.matches(signature(), config.artifact / "_CodeSignature/CodeResources"):
+            # Signing modifies the executable; record its state after success.
+            with stamp.recording(signature):
+                run_step(
+                    config.work, "sign", ["codesign", "--force", "--sign", "-", config.artifact]
+                )
 
 
 def verify_executable(executable: Path, target: str, arch: str) -> None:
@@ -283,32 +223,70 @@ def verify_executable(executable: Path, target: str, arch: str) -> None:
     print(f"Verified iOS Mach-O: {arch}, {expected}, system dependencies only.", flush=True)
 
 
-def run_simulator(config: BuildConfig, game_directory: Path | None = None) -> None:
-    if not (config.artifact / "Rangers").is_file():
-        raise RuntimeError("Build the matching ios-simulator profile first.")
-    inventory = json.loads(output("xcrun", "simctl", "list", "devices", "available", "-j"))
+def select_simulator(inventory: dict, requested: str | None = None) -> dict:
     devices = [
-        device
+        {**device, "runtime": runtime.rsplit(".", 1)[-1].replace("-", " ", 1).replace("-", ".")}
         for runtime, group in inventory["devices"].items()
         if ".iOS-" in runtime
         for device in group
-        if device.get("isAvailable") and device["name"].startswith("iPhone")
+        if device.get("isAvailable")
     ]
     if not devices:
-        raise RuntimeError("Install an iOS simulator runtime in Xcode first.")
-    device = next((item for item in devices if item["state"] == "Booted"), devices[0])
+        raise RuntimeError("Create an iOS simulator in Xcode after installing its runtime.")
+    if requested:
+        matches = [device for device in devices if device["udid"] == requested]
+        if not matches:
+            matches = [device for device in devices if device["name"] == requested]
+    else:
+        matches = [device for device in devices if device["state"] == "Booted"]
+        if not matches and len(devices) == 1:
+            matches = devices
+    if len(matches) == 1:
+        return matches[0]
+    choices = "\n".join(
+        f"  {device['udid']}  {device['name']} ({device['runtime']}, {device['state']})"
+        for device in devices
+    )
+    reason = (
+        f"Simulator {requested!r} is missing or ambiguous." if requested else "Select a simulator."
+    )
+    raise RuntimeError(f"{reason} Pass --simulator with a device name or UDID:\n{choices}")
+
+
+def run_simulator(
+    config: BuildConfig, game_directory: Path | None = None, simulator: str | None = None
+) -> None:
+    if not (config.artifact / "Rangers").is_file():
+        raise RuntimeError("Build the matching ios-simulator profile first.")
+    if game_directory is not None and not game_directory.is_dir():
+        raise FileNotFoundError(f"Game directory does not exist: {game_directory}")
+    # Resolve the selected Xcode's viewer before booting or installing anything.
+    # Xcode 27 moved it from Developer/Applications to Contents/Applications.
+    developer = Path(output("xcode-select", "-p"))
+    viewers = (
+        developer.parent / "Applications/DeviceHub.app",
+        developer / "Applications/Simulator.app",
+    )
+    viewer = next((path for path in viewers if path.is_dir()), None)
+    if viewer is None:
+        raise RuntimeError(f"Cannot find Simulator or Device Hub in {developer.parent}.")
+    inventory = json.loads(output("xcrun", "simctl", "list", "devices", "available", "-j"))
+    device = select_simulator(inventory, simulator)
     identifier = device["udid"]
+    print(f"Using {device['name']} ({device['runtime']}, {config.ios_arch}).", flush=True)
     if device["state"] != "Booted":
         subprocess.run(["xcrun", "simctl", "boot", identifier], check=True)
     subprocess.run(["xcrun", "simctl", "bootstatus", identifier, "-b"], check=True)
     subprocess.run(["xcrun", "simctl", "install", identifier, config.artifact], check=True)
+    data = Path(output("xcrun", "simctl", "get_app_container", identifier, APPLICATION_ID, "data"))
     if game_directory is not None:
-        if not game_directory.is_dir():
-            raise FileNotFoundError(f"Game directory does not exist: {game_directory}")
-        data = Path(
-            output("xcrun", "simctl", "get_app_container", identifier, APPLICATION_ID, "data")
-        )
         # Explicit --game-dir imports owned assets into this test app's sandbox.
+        print("Importing game assets…", flush=True)
         shutil.copytree(game_directory, data / "Documents/Game", dirs_exist_ok=True)
-    subprocess.run(["open", "-a", "Simulator"], check=True)
-    subprocess.run(["xcrun", "simctl", "launch", identifier, APPLICATION_ID], check=True)
+    print(f"Game data: {data / 'Documents/Game'}", flush=True)
+    print(f"Logs and saves: {data / 'Library/Application Support/SpaceRangersHD'}", flush=True)
+    subprocess.run(["open", "-a", viewer], check=True)
+    subprocess.run(
+        ["xcrun", "simctl", "launch", "--terminate-running-process", identifier, APPLICATION_ID],
+        check=True,
+    )
