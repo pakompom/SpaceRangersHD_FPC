@@ -1,5 +1,11 @@
 # Development gotchas
 
+- **Prefer fixing FPC and OKGF in their own repositories.**
+  We maintain [fpc_sr](https://github.com/pakompom/fpc_sr) and
+  [okgf](https://github.com/pakompom/okgf), so fixes to those two should normally
+  go into their repositories, followed by submodule pin updates here, rather
+  than carrying local patches.
+
 - **`Double` variables can still get Single-precision arithmetic.**
   [`GameOptions.inc`](source/GameOptions.inc) enables `LEGACYPC24`, which rounds
   arithmetic to a 24-bit significand even when the destination is `Double`.

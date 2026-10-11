@@ -173,7 +173,6 @@ def cmake_options(ndk: Path, prefix: Path) -> list[str]:
         "-DCMAKE_C_FLAGS_RELEASE=-O2 -g -DNDEBUG",
         "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -g -DNDEBUG",
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
-        "-DBUILD_SHARED_LIBS=OFF",
         "-DBUILD_TESTING=OFF",
         f"-DCMAKE_INSTALL_PREFIX={prefix}",
         f"-DCMAKE_FIND_ROOT_PATH={prefix}",
@@ -202,7 +201,7 @@ def build_dependencies(config: BuildConfig, ndk: Path, rebuild: bool) -> Path:
         changed = configure_native(work, directory, [
             "cmake", "-S", source, "-B", directory, "-G", "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
-            *cmake_options(ndk, prefix), *extra,
+            *cmake_options(ndk, prefix), "-DBUILD_SHARED_LIBS=OFF", *extra,
         ])  # fmt: skip
         run_step(work, name, [
             "cmake", "--build", directory, "--parallel", "6",
@@ -224,6 +223,7 @@ def build_android(config: BuildConfig, rebuild: bool) -> Path:
         config.work,
         config.release,
         *cmake_options(ndk, prefix),
+        "-DBUILD_SHARED_LIBS=ON",
         rebuild=rebuild,
         android=True,
     )

@@ -1,279 +1,246 @@
-# Delphi-to-FPC changes
+# Porting and behavior reference
 
-This changelog records game-source changes for Free Pascal compatibility.
+Key differences from the recovered Delphi source, compatibility behavior retained by the
+port, and the source files that implement them.
 
-- Build the Android game as a shared library with an exported entry point,
-  deferring startup until SDL has established the application paths. Use FPC's
-  Unicode manager in place of `cwstring` on Android.
-- Translate SDL touchscreen input into deferred taps, dragging and camera
-  gestures. Cancel pressed controls and screen-owned drag/repeat state on focus
-  loss and modal transitions without invoking release actions. Disable mouse
-  edge scrolling on Android, where camera movement uses explicit gestures.
-- Fit Android layouts to the surface size and display density in landscape.
-  Rebuild the UI after surface changes at safe screen boundaries, retaining
-  the current game and keeping active dialogs fitted in the meantime.
-- Default mobile dialogue text to the second-largest size and quest text to the
-  largest size, retaining saved font choices. Seed Android profiles from bundled
-  defaults instead of importing desktop preferences with game files.
-- Scan explicit mod directories so a missing Mods folder cannot list the game's
-  CFG and Data directories as mods. Preserve the working directory during scans.
-- Scale the shared Android bottom panel and radar independently of the world,
-  including their hit testing. Adjust centered screen content for the taller bar,
-  and render directly at the display's pixel resolution. Preserve that resolution
-  in captured backgrounds, with separate captures for nested quantity dialogs.
-- Enlarge Android quantity and confirmation dialogs and shop panels within the
-  available screen area. Let touch drags scroll list content directly while
-  retaining taps and slider dragging.
-- Use completed touch taps to inspect equipment and galaxy destinations before
-  acting on the selected object. Keep existing purchase confirmations and mouse
-  actions. Bound inspection text within scrollable original frames.
-- Keep touch taps tied to the original control so swiping across dialogue answers
-  cannot select a different answer, including lists without scrolling overflow.
-  Share gesture ownership across buttons, clickable rows, sliders and scroll panes.
-- Adapt mobile settings with a taller list inside the original skin, readable
-  spacing and radio indicators beside their labels. Include slider end buttons
-  in the full-height touch rows and fit sidebar actions into one height budget.
-  Give ship cargo actions more room below the grid.
-- Keep long plain-description tooltip headers and footers fixed while the body
-  scrolls; use the available content area when space beside the target is too narrow.
-  Preserve the description through icon-leave callbacks, hover polling and pending
-  hide timers while the player reads or scrolls it; dismiss it after leaving.
-- Show pressed button feedback on touch-down without activating ordinary buttons.
-  Let quantity and cargo-scroll buttons repeat while held and stop them on release
-  or cancellation.
-- Use continuous density-based UI fitting and one shared mobile presentation/input
-  viewport. Preserve queued draws when changing SDL texture filtering, and avoid
-  writable pixel locks when drawing unchanged captured backgrounds. Resize the
-  screen raster at frame boundaries so drawing and modal capture retain the frame.
-  Match clipping to pixel-center coverage to avoid seams between scaled UI images.
-  Preserve smooth filtering for rotated sprites even at integer UI scales.
-- Enlarge mobile government/station dialogue without widening its original
-  artwork. Size the answer area to its content and keep both panes above the
-  bottom panel. Compose quest artwork once per layout.
-- Separate mobile ship services and storage, enlarge inventory cells and use
-  fewer visible rows/columns with paging. Keep hit testing and tooltip positions
-  aligned while the cargo panel slides.
-- Enlarge mobile probe/scanner panels and object tooltips within the available
-  screen area. Keep the inspected object clear of its tooltip for another tap.
-- Inspect floating cargo on the first touch tap and use a second tap to assign
-  the cargo hook. Enlarge space action markers without changing their world
-  positions or camera zoom; preserve desktop and special targeting actions.
-- Add configurable space zoom and optional pinch zoom, keeping the HUD and
-  action markers at their own sizes. Retain the desktop zoom default and use a
-  slightly closer mobile view; preserve object hit testing and camera anchors.
-- Use the compact main-menu arrangement on Android, with larger entries centered
-  below the title. Enlarge the in-game pause menu too.
-- Enlarge Android arcade controls and result panels independently of the battle
-  view. Add simultaneous touch steering toward the stick's screen direction
-  and weapon-group firing.
-- Adapt Android text quests using the original artwork, larger text and a choices
-  panel sized to its content. Fit statistics as a complete block, preserving fixed
-  fonts, spacing and grids; shrink the illustration when statistics need the space.
-  Offer a labelled enlargement action beside statistics when needed. Left-align
-  mobile prose and keep fixed-width narrative diagrams in complete, uniformly
-  scaled blocks. Use slim scroll indicators, a compact style toolbar and a
-  separately sized exit button.
-- Ensure text wrapping advances past oversized glyphs and tags instead of
-  allocating lines indefinitely.
-- Preserve glyph edge colors when filtering Android text, and use actual texture
-  dimensions for small UI tiles to prevent dark seams from unused padding.
-- Position the bottom HUD background when only the screen height changes, and
-  index texture tiles by the column count so tall images stay within their cache.
-- Release the achievements screen when rebuilding the UI after resolution changes.
-- Remove empty placeholder units, the unused VFW unit, inactive Delphi exception
-  hook and unused registry/Direct3D helpers. Drop empty nonvirtual compatibility
-  hooks and statements after unconditional returns or breaks, preserving RNG
-  calls, save layouts, and virtual overrides.
-- Remove the disabled integrity-snapshot routine and its FGInt/RSA dependency,
-  the unreachable checksum implementation, and Steam leaderboard hooks. Keep
-  the checksum's constant-zero result, active integrity state, save layouts,
-  local scores, and score-file export so existing RNG consumption is preserved.
-- Report audio mixer failures through the main-thread worker-error path, retaining
-  their backtraces. Join the mixer before closing its device, including on failure.
-- Report pending save-worker failures on the main thread and during normal
-  teardown. Finish queued saves before releasing their resources, always release
-  the save lock, and log secondary save errors without interrupting fatal cleanup.
-- Preserve original exceptions through the selected screen-transition and
-  recursive drawing handlers, adding context without replacing their backtraces.
-- Stop mouse edge scrolling outside the focused window in the star map and film
-  view. Use game coordinates for alternate viewports and preserve scrolling at
-  letterbox bars in windows and browser canvases, keyboard scrolling and
-  configured edge sensitivity.
-- Report galaxy-generation and simulation failures on the main thread, retaining
-  script errors, stage/seed context and worker backtraces. Cancel dependent work
-  before cleanup and exit with an error instead of leaving the introduction
-  screen waiting forever or resuming a partially updated galaxy.
-- Honor requested windowed mode at desktop-sized and larger resolutions. Set
-  explicit back-buffer dimensions and use SDL centering for oversized windows.
-- Preserve the original exception and raise address in `GR_WinMessage`, adding
-  the message-processing stage to its message.
-- Use each language's code as its settings label when its install file or
-  `LangName` is missing, or the name is blank. Release the temporary language
-  configuration if loading raises an exception.
-- Guard arcade ship actions after player-ship destruction, including Q/W/E
-  weapon shortcuts and battle entry, while preserving pause, exit, and the
-  victory-panel Tab shortcut. Clear the hovered space before arcade cleanup
-  and when deleting that space.
-- Preserve the full galaxy pointer in the private memory-snapshot token used
-  around planetary battle transitions on 64-bit targets.
-- Keep script DWORD arithmetic at 32 bits, including overflow and the original
-  masked shift counts. Preserve full-width storage for object references passed
-  through script variables, assignments and comparisons on 64-bit targets.
-  Float-valued shifts retain Delphi's separate 64-bit helper count rules.
-- Preserve native arcade exit shuffling, including its zero-filled portal-count
-  field and ten RNG calls per node. Model the original `Exits[-1]` stack overlap
-  as an explicit array slot initialized from the map-center Y coordinate and
-  carried between nodes, preserving exit values without out-of-bounds access.
-- Remove the unused VFW import, which pulled `AVIFIL32.DLL` into Unix builds
-  despite video playback already using `GameAVI`.
-- Present an initial cleared SDL frame when creating the window. Wayland needs
-  this buffer to map the surface before the game can receive activation and
-  start drawing its loading screen.
-- Detach shared WideString results before case conversion or script `toansi`
-  packing writes through raw pointers. Preserve the game's configured case
-  table and the caller's string, including read-only literals and shared strings
-  on Unix.
-- Update cursor image and hotspot together. Rebuilding a new cropped image with
-  the previous hotspot could fail SDL's bounds check during cursor transitions.
-- Pad native cursor images when their hotspot lies outside the artwork, fixing
-  the alcohol market cursor without shifting its position.
-- Add a Mobile UI setting with automatic, enabled and disabled choices on every
-  platform. Reload the interface when applying it, keeping Android windowing and
-  touch input independent of the selected layout.
-- Preserve full pointer width when inspecting a missile owner's tranclucator
-  and comparing missile ownership in point-defense targeting.
-- Cancel and join script-request work before destroying UI/calculation state;
-  free its worker with the script engine. The leaked worker otherwise kept
-  waiting on SDL's event condition during process shutdown. Its wait for turn
-  calculation now also observes cancellation.
-- Preserve the original exception class, message and address when adding
-  message-loop context; re-raise it instead of replacing it with a generic error.
-- Ignore relative `XDG_DATA_HOME` values, preserve UTF-8 user-directory names,
-  and report failed resource-directory changes instead of silently using the
-  caller's working directory.
+## Compiler and Delphi semantics
 
-- Preserve Delphi Win32's exhausted-loop behavior in asteroid collision searches,
-  script ship/group/state selection, planet filters, quest-event fallback,
-  weighted item/text selection and numeric/quoted-text scans. Advance search
-  indices explicitly, retaining the matching index on `Break` and the incoming
-  counter on exposed skipped-loop paths. Record the revolution's rolled
-  government separately: exhausting its descending byte counter selects no goods
-  event, including when the attempt limit forces a new government. Reproduce the
-  reward function's zeroed counter when both congratulations-text scans are empty.
+- **Compiler settings.** `source/GameOptions.inc` centralizes wrapping arithmetic,
+  short-circuit Boolean evaluation and maximum field alignment, plus the FPC fork's
+  `LEGACYPC24`, `DELPHIORDER` and `DELPHIINTEGER32` directives. These preserve
+  arithmetic boundaries and expression scheduling; optimization levels come from the
+  build configuration.
+- **Floating-point environment.** `source/GR_Main.pas` and `source/game/ThreadCalc.pas`
+  use FPC's `Math` unit to select masked exceptions, nearest rounding and 24-bit x87
+  precision. CPUs without selectable precision retain their native mode. SDL startup in
+  `platform/GameWindow.pas` masks exceptions before native drivers initialize.
+- **Portable low-level operations.** Pascal replaces x86 assembly for memory access,
+  CRC, UTF-16 comparison, buffer reads, script arrays and geometry. Fixed-width values,
+  comparison results, float bit casts and signed seed arithmetic remain explicit. Start
+  with `source/core/EC_Mem.pas`, `source/core/EC_Str.pas`, `source/core/CrcUnit.pas` and
+  `source/core/aMyFunction.pas`.
+- **Loop counters.** Searches explicitly reproduce Delphi Win32's exhausted `for`
+  counters, matching indices on `Break`, and relevant skipped-loop values. This affects
+  collision searches, script selection/filtering, weighted choices and text scans;
+  representative code is in `source/script/aScriptFun.pas`, `source/game/aConst.pas` and
+  `source/core/EC_Str.pas`. Do not simplify these back to loops whose final counter is
+  compiler-dependent.
+- **Shared strings.** `UpperCaseWideString` and `LowerCaseWideString` in
+  `source/core/EC_Str.pas`, and `TVarEC.PackAnsiString` in
+  `source/script/EC_Expression.pas`, detach `WideString` storage before raw writes. This
+  preserves callers' strings and read-only literals while retaining the game's case
+  table and script packing format.
+- **Bézier precision.** `TSPath.ResampleBezierRange` in `source/core/aPath.pas` uses
+  `source/core/aBezierPC24.pas` to keep a 24-bit significand with a separately scaled
+  exponent. This avoids underflow on long paths where `Extended` is Double-sized, while
+  preserving forward accumulation, intermediate rounding, heading unwrapping, sample
+  timing and the final endpoint.
 
-- Preserve Bézier path smoothing on targets where `Extended` is Double-sized
-  (including ARM64). The original x87 recurrence starts with `(1-t)^(count-1)`;
-  with the 199 controls allowed by ship movement, this underflows near the end
-  in Double and pulls samples toward the origin. Evaluate the second half with
-  reversed controls and `1-t`, preserving the curve, heading unwrapping, sample
-  timing and final endpoint. Keep the original evaluation order on targets with
-  wider `Extended`. The game selects 24-bit x87 arithmetic precision while
-  retaining the wider exponent range; this fix restores the mathematical curve
-  on ARM64 without reproducing that intermediate rounding.
+## Pointer widths, memory layouts and native interfaces
 
-- Share game compiler directives in `GameOptions.inc` and leave optimization
-  levels to the build settings instead of disabling optimization in each unit.
-- Replace out-of-bounds planet-shop quota reads with explicit next-race and
-  station quota accesses. Preserve the original weapon-subtype counting, offer
-  selection and RNG consumption without depending on adjacent table placement.
-- Preserve the original custom-weapon average-size quirk by explicitly reading
-  the cached food trade-name pointer as a signed 32-bit value, taking its low
-  32 bits on wider targets. Retain 32-bit multiplication overflow in treasure
-  hints; this historical behavior remains dependent on allocation addresses.
-- Replace x86 assembly in memory access, CRC, rectangle intersection, UTF-16
-  comparisons, buffer reads, script arrays, geometry and saved-pixel restoration
-  with Pascal. Preserve fixed-width buffer values and native comparison results.
-- Replace graphics and font assembly with Pascal, retaining lookup-table color
-  rounding, forward overlapping copies, RGB565/RGB555 blending and saturated
-  alpha addition. Empty pixel loops no longer wrap their counters and overrun
-  buffers; the original line-drawing register corruption is not reproduced.
-- Configure floating-point exceptions, rounding and x87 precision through FPC's
-  `Math` unit in the renderer and calculation threads. CPUs without selectable
-  precision use their native precision.
-- Allocate game memory through FPC on Windows, Linux and macOS. Private heaps
-  retain bulk destruction; their handles follow the host pointer width.
-- Use FPC file I/O for packages and loose files, converting path separators at
-  the filesystem boundary. Keep package directory entries at 158 bytes on disk
-  while allowing native-sized pointers in memory. Allow read-only packages when
-  write access is unavailable; use WASI's descriptor-close API on that target.
-  Remember each compressed entry's next block offset to avoid rescanning earlier
-  headers during sequential reads. Interleaved entries still seek explicitly;
-  random reads retain the chain lookup. This transient cache does not change
-  package contents or saved-game formats.
-- Decode ZL02 package blocks through FPC's Pascal zlib implementation, retaining
-  the original DLL's header and decoded-length checks.
-- Encode and decode ZL01 buffers through Pascal zlib, retaining the original
-  compression levels, size limit and header-only size query. The buffer format
-  remains unchanged.
-- Initialize FPC's thread and Unicode managers before game units on Unix and
-  WASI. Omit the desktop executable's resource section on WASI.
-- Replace VCL/Win32 windowing, input, cursors, clipboard and document opening
-  with direct Pascal SDL2 calls. Preserve game message/key values and map window
-  coordinates through the displayed game viewport, including high-DPI scaling.
-- Back the existing drawing and sound interfaces with SDL2. Keep CPU pixel
+- **Script values.** `source/script/EC_Expression.pas` and
+  `source/script/aScriptFun.pas` carry full object addresses through cells, references,
+  assignments, comparisons, decimal strings and cross-script calls. Scalar integer/DWORD
+  arithmetic and serialized scalar fields remain 32-bit, including overflow and masked
+  shifts. Float-valued shifts use `ScriptShiftInt64` for Delphi's separate 64-bit helper
+  count rules.
+- **In-memory handles.** Dialog/timer payloads, film object handles, GAI cache entries,
+  heap handles and the planetary-battle snapshot token use native pointer widths. Film
+  command overlays are sized for their pointer fields while the serialized film layout
+  stays unchanged. See `source/ui/GI_MessageLoop.pas`, `source/scene/aEFilm.pas`,
+  `source/resources/EC_CacheGAI.pas` and `MemorySnapshotGalaxyToken` in
+  `source/game/aSaveLoad.pas`.
+- **Fields instead of Win32 offsets.** Equipment and score access uses named fields;
+  storage allocations use actual record sizes. `TGalaxy.XorProtectedState` in
+  `source/game/aGalaxy.pas` preserves complete encoded pointers and excludes pointer
+  fields using their real addresses and sizes.
+- **Internal table alignment.** `TEconomyInfo`, `TGoodsInfo` and `TOwnerInfo` in
+  `source/game/aConst.pas` use ordinary records so static string pointers are naturally
+  aligned for Darwin chained fixups. These tables are accessed through fields, not
+  serialized as raw records; packing is retained where an external layout requires it.
+- **C ABI declarations.** OKGF clipping rectangles in `source/GR_Main.pas` and SDL
+  message-box data in `platform/SDL2.pas` use `constref` for C pointer arguments.
+  `OKGR_Planet2_TemplDel` is a procedure; its game-facing wrapper returns zero. Wasm
+  uses the static C import namespace for OKGF.
+
+## Platform runtime and media
+
+- **Startup.** `source/Rangers.dpr` initializes thread and Unicode managers before game
+  units. Android builds a shared library exporting `AndroidGameMain` as `sr_fpc_main`,
+  called after SDL establishes application paths. Android/WASI use FPC's Unicode
+  manager; their builds omit the desktop resource section.
+- **OS services.** `platform/GameWindow.pas` and `platform/GameInput.pas` replace
+  VCL/Win32 windowing and input with SDL2, preserving game message/key values. Clipboard
+  and document opening also use SDL. `platform/GameSystem.pas` provides user paths,
+  timestamps and OS-based CPU/memory queries; `platform/GameHeap.pas` uses FPC
+  allocation while retaining private heaps' bulk destruction.
+- **Graphics and sound interfaces.** `platform/GameGraphics.pas` and
+  `platform/GameAudio.pas` back the existing interfaces with SDL2, including CPU pixel
   access, render targets, gamma ramps, PCM streaming and position notifications.
-  Native drivers receive the game's floating-point exception mask before startup.
-- Recreate textures after SDL device loss and redraw discarded render targets.
-  Observe resets during presentation before reusing the old texture handles.
-- Run workers through FPC threads and preserve multi-event waits with SDL
-  condition variables. Transfer worker failures to the caller before publishing
-  completion; retain cache completion events and entries while callers wait.
-- Free script ether entries and their lock during destruction instead of the
-  original unmatched unlock. Release ether, music and resource-file locks on
-  exceptions, and join failed GAI loaders before releasing their image data
-  during destruction.
-- Rescale cached backgrounds with Pascal bilinear interpolation, retaining crop
-  alignment and pixel-center sampling without using SDL rendering on workers.
-- Retain music playback events across tracks, and make script-dialog waits
-  respond to calculation shutdown before releasing their UI and script state.
-  Signal music completion even when opening or cleaning up a decoder fails.
-- Decode Vorbis through FPC's native ABI declarations and encode JPEG screenshots
-  through FPC's Pascal image package. Read AVI frame chunks in Pascal and use
-  native Xvid decoding, replacing Video for Windows.
-- Use FPC file enumeration, timestamps, Unicode case conversion and OS-specific
-  user directories. Normalize filesystem paths separately from package keys and
-  consistently use `Save` for save files, including their temporary output.
-- Preserve Windows' case-insensitive file matching for installed languages,
-  mod language resources, saves and robot maps. Keep the current language when
-  the settings screen has no language choices, instead of saving an empty code.
-  Resolve mismatched filesystem path components on Unix, including loose mod
-  resources and existing output directories. Normalize BMP/PNG writer paths
-  before passing them to OKGF, retaining Unicode names until that boundary.
-- Replace timestamp-counter CPU probes with OS queries and the original fallback;
-  use native memory queries for physical memory and FPC heap usage on Unix.
-- Keep legacy script DLL calls and the original Steam/MatrixGame wrappers limited
-  to 32-bit Windows.
-- Remove obsolete process-module inspection and original-DLL checksum checks,
-  including the Toolhelp import, whitelist, registry helper and unused integrity
-  markers. Preserve resource-file CRC checks, their snapshot refresh and the
-  daily shared RNG draw.
-- Make Delphi's coordinate-list float bit casts and signed seed arithmetic
-  explicit. Disambiguate the game's point type from FPC's `Types.TPointF`.
-- Advance the text-wrapping scan explicitly instead of relying on Delphi's
-  exhausted `for` counter, which otherwise stalls on the final character in FPC.
-- Declare C record-pointer arguments with `constref`, preserving the original
-  OKGF clipping-rectangle ABI and SDL's message-box data pointer across targets.
-  Declare `OKGR_Planet2_TemplDel` as a procedure to match its C ABI; the game-facing
-  wrapper returns zero after cleanup. Use the static C import namespace for
-  OKGF on Wasm.
-- Share SDL's logical window resolution between presentation and mouse events.
-  Refresh the detected display mode on runtime reinitialization. For the canvas
-  backend, use the existing list-style resolution selector and show Auto's
-  actual dimensions.
-  Let SDL vsync and browser refresh callbacks pace presentation without applying
-  the legacy millisecond limit and an additional loop delay. Calculate the
-  FPS label from submitted frames and elapsed time rather than update iterations.
-  Query the desktop cursor for window-leave handling where supported, and refresh
-  the game cursor on re-entry instead of retaining a stale position at the edge.
-  Refresh native cursor visibility on focus return, applying AppKit's current
-  cursor immediately on macOS when the pointer stays inside the game window.
-- Preserve native object addresses through script integer cells, references,
-  decimal strings, cross-script arguments and array lookup. Keep signed `int`
-  arithmetic and serialized script scalar fields at 32 bits.
-- Widen dialog, timer and UI payloads, film object handles and GAI frame-cache
-  entries to the host pointer size. Size in-memory film command overlays for
-  their pointer fields while retaining the original serialized film layout.
-- Address ship equipment and score counters through their fields instead of
-  fixed Win32 object offsets; allocate storage records by their actual size.
-  Preserve the full encoded player pointer and pointer fields excluded from
-  in-memory state protection.
+- **Media codecs.** `source/audio/VorbisFile.pas` uses FPC's native ABI declarations.
+  `TGraphBufGR.SaveJpeg` in `source/graphics/GR_GraphBuf.pas` uses FPC's image package.
+  `platform/GameAVI.pas` reads AVI chunks in Pascal and uses native Xvid decoding,
+  replacing Video for Windows.
+
+## Files, packages and saved state
+
+- **Filesystem boundaries.** `source/resources/EC_File.pas` and
+  `source/resources/EC_HsFile.pas` use FPC file I/O and convert separators at the
+  filesystem boundary, keeping package lookup keys separate. `NativeGamePath` in
+  `platform/GameSystem.pas` resolves case differences on Unix, including loose resources
+  and existing output directories. BMP/PNG paths retain Unicode names until passed to
+  OKGF.
+- **Profiles and discovery.** User paths preserve UTF-8 names and ignore relative
+  `XDG_DATA_HOME`; a failed resource-directory change is reported. Saves consistently
+  use `Save`, including temporary output. Languages, mod resources, saves and robot maps
+  retain case-insensitive matching. `ScanModFolders` in `source/resources/aModsInfo.pas`
+  scans explicit directories, preserving the caller's working directory and avoiding
+  false mod detections.
+- **Package layout and access.** `source/resources/EC_HsFile.pas` keeps
+  `DiskPackEntrySize` at 158 bytes while allowing native pointers in memory. Read-only
+  packages are supported; WASI uses its descriptor-close API. Per-entry next-block
+  offsets avoid rescanning compressed chains during sequential reads; random/interleaved
+  access still seeks correctly. This cache does not alter package or save formats.
+- **Compression formats.** `source/graphics/EC_OKGF.pas` implements ZL01 buffer
+  compression and ZL02 package-block decoding with Pascal zlib. Original headers,
+  compression levels, size limits, decoded-length checks and the header-only size query
+  are retained.
+- **Language settings.** `source/screens/fCfgSettings.pas` falls back to a language code
+  when its install file or display name is missing or blank. An empty language list
+  preserves the selected language; temporary configurations are released on errors.
+
+## Drawing, presentation and desktop input
+
+- **Software raster operations.** `source/graphics/GR_GraphBuf.pas`,
+  `source/graphics/GR_gi.pas` and `source/resources/EC_CacheFont.pas` replace assembly
+  while retaining lookup-table rounding, forward overlapping copies, RGB565/RGB555
+  blending and saturated alpha addition. Empty pixel loops no longer wrap into buffer
+  overruns; the original line-drawing register corruption is not reproduced. Saved-pixel
+  restoration is also Pascal.
+- **Presentation coordinates.** `GameWindow.TGamePresentation` shares the viewport
+  between drawing and input, including high-DPI output and alternate viewports. Windowed
+  mode remains available at desktop-sized or larger resolutions, and `OpenGameWindow`
+  presents a cleared frame so Wayland can map the surface. Runtime reinitialization
+  refreshes the detected display mode; canvas settings show the resolved dimensions for
+  Auto resolution.
+- **Frame pacing and device resets.** `source/ui/GI_MessageLoop.pas` lets SDL
+  vsync/browser callbacks pace presentation without the extra legacy delays, and
+  measures FPS from submitted frames. `platform/GameGraphics.pas` recreates textures
+  after device loss, redraws discarded render targets and observes resets before reusing
+  handles.
+- **Scaling and captures.** Texture-filter changes preserve queued draws; clipping
+  follows pixel-center coverage, rotated sprites retain smooth filtering, and text
+  edges/small tiles avoid dark padding seams. Tall images use the correct tile-column
+  stride. Cached backgrounds use Pascal bilinear resampling, avoiding SDL calls on
+  workers; unchanged captures avoid writable pixel locks. See
+  `source/graphics/GI_GraphBuf.pas` and `source/graphics/GR_GraphBuf.pas`.
+- **Cursor and scrolling.** `source/ui/GI_Cursor.pas` updates artwork and hotspot
+  together, padding images for outlying hotspots. Cursors refresh on re-entry/focus
+  return, with `platform/GameCocoaCursor.pas` handling macOS visibility.
+  `GamePointerAllowsEdgeScroll` gates edge scrolling by focus and pointer location,
+  preserving keyboard scrolling, sensitivity and letterbox edges while disabling
+  mouse-edge scrolling on Android.
+- **Text wrapping.** `TCFontEC.WrapTaggedTextIntoLines` in
+  `source/resources/EC_CacheFont.pas` explicitly advances the scan, including past
+  oversized glyphs/tags, preventing stalled or unbounded wrapping.
+
+## Worker lifetime and error reporting
+
+- **Common worker contract.** `source/core/EC_Thread.pas` uses FPC threads and
+  `platform/GameEvents.pas` uses SDL conditions for multi-event waits.
+  `TThreadEC.CheckFailure` transfers failures with worker backtraces before completion
+  is accepted. Cache completion events and entries remain alive while callers wait.
+- **Calculation and saves.** `source/game/ThreadCalc.pas` reports generation/simulation
+  failures with stage and seed context on the main thread, cancels dependent work and
+  exits instead of using a partially updated galaxy. `FinalizeSaveWriter` in
+  `source/game/aSaveLoad.pas` drains queued saves, releases locks and reports pending
+  failures; fatal cleanup logs secondary save errors without replacing the original
+  failure.
+- **Audio and resources.** `platform/GameAudio.pas` reports mixer failures on the main
+  thread and joins the mixer before closing its device. `source/audio/GR_Music.pas`
+  retains playback events across tracks and signals completion on decoder failure.
+  Ether, music and file locks are released on exceptions; failed GAI loaders are joined
+  before freeing images.
+- **Script shutdown.** `StopScriptRequestThread` in `source/script/aScript.pas` cancels
+  and joins requests before UI/calculation teardown. Calculation and script-dialog waits
+  observe cancellation. The engine frees its worker, and `source/core/EC_Ether.pas`
+  frees ether entries and their lock.
+- **Exception context.** `GR_WinMessage` in `source/GR_Main.pas` and handlers in
+  `source/ui/GI_MessageLoop.pas` add message, transition or drawing context while
+  re-raising the original exception, preserving its class, address and backtrace.
+
+## Mobile layout and interaction
+
+Mobile layouts reuse the original artwork and controls. The **Mobile UI** setting
+selects Automatic/Yes/No on every platform; Automatic follows the Android host.
+`GameMobileUiEnabled` controls layout independently of `GameWindowIsMobile`, so Android
+input, fullscreen behavior and native overlays remain available with either layout.
+Applying the setting reloads the interface.
+
+- **Sizing and rebuilds.** `source/ui/GI_LayoutMetrics.pas` and `GetGameMobileUiScale`
+  share density-based fitting at the display's pixel resolution. The HUD/radar scale
+  separately from the world; camera zoom and optional pinch zoom preserve hit testing
+  and anchors. Screen rasters resize at frame boundaries, while safe UI reloads retain
+  the game, fit active dialogs and release old screens, including achievements. Captures
+  keep display resolution, with separate buffers for nested dialogs.
+- **Gesture ownership.** `platform/GameTouch.pas` and `source/ui/GI_MessageLoop.pas`
+  distinguish completed taps, dragging, scrolling and camera gestures. Taps activate
+  their original control; crossing another answer or button cannot select it. Press
+  feedback appears on touch-down, with hold-repeat for quantity/cargo controls. Focus
+  loss and modal transitions cancel presses, drags and repeats without release actions.
+- **Inspection.** `source/ui/GI_Inspection.pas`, `source/screens/fGalaxy2.pas` and
+  `source/screens/fStarMap.pas` let the first tap inspect equipment, destinations or
+  floating cargo before a second tap acts. Purchase confirmations and special targeting
+  remain intact. Tooltips keep fixed headers/footers and scroll the body;
+  `KeepMobileTooltipVisible` and `DeferMobileTooltipLeave` prevent premature dismissal
+  while reading.
+- **Defaults.** Android profiles start from bundled defaults instead of imported desktop
+  preferences. Mobile dialogue starts at the second-largest text size and quests at the
+  largest, while saved font choices remain respected.
+
+| Area | Behavior and source entry points |
+| --- | --- |
+| Menus, settings and dialogs | Larger menus, readable settings rows, integrated slider end buttons and fitted quantity/confirmation panels. `source/ui/GI_SettingsLayout.pas`, `source/screens/fMainForm.pas`, `source/screens/fGameMenu.pas`, `source/screens/fCount1.pas`. |
+| HUD, inventory and shops | Independently scaled bottom panel/radar, separate ship services/storage, larger paged cells and aligned hit tests during panel motion. `source/screens/fPanelMain.pas`, `source/ui/GI_ShipLayout.pas`, `source/screens/fShip2.pas`, `source/screens/fEquipmentShop.pas`. |
+| Dialogue, scanning and space | Government/station panes fit above the HUD; scanner/probe panels and action markers enlarge without changing world positions or covering inspection targets. `source/ui/GI_DialogueLayout.pas`, `source/screens/fScaner.pas`, `source/screens/fStarMap.pas`. |
+| Text quests | Content-sized choices, left-aligned prose, complete fixed-layout statistics/diagrams, optional enlarged statistics, compact toolbar and scrolling. `source/quests/TextQuestInterface.pas`, `source/quests/TextFieldClass.pas`, `source/quests/QuestArtwork.pas`. |
+| Arcade | Larger controls/results independent of the battle view, with simultaneous directional steering and weapon-group firing. `TfAB.ApplyMobileSteering` in `source/arcade/ab_MainForm.pas` and `platform/android/java/io/github/pakompom/spacerangershd/ArcadeControls.java`. |
+
+## Preserved gameplay quirks and targeted corrections
+
+- **Shop quotas.** `LegacyPlanetShopQuota` in `source/game/aPlanet.pas` replaces reads
+  past the race table with explicit next-race/station accesses. Weapon-subtype counting,
+  offer selection and RNG consumption remain unchanged.
+- **Address-dependent item size.** `GetAverageItemSize` in `source/game/aConst.pas`
+  explicitly takes the cached food trade-name pointer's low 32 bits as a signed value
+  for custom weapons. Treasure hints in `source/game/aPlanet.pas` retain 32-bit
+  multiplication overflow. This historical quirk still depends on allocation addresses.
+- **Arcade exit shuffle.** `TfAB.ABSpaceBuild` in `source/arcade/ab_MainForm.pas`
+  retains the zero-filled portal-count field and ten RNG calls per node. A declared
+  `Exits[-1]` slot models the original stack overlap, initialized from map-center Y and
+  carried between nodes, without an out-of-bounds access.
+- **Loop-dependent outcomes.** `TPlanet.TriggerGovernmentRevolution` keeps the rolled
+  government separate from a forced selection: an exhausted byte counter chooses no
+  goods event. Quest fallback retains its exhausted-scan result, and
+  `TNormalShip.CollectLiberationRewards` keeps a zero counter when both text scans are
+  empty. See `source/game/aPlanet.pas`, `source/quests/LocationClass.pas` and
+  `source/game/aNormalShip.pas`.
+- **Object lifetime and ownership.** Arcade actions guard a destroyed player ship while
+  retaining pause/exit/victory shortcuts; hovered space is cleared before destruction.
+  See `source/arcade/ab_MainForm.pas` and `source/arcade/ab_Space.pas`.
+  Missile-owner/tranclucator and point-defense comparisons in `source/game/aGalaxy.pas`
+  preserve full pointers.
+
+## Removed and restricted legacy code
+
+- Empty placeholder units, unused registry/Direct3D helpers, the inactive Delphi
+  exception hook and VFW import were removed. Redundant nonvirtual hooks and dead
+  statements were trimmed while retaining required overrides and RNG calls.
+- Original process-module/DLL inspection, Toolhelp/whitelist code, the disabled
+  FGInt/RSA integrity snapshot and Steam leaderboard hooks were removed.
+  `TGalaxy.ComputeIntegrityChecksum` in `source/game/aGalaxy.pas` still returns zero.
+  Active protected state, resource CRC checks/snapshot refresh, the daily shared RNG
+  draw, save layouts, local scores and score-file export remain.
+- Script DLL calls and the original Steam/MatrixGame wrappers remain limited to 32-bit
+  Windows. See `platform/GameScriptLibrary.pas`, `source/SimpleSteamApi.pas` and
+  `source/game/Robot.pas`.

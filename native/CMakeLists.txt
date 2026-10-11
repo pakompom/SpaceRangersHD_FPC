@@ -33,6 +33,7 @@ if(ANDROID
         OFF
         CACHE BOOL "" FORCE)
   else()
+    set(BUILD_SHARED_LIBS OFF)
     add_compile_options(-pthread -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0)
     # SDL's browser backend needs explicit WebGL proxying for a blocking game loop on an application
     # pthread.

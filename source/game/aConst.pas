@@ -125,7 +125,8 @@ var
 
 type
 
-  TEconomyInfo = packed record
+  // Internal tables use native pointer alignment; they are not serialized as records.
+  TEconomyInfo = record
     InternalName: WideString;
     DisplayName: WideString;
     ShortDisplayName: WideString;
@@ -872,7 +873,7 @@ var
 
 type
 
-  TGoodsInfo = packed record
+  TGoodsInfo = record
     InternalName: WideString;
     DisplayName: WideString;
     TradeName: WideString;
@@ -993,7 +994,7 @@ var
 
 type
 
-  TOwnerInfo = packed record
+  TOwnerInfo = record
     InternalName: WideString;
     DisplayName: WideString;
     FuelPriceFactor: Single;

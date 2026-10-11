@@ -46,7 +46,7 @@ which reconstructs the **2026-08-11 prerelease** build.
 
 - [Build setup](BUILDING.md)
 - [Development gotchas](DEVELOPING.md)
-- [Delphi-to-FPC changes](CHANGES.md)
+- [Porting and behavior reference](CHANGES.md)
 - [Attribution](NOTICE.md) and [license](LICENSE)
 - [Personal branch with enhancements](https://github.com/pakompom/SpaceRangersHD_FPC/tree/personal)
 
