@@ -864,7 +864,7 @@ begin
       SetTextColor(CurrentPixelFormat.PackRgbBytes(127, 127, 127));
     CreateEmbeddedControl := CreateDialogObject;
     SetTextAlignY(tayCenterEx);
-    Row.SetSize(Point(Row.ClientSize.X, ClientSize.Y + 2 * GiScalePixelsEx(2, 2)));
+    Row.SetSize(Point(Row.ClientSize.X, DialogueChoiceHeight(Row, ClientSize.Y + 2 * GiScalePixelsEx(2, 2))));
     SetSize(Point(ClientSize.X, Row.ClientSize.Y));
     Highlight.SetSize(Row.ClientSize);
     Inc(NextChoiceTop, ClientSize.Y);

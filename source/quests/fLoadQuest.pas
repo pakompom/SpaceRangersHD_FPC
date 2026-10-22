@@ -75,6 +75,8 @@ implementation
 
 uses
   GameDiagnostics,
+  GameWindow,
+  GI_Artwork,
   EC_CacheBitmap,
   Classes,
   EC_BlockPar,
@@ -87,6 +89,7 @@ uses
   GI_GraphButton,
   GI_Label,
   GI_Main,
+  GI_MobileSkin,
   GI_Panel,
   GI_PanelScrollBar,
   GI_ScrollBar,
@@ -102,6 +105,50 @@ uses
   aGalaxy,
   aMyFunction,
   aGalaxyStruct;
+
+type
+  { Local positions and scroll bounds remain in the row's coordinates. }
+  TQuestCatalogueLabelGI = class(TLabelGI)
+    procedure UpdateHitTestBounds; override;
+    function GetLocalBounds: TRect; override;
+  end;
+
+procedure TQuestCatalogueLabelGI.UpdateHitTestBounds;
+begin
+  if (DisplayScale <> 1) and (Parent <> nil) then
+    AbsolutePosition := ScaledChildPosition(Parent.GetChildAbsolutePosition(LocalPosition, PositionModeW), Point(0, 0), DisplayScale);
+  inherited UpdateHitTestBounds;
+end;
+
+function TQuestCatalogueLabelGI.GetLocalBounds: TRect;
+begin
+  Result := Rect(LocalPosition.X, LocalPosition.Y,
+      LocalPosition.X + Ceil(ClientSize.X * DisplayScale),
+      LocalPosition.Y + Ceil(ClientSize.Y * DisplayScale));
+end;
+
+procedure FitQuestRowSkin(Image: TImageGI);
+var Source: TGraphBufGR; Path: WideString; Size: TPoint;
+begin
+  if not GameMobileUiEnabled or not HardwareRenderingEnabled then Exit;
+  Path := Image.GetImagePath;
+  if Copy(Path, 1, 3) <> 'GI,' then Exit;
+  Size := Image.Parent.ClientSize;
+  Source := TGraphBufGR.Create(False);
+  try
+    LoadOriginalGiArtwork(Copy(Path, 4, MaxInt), Source);
+    Image.AutoUpdateFlags := 0;
+    Image.SetImagePath('GraphBuf');
+    Image.SetSize(Size);
+    Image.GraphBufControl.SourceHasPerPixelAlpha := True;
+    Image.GraphBufControl.GraphBuf.AllocateRgbaTight(Size.X, Size.Y);
+    Image.GraphBufControl.GraphBuf.FillPixels(0);
+    Image.GraphBufControl.GraphBuf.DrawNinePatch(0, 0, Size.X, Size.Y, Source,
+        Rect(0, 0, Source.Width, Source.Height), Rect(12, 12, 12, 12));
+  finally
+    Source.Free;
+  end;
+end;
 
 constructor TfLoadQuest.Create;
 begin
@@ -124,6 +171,13 @@ end;
 procedure TfLoadQuest.InitializeLayout;
 var
   Root, Panel: TObjectGI;
+  Scroll: TPanelScrollBarGI;
+  Text: TLabelGI;
+  TextScale: Single;
+  ScreenPosition: TPoint;
+  ListBounds, ButtonBounds: TRect;
+  ButtonHeight, Gap, I, TabWidth: Integer;
+  Button: TGraphButtonGI;
 begin
   inherited InitializeLayout;
   LoadPanel.InitializeLayout(Self);
@@ -138,6 +192,61 @@ begin
   else
     Panel.SetPosition(Classes.Point(ExtraScreenWidth div 2 + Panel.LocalPosition.X, ExtraScreenHeight div 2 + Panel.LocalPosition.Y));
   FitMobileControl(Panel, Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12));
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    Scroll := GetByName('PanelSlot') as TPanelScrollBarGI;
+    Scroll.SetDragScrollingEnabled(True);
+    Scroll.VerticalScrollBar.SetIndicatorThickness(3);
+    ListBounds := MobileScreenRect(Scroll);
+    ButtonHeight := Ceil(GetGameMobileUiScale(44));
+    Gap := Ceil(GetGameMobileUiScale(4));
+    TabWidth := (ListBounds.Right - ListBounds.Left - 2 * Gap) div 3;
+    for I := 0 to 2 do
+    begin
+      Button := GetByName('ButGroup' + IntToStr(I)) as TGraphButtonGI;
+      ButtonBounds := Rect(ListBounds.Left + I * (TabWidth + Gap), ListBounds.Top,
+          ListBounds.Left + I * (TabWidth + Gap) + TabWidth, ListBounds.Top + ButtonHeight);
+      ResizeMobileSkinButton(Button, ButtonBounds);
+      if LowerCaseWideString(SelectedLanguage) = 'russian' then
+        case I of
+          0: Button.SetCaption('Оригинал');
+          1: Button.SetCaption('Дополнения');
+          2: Button.SetCaption('Свои');
+        end;
+    end;
+    Scroll.SetSize(Point(Scroll.ClientSize.X,
+        Scroll.ClientSize.Y - Ceil((ButtonHeight + Gap) / Scroll.GetDisplayScale)));
+    PlaceControlAtScreen(Scroll, Point(ListBounds.Left, ListBounds.Top + ButtonHeight + Gap), Scroll.GetDisplayScale);
+    Scroll.AutoVerticalPlacement := True;
+    Scroll.UpdateScrollbarPlacement;
+    ButtonBounds := MobileScreenRect(GetByName('MessageWindow'));
+    ButtonBounds.Top := ButtonBounds.Bottom + Gap;
+    ButtonBounds.Bottom := ButtonBounds.Top + ButtonHeight;
+    TabWidth := (ButtonBounds.Right - ButtonBounds.Left - Gap) div 2;
+    ResizeMobileSkinButton(GetByName('ButStart') as TGraphButtonGI,
+        Rect(ButtonBounds.Left, ButtonBounds.Top, ButtonBounds.Left + TabWidth, ButtonBounds.Bottom));
+    ResizeMobileSkinButton(GetByName('ButCancel') as TGraphButtonGI,
+        Rect(ButtonBounds.Right - TabWidth, ButtonBounds.Top, ButtonBounds.Right, ButtonBounds.Bottom));
+    GetByName('ButClose').SetActive(False);
+    Scroll := GetByName('MessageWindow') as TPanelScrollBarGI;
+    Scroll.SetDragScrollingEnabled(True);
+    Scroll.VerticalScrollBar.SetIndicatorThickness(3);
+    Text := GetByName('MessageText') as TLabelGI;
+    TextScale := GetGameMobileUiScale / Scroll.GetDisplayScale;
+    { Scale the complete viewport so clipping, content and scroll distances use
+      the same units; retain its original on-screen rectangle. }
+    Scroll.UpdateAbsolutePosition;
+    ScreenPosition :=
+        Point(Round(Scroll.AbsolutePosition.X * Scroll.GetDisplayScale), Round(Scroll.AbsolutePosition.Y * Scroll.GetDisplayScale));
+    Scroll.SetSize(Point(Floor(Scroll.ClientSize.X / TextScale), Floor(Scroll.ClientSize.Y / TextScale)));
+    PlaceControlAtScreen(Scroll, ScreenPosition, GetGameMobileUiScale);
+    Scroll.SetScrollbarsOutside(False);
+    Scroll.AutoVerticalPlacement := True;
+    Scroll.UpdateScrollbarPlacement;
+    Text.SetPosition(Point(0, 0));
+    Text.SetSize(Point(Scroll.ClientSize.X - 8, 1));
+    Text.SetFontName(SmoothIntroFontName);
+  end;
   GetByName('MainPanel').KeyDownCallback := QuestListKeyDown;
   (GetByName('ButClose') as TGraphButtonGI).UpCallback := ReturnToMenu;
   (GetByName('ButCancel') as TGraphButtonGI).UpCallback := ReturnToMenu;
@@ -436,7 +545,10 @@ var
   Index, Status, TitleRight, CompletionIndex, GenreRight: Integer;
   Background, LengthImage, CompletionImage: TImageGI;
   TitleLabel, GenreLabel: TLabelGI;
+  TextScale: Single;
 begin
+  LengthImage := nil;
+  CompletionImage := nil;
   Index := Row.UserValue;
   Row.MouseEnterCallback := QuestRowMouseEnter;
   Row.MouseLeaveCallback := QuestRowMouseLeave;
@@ -496,7 +608,7 @@ begin
         CompletionImage.SetActive(True);
       end;
     end;
-  TitleLabel := TLabelGI.Create(Row);
+  TitleLabel := TQuestCatalogueLabelGI.Create(Row);
   if GiResourceVariant = 1 then
   begin
     TitleLabel.SetPosition(Classes.Point(11, 0));
@@ -516,7 +628,7 @@ begin
     TitleLabel.SetTextColor(QuestNameColor)
   else
     TitleLabel.SetTextColor(CurrentPixelFormat.PackRgbBytes(112, 112, 112));
-  GenreLabel := TLabelGI.Create(Row);
+  GenreLabel := TQuestCatalogueLabelGI.Create(Row);
   if GiResourceVariant = 1 then
   begin
     GenreLabel.SetPosition(Classes.Point(209, 0));
@@ -537,6 +649,27 @@ begin
     GenreLabel.SetTextColor(QuestNameColor)
   else
     GenreLabel.SetTextColor(CurrentPixelFormat.PackRgbBytes(112, 112, 112));
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    TextScale := GetGameMobileUiScale / Row.GetDisplayScale;
+    TitleLabel.DisplayScale := TextScale;
+    TitleLabel.SetPosition(Point(8, 5));
+    TitleLabel.SetSize(Point(Floor((Row.ClientSize.X - 80) / TextScale) - 8, 1));
+    TitleLabel.SetFontName(SmoothIntroFontName);
+    TitleLabel.SetWordWrapEnabled(True);
+    TitleLabel.SetTextAlignY(tayAuto);
+    TitleLabel.SetHitTestDisabled(True);
+    GenreLabel.DisplayScale := TextScale;
+    GenreLabel.SetPosition(Point(8, 9 + Ceil(TitleLabel.ClientSize.Y * TextScale)));
+    GenreLabel.SetSize(Point(TitleLabel.ClientSize.X, 1));
+    GenreLabel.SetFontName(SmoothHugeFontName);
+    GenreLabel.SetTextAlignY(tayAuto);
+    GenreLabel.SetHitTestDisabled(True);
+    Row.SetSize(Point(Row.ClientSize.X, GenreLabel.LocalPosition.Y + Ceil(GenreLabel.ClientSize.Y * TextScale) + 7));
+    if LengthImage <> nil then LengthImage.SetPosition(Point(Row.ClientSize.X - 68, 12));
+    if CompletionImage <> nil then CompletionImage.SetPosition(Point(Row.ClientSize.X - 34, 12));
+    FitQuestRowSkin(Background);
+  end;
 end;
 
 procedure TfLoadQuest.SelectQuest(Index: Integer);
@@ -581,6 +714,7 @@ begin
     Image.SetImagePath('GI,Bm.FormLoadQuest.' + GiResourceSuffix + 'SlotNormal')
   else
     Image.SetImagePath('GI,Bm.FormLoadQuest.' + GiResourceSuffix + 'SlotNormal2');
+  FitQuestRowSkin(Image);
 end;
 
 procedure TfLoadQuest.QuestRowMouseEnter(Sender: TObjectGI);

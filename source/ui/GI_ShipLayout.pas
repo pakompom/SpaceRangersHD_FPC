@@ -12,6 +12,25 @@ uses
 // replacement artwork and reparents controls; it is not a repeatable relayout.
 procedure PrepareMobileShipInventory(Screen: TMessageLoopGI; const Bounds: TRect; StorageCount, HoldColumns, HoldRows: Integer);
 
+type
+  TMobileShipPlacement = record
+    Position: TPoint;
+    Scale: Single;
+  end;
+
+  // Placements for the two arrangements, indexed by "storage is available":
+  // on a planet or docked the services and storage share the right side.
+  TMobileShipLayout = record
+    Body, Right, Bar, Service, Storage, Bridge: array[Boolean] of TMobileShipPlacement;
+  end;
+
+// Called once per tree after PrepareMobileShipInventory. Cuts the cargo strip
+// and the airlock out of the equipment panel into their own bar, detaches the
+// pilot/hold panel, and records both arrangements. The equipment panel then
+// uses the whole content height.
+procedure PrepareMobileShipWindow(Screen: TMessageLoopGI; const Bounds: TRect; out Layout: TMobileShipLayout);
+procedure ApplyMobileShipWindow(Screen: TMessageLoopGI; const Layout: TMobileShipLayout; Storage: Boolean);
+
 implementation
 
 uses
@@ -303,6 +322,158 @@ begin
   finally
     Source.Free;
   end;
+end;
+
+const
+  // Source row of the equipment panel where the cargo strip and airlock begin.
+  MobileShipCutY = 512;
+
+function CapturePlacement(Control: TObjectGI): TMobileShipPlacement;
+begin
+  Result.Position := Control.LocalPosition;
+  Result.Scale := Control.DisplayScale;
+end;
+
+procedure RestorePlacement(Control: TObjectGI; const Placement: TMobileShipPlacement);
+begin
+  Control.DisplayScale := Placement.Scale;
+  Control.SetPosition(Placement.Position);
+end;
+
+procedure PrepareMobileShipWindow(Screen: TMessageLoopGI; const Bounds: TRect; out Layout: TMobileShipLayout);
+const
+  Moved: array[0..5] of WideString = ('PanelLH', 'PanelDS', 'GateAnim', 'GateLeft', 'GateRight', 'GateZone');
+var
+  Body, Ship, Left, Right, Bar, Service, Storage, Bridge, Child: TObjectGI;
+  PanelArt, Backing: TImageGI;
+  Source: TGraphBufGR;
+  Path: WideString;
+  BridgeOffset: TPoint;
+  Gap, Top, Height, X, I: Integer;
+  ShipScale, RightScale, BarScale, SideScale, Fit, Rest, Needed: Single;
+  WithStorage: Boolean;
+
+  procedure UseArtRows(Image: TImageGI; FromY, ToY: Integer);
+  begin
+    Image.AutoUpdateFlags := 0;
+    Image.SetImagePath('GraphBuf');
+    Image.SetImageKindX(ikxLeft);
+    Image.SetImageKindY(ikyTop);
+    Image.SetSize(Point(Source.Width, ToY - FromY));
+    Image.GraphBufControl.SourceHasPerPixelAlpha := True;
+    Image.GraphBufControl.GraphBuf.AllocateRgbaTight(Source.Width, ToY - FromY);
+    Image.GraphBufControl.GraphBuf.CopyRect32(Point(0, 0), Source, Rect(0, FromY, Source.Width, ToY));
+  end;
+
+begin
+  Body := Screen.GetByName('UsePanel').Parent;
+  Left := Screen.GetByName('Left');
+  Ship := Left.Parent;
+  Right := Screen.GetByName('PanelRight').Parent;
+  Service := Screen.GetByName('SC_Panel');
+  Storage := Screen.GetByName('MobileStorage');
+  Bridge := Screen.GetByName('CustomBridgeInto');
+  BridgeOffset := Point(Bridge.LocalPosition.X - Body.LocalPosition.X, Bridge.LocalPosition.Y - Body.LocalPosition.Y);
+  PanelArt := Screen.GetByName('PanelLeft') as TImageGI;
+  Path := PanelArt.GetImagePath;
+  Delete(Path, 1, Pos(',', Path));
+  Source := TGraphBufGR.Create(False);
+  try
+    LoadOriginalGiArtwork(Path, Source);
+    // The bar keeps the original strip and airlock artwork beneath the cut.
+    Bar := TPanelGI.Create(Body.Parent);
+    Bar.SetName('MobileHoldBar');
+    Bar.SetDepth(Body.Depth);
+    Bar.SetSize(Point(Source.Width, Source.Height - MobileShipCutY));
+    Backing := TImageGI.Create(Bar);
+    Backing.SetDepth(PanelArt.Depth);
+    Backing.SetPosition(Point(0, 0));
+    Backing.SetHitTestDisabled(True);
+    UseArtRows(Backing, MobileShipCutY, Source.Height);
+    UseArtRows(PanelArt, 0, MobileShipCutY);
+  finally
+    Source.Free;
+  end;
+  for I := 0 to High(Moved) do
+  begin
+    Child := Screen.GetByName(Moved[I]);
+    // Panel slides set only X, so the original horizontal offsets are kept.
+    Child.Reparent(Bar);
+    Child.SetPosition(Point(Child.LocalPosition.X, Child.LocalPosition.Y - MobileShipCutY));
+  end;
+  Left.SetSize(Point(Left.ClientSize.X, MobileShipCutY));
+  Ship.SetSize(Point(Ship.ClientSize.X, MobileShipCutY));
+  Right.Reparent(Body.Parent);
+  Right.SetDepth(Body.Depth);
+
+  Gap := 12;
+  Top := Bounds.Top + Gap;
+  Height := Bounds.Bottom - Bounds.Top - 2 * Gap;
+  for WithStorage := False to True do
+  begin
+    // Equipment and pilot panels use the full height; the rest of the width
+    // holds the cargo bar (and services with storage). Narrow screens shrink
+    // the two tall panels until that rest keeps the bar at its source size.
+    ShipScale := Min(GetGameMobileUiScale(1.3), Height / MobileShipCutY);
+    RightScale := Min(GetGameMobileUiScale(1.1), Height / 598);
+    Needed := Bar.ClientSize.X;
+    if WithStorage then
+      Needed := Max(Needed, Service.ClientSize.X + Storage.ClientSize.X + Gap);
+    Rest := Bounds.Right - Bounds.Left - 4 * Gap - (560 * ShipScale + 430 * RightScale);
+    if Rest < Needed then
+    begin
+      Fit := (Bounds.Right - Bounds.Left - 4 * Gap - Needed) / (560 * ShipScale + 430 * RightScale);
+      ShipScale := ShipScale * Fit;
+      RightScale := RightScale * Fit;
+      Rest := Needed;
+    end;
+    // The body's first 100 source pixels hold the use slot left of the panel.
+    PlaceControlAtScreen(Body, Point(Bounds.Left + Gap, Top), ShipScale);
+    Bridge.DisplayScale := Body.DisplayScale;
+    Bridge.SetPosition(Point(Body.LocalPosition.X + BridgeOffset.X, Body.LocalPosition.Y + BridgeOffset.Y));
+    PlaceControlAtScreen(
+        Right,
+        Point(Bounds.Left + 2 * Gap + Round(560 * ShipScale - 410 * RightScale), Top - Round(12 * RightScale)),
+        RightScale
+    );
+    X := Bounds.Right - Gap - Round(Rest);
+    BarScale := Min(Rest / Bar.ClientSize.X, GetGameMobileUiScale(2));
+    if WithStorage then
+    begin
+      SideScale := Min(
+          GetGameMobileUiScale(1.15),
+          Min((Height - Bar.ClientSize.Y * BarScale - Gap) / Max(Service.ClientSize.Y, Storage.ClientSize.Y),
+              (Rest - Gap) / (Service.ClientSize.X + Storage.ClientSize.X))
+      );
+      PlaceControlAtScreen(Service, Point(X, Top), SideScale);
+      PlaceControlAtScreen(Storage, Point(X + Round(Service.ClientSize.X * SideScale) + Gap, Top), SideScale);
+      PlaceControlAtScreen(Bar, Point(X, Top + Height - Round(Bar.ClientSize.Y * BarScale)), BarScale);
+    end
+    else
+    begin
+      BarScale := Min(BarScale, Height / Bar.ClientSize.Y);
+      PlaceControlAtScreen(Bar, Point(X, Top + (Height - Round(Bar.ClientSize.Y * BarScale)) div 2), BarScale);
+    end;
+    Layout.Body[WithStorage] := CapturePlacement(Body);
+    Layout.Right[WithStorage] := CapturePlacement(Right);
+    Layout.Bar[WithStorage] := CapturePlacement(Bar);
+    Layout.Service[WithStorage] := CapturePlacement(Service);
+    Layout.Storage[WithStorage] := CapturePlacement(Storage);
+    Layout.Bridge[WithStorage] := CapturePlacement(Bridge);
+  end;
+  ApplyMobileShipWindow(Screen, Layout, False);
+end;
+
+procedure ApplyMobileShipWindow(Screen: TMessageLoopGI; const Layout: TMobileShipLayout; Storage: Boolean);
+begin
+  RestorePlacement(Screen.GetByName('UsePanel').Parent, Layout.Body[Storage]);
+  RestorePlacement(Screen.GetByName('PanelRight').Parent, Layout.Right[Storage]);
+  RestorePlacement(Screen.GetByName('MobileHoldBar'), Layout.Bar[Storage]);
+  RestorePlacement(Screen.GetByName('SC_Panel'), Layout.Service[Storage]);
+  RestorePlacement(Screen.GetByName('MobileStorage'), Layout.Storage[Storage]);
+  RestorePlacement(Screen.GetByName('CustomBridgeInto'), Layout.Bridge[Storage]);
+  Screen.RootUiObject.UpdateAbsolutePosition;
+  Screen.RootUiObject.UpdateSubtreeHitBounds;
 end;
 
 end.

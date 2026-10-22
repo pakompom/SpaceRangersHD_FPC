@@ -159,6 +159,30 @@ uses
 
 const
   GalaxySummaryWhiteColorTag = '<color=255,255,254>';
+  // Star names and forces on a phone: about this many dp per font pixel, at
+  // most this much larger than the desktop map.
+  MobileStarLabelDp = 0.65;
+  MobileStarLabelMaxGrowth = 1.35;
+
+// Enlarges a map label around the top centre of its desktop placement.
+procedure EnlargeMobileMapLabel(LabelControl: TLabelGI);
+var
+  ParentScale, Scale: Single;
+  Centre, Top: Single;
+begin
+  ParentScale := LabelControl.Parent.GetDisplayScale;
+  Scale := Max(ParentScale, Min(GetGameMobileUiScale(MobileStarLabelDp), ParentScale * MobileStarLabelMaxGrowth));
+  if Scale <= ParentScale then
+    Exit;
+  LabelControl.Parent.UpdateAbsolutePosition;
+  Centre := LabelControl.Parent.AbsolutePosition.X + LabelControl.LocalPosition.X + LabelControl.ClientSize.X / 2;
+  Top := LabelControl.Parent.AbsolutePosition.Y + LabelControl.LocalPosition.Y;
+  PlaceControlAtScreen(
+      LabelControl,
+      MakePointF(Centre * ParentScale - LabelControl.ClientSize.X * Scale / 2, Top * ParentScale),
+      Scale
+  );
+end;
 
 constructor TfGalaxy2.Create;
 begin
@@ -592,6 +616,18 @@ begin
       NameLabel.SetText(ColoredName);
       ForceLabel.SetText(ForceText);
       ForceLabel.SetPosition(Classes.Point(NameLabel.LocalPosition.X, NameLabel.LocalPosition.Y + ForceLabel.ClientSize.Y + 2));
+      if GameMobileUiEnabled and HardwareRenderingEnabled then
+      begin
+        // The force line sits below the enlarged name, not over it.
+        ForceLabel.SetPosition(
+            Classes.Point(
+                ForceLabel.LocalPosition.X,
+                ForceLabel.LocalPosition.Y + Round(NameLabel.ClientSize.Y * (MobileStarLabelMaxGrowth - 1))
+            )
+        );
+        EnlargeMobileMapLabel(NameLabel);
+        EnlargeMobileMapLabel(ForceLabel);
+      end;
       Star.GetControlPresence(PlayerPartyPresent, CoalitionPresent, DominatorsPresent, PiratesPresent, CustomPresent);
       if CustomPresent then
         DominatorsPresent := True;

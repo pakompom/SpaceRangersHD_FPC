@@ -5,13 +5,14 @@ unit fIntroduction;
 interface
 
 uses
-  GI_MessageLoop;
+  GI_MessageLoop, GI_IntroductionLayout;
 
 type
 
   TfIntroduction = class;
 
   TfIntroduction = class(TMessageLoopGI)
+    MobileLayout: TMobileIntroductionLayout;
     GenerationProgressTimer: PCallbackTimerGI;
     TextScrollTimer: PCallbackTimerGI;
     BackgroundTimer: PCallbackTimerGI;
@@ -55,6 +56,7 @@ implementation
 
 uses
   GameDiagnostics,
+  GameWindow,
   aConst,
   aGalaxyStruct,
   Classes,
@@ -82,6 +84,7 @@ var
   I: Integer;
 begin
   inherited;
+  MobileLayout := nil;
   LogGameMessage(gllDebug, 'ui', 'Initializing layout fIntroduction');
   ViewportRect := Classes.Rect(0, 0, GameScreenWidth, GameScreenHeight);
   with GetByName('MainPanel') do
@@ -118,6 +121,8 @@ begin
   end;
   IntroductionBlinkColorA := GetStyleColorGI('Introduction.BlinkColorA', 27, 68, 98);
   IntroductionBlinkColorB := GetStyleColorGI('Introduction.BlinkColorB', 93, 152, 166);
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+    MobileLayout := TMobileIntroductionLayout.CreateForScreen(Self);
 end;
 
 procedure TfIntroduction.OnOpen;
@@ -149,7 +154,9 @@ begin
     Text := FormatText1(LocalizedText('FormIntroduction.Text'), TextHighlightColorTag, '<Player>', GetPlayer.Name)
   else
     Text := FormatText1(LocalizedText('FormIntroduction.Text'), TextHighlightColorTag, '<Player>', NewGameGenerationThread.PlayerName);
-  with GetByName('GBText') as TGraphBufGI do
+  if MobileLayout <> nil then
+    MobileLayout.SetStory(Text)
+  else with GetByName('GBText') as TGraphBufGI do
   begin
     SourceHasPerPixelAlpha := True;
     if (ExtraScreenWidth > 127) and (ExtraScreenHeight > 127) then
@@ -172,7 +179,8 @@ begin
     CancelCallbackTimer(TextScrollTimer);
     TextScrollTimer := nil;
   end;
-  TextScrollTimer := ScheduleCallbackTimer(20, 20, ScrollIntroductionText);
+  if MobileLayout = nil then
+    TextScrollTimer := ScheduleCallbackTimer(20, 20, ScrollIntroductionText);
   if BackgroundTimer <> nil then
   begin
     CancelCallbackTimer(BackgroundTimer);
@@ -263,6 +271,8 @@ begin
   if (DisplayedGenerationStage + 1 >= 1) and (DisplayedGenerationStage + 1 <= 8) then
     (GetByName(AnsiString('MCW') + IntToStr(DisplayedGenerationStage + 1)) as TLabelGI)
         .SetTextColor(CurrentPixelFormat.InterpolateRgb(IntroductionBlinkColorA, IntroductionBlinkColorB, Amount));
+  if MobileLayout <> nil then
+    MobileLayout.SetStage(DisplayedGenerationStage);
   if (NewGameGenerationThread = nil) or (not NewGameGenerationThread.IsRunning and (DisplayedGenerationStage = 8)) then
   begin
     if GenerationProgressTimer <> nil then
@@ -275,6 +285,8 @@ begin
       SetHovered(False);
       SetDisabled(False);
     end;
+    if MobileLayout <> nil then
+      MobileLayout.SetReady;
     if NewGameGenerationThread <> nil then
     begin
       NewGameGenerationThread.Free;

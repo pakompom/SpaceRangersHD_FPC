@@ -82,6 +82,12 @@ type
     MouseBlocking: Boolean;
     MouseBlockingTest: Boolean;
     TouchInteraction: TTouchInteractionGI;
+    // Its left-button handlers only maintain focus or selection, so a touch that
+    // misses a small control on this background may be retargeted to that control.
+    TouchRetargetBackground: Boolean;
+    // A touch held still on this control acts as a right click, for actions a
+    // desktop player does with the right button (such as dismissing a message).
+    TouchLongPressRightClick: Boolean;
     ScrollUpdate: Boolean;
     // Untyped runtime payloads: callers store both numbers and object addresses.
     UserValue: PtrInt;
@@ -291,6 +297,14 @@ type
     TouchPressControl: TObjectGI;
     // Suppresses the queued click after a hold, drag or cancellation, until the next touch.
     TouchPressConsumed: Boolean;
+    // A tap that missed a small control is delivered to that control's centre,
+    // in game-screen coordinates and as the recognizer packs points, until its release.
+    TouchRetargetActive: Boolean;
+    TouchRetargetPoint: TPoint;
+    TouchRetargetLParam: Integer;
+    // Pending right click of a held touch on a TouchLongPressRightClick control.
+    TouchLongPressTimer: PCallbackTimerGI;
+    TouchLongPressLParam: Integer;
     TouchScrollX, TouchScrollY: Double;
     PanWheelRemainder: Double;
     GesturePanValid: Boolean;
@@ -299,6 +313,8 @@ type
     GesturePanPosition: TPoint;
     function Run: Integer; virtual;
     procedure ProcessWindowMessage(Message: Cardinal; WParam: Cardinal; LParam: Integer); virtual;
+    // Game-screen point -> the coordinates pointer messages carry (before viewport conversion).
+    function ViewportToInputPoint(Point: TPoint): TPoint;
     function RunContinuous: Integer; virtual;
     procedure AdvanceTimerTick; virtual;
     procedure DrawFrame; virtual;
@@ -316,6 +332,8 @@ type
     procedure EndPinchGesture; virtual;
     function AccumulatePanGesture(DX, DY: Double; Position: TPoint): TPoint;
     procedure CancelTouchPress;
+    procedure CancelTouchLongPress;
+    procedure FireTouchLongPress(Timer: PCallbackTimerGI; UserData: PtrInt);
     procedure CancelPointerInput; virtual;
     procedure InitializeLayout; virtual;
     procedure UpdateActionCursor(CanTake: Boolean); virtual;
@@ -411,6 +429,7 @@ uses
   GI_Main,
   GI_Panel,
   GI_GraphBuf,
+  GI_LayoutMetrics,
   GlobalsV,
   Globals,
   GR_Main,
@@ -419,6 +438,10 @@ uses
   aMyFunction,
   GR_Sound,
   GR_Music;
+
+const
+  // How long a still touch is held before it becomes a right click.
+  TouchLongPressMs = 450;
 
 procedure PushMessageLoop(Loop: TMessageLoopGI);
 begin
@@ -1819,6 +1842,7 @@ begin
   CursorControl := nil;
   FocusedControl := nil;
   HoveredControl := nil;
+  TouchLongPressTimer := nil;
   while FirstTimer <> nil do
     CancelCallbackTimer(LastTimer);
 end;
@@ -2382,6 +2406,108 @@ begin
   Result := FindTouchPressOwner(FindTouchControl(Root, Point));
 end;
 
+function TouchPointIsInert(Root: TObjectGI; Point: TPoint): Boolean;
+var
+  Control: TObjectGI;
+begin
+  // Only a touch that would do nothing may be retargeted: empty space or a
+  // background without handlers, unless they are declared housekeeping.
+  // Worlds, maps, lists and backgrounds that act on the point keep theirs.
+  Control := FindTouchControl(Root, Point);
+  Result := True;
+  if Control = nil then
+    Exit;
+  if not Control.TouchRetargetBackground
+      and (Assigned(Control.LeftButtonDownCallback)
+      or Assigned(Control.LeftButtonUpCallback)
+      or Assigned(Control.LeftButtonDoubleClickCallback)) then
+    Exit(False);
+  while Control <> nil do
+  begin
+    if Control.GetTouchInteraction <> tiNone then
+      Exit(False);
+    Control := Control.Parent;
+  end;
+end;
+
+function FindNearbyTouchPressControl(Root: TObjectGI; Point: TPoint; out Target: TPoint): TObjectGI;
+var
+  Controls: array of TObjectGI;
+  Bounds: array of TRect;
+  Small, Reach: Single;
+  Index: Integer;
+
+  procedure Collect(Control: TObjectGI);
+  var
+    Child: TObjectGI;
+    Scale: Single;
+    R: TRect;
+    N: Integer;
+  begin
+    if not Control.Active then
+      Exit;
+    if (Control.GetTouchInteraction in [tiTap, tiHold]) and not Control.HitTestDisabled then
+    begin
+      Scale := Control.GetDisplayScale;
+      with Control.HitTestBounds do
+        R := Classes.Rect(Floor(Left * Scale), Floor(Top * Scale), Ceil(Right * Scale), Ceil(Bottom * Scale));
+      // Large controls are already easy to hit; widening them would only take
+      // touches meant for the empty space beside them.
+      if (R.Right > R.Left)
+          and (R.Bottom > R.Top)
+          and (Min(R.Right - R.Left, R.Bottom - R.Top) < Small)
+          and (Point.X >= R.Left - Reach)
+          and (Point.X < R.Right + Reach)
+          and (Point.Y >= R.Top - Reach)
+          and (Point.Y < R.Bottom + Reach)
+          // A modal window or clipping viewport in front of the centre hides it.
+          and (FindTouchPressControl(Root, Classes.Point((R.Left + R.Right) div 2, (R.Top + R.Bottom) div 2)) = Control) then
+      begin
+        N := Length(Controls);
+        SetLength(Controls, N + 1);
+        SetLength(Bounds, N + 1);
+        Controls[N] := Control;
+        Bounds[N] := R;
+      end;
+    end;
+    Child := Control.FirstChild;
+    while Child <> nil do
+    begin
+      Collect(Child);
+      Child := Child.NextSibling;
+    end;
+  end;
+
+begin
+  Result := nil;
+  Target := Point;
+  Small := GetGameMobileUiScale(44);
+  Reach := GetGameMobileUiScale(12);
+  Collect(Root);
+  Index := ChooseNearbyTouchTarget(Point, Bounds, Reach, GetGameMobileUiScale(6));
+  if Index < 0 then
+    Exit;
+  Result := Controls[Index];
+  with Bounds[Index] do
+    Target := Classes.Point((Left + Right) div 2, (Top + Bottom) div 2);
+end;
+
+function TMessageLoopGI.ViewportToInputPoint(Point: TPoint): TPoint;
+begin
+  Result := Point;
+  if AlternateViewportEnabled then
+    if ScaleViewportToWindow then
+    begin
+      Result.X := Point.X * PresentationWidth div GameScreenWidth;
+      Result.Y := Point.Y * PresentationHeight div GameScreenHeight;
+    end
+    else
+    begin
+      Inc(Result.X, ViewportOffset.X);
+      Inc(Result.Y, ViewportOffset.Y);
+    end;
+end;
+
 procedure TMessageLoopGI.ProcessWindowMessage(Message, WParam: Cardinal; LParam: Integer);
 var
   Point: TPoint;
@@ -2440,17 +2566,45 @@ begin
         and TouchPressConsumed
         and ((Message = WM_LBUTTONDOWN) or (Message = WM_LBUTTONUP) or (Message = WM_LBUTTONDBLCLK)) then
       Exit;
+    // The recognizer synthesizes the tap where the finger was; deliver it where
+    // the retargeted owner is. The release ends the retargeted tap.
+    if TouchRetargetActive
+        and ((Message = WM_MOUSEMOVE) or (Message = WM_LBUTTONDOWN) or (Message = WM_LBUTTONUP) or (Message = WM_LBUTTONDBLCLK)) then
+    begin
+      LParam := TouchRetargetLParam;
+      if Message = WM_LBUTTONUP then
+        TouchRetargetActive := False;
+    end;
     if Message = WM_GAME_TOUCH_BEGIN then
     begin
+      CancelTouchLongPress;
       CancelTouchPress;
       TouchPressConsumed := False;
       TouchPinchAllowed := False;
+      TouchRetargetActive := False;
       Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
       ConvertMousePointToViewport;
       TouchAnchor := Point;
       if WParam = MK_LBUTTON then
       begin
         TouchControl := FindTouchPressControl(RootUiObject, Point);
+        if (TouchControl = nil) and GameWindowIsMobile and TouchPointIsInert(RootUiObject, Point) then
+        begin
+          TouchControl := FindNearbyTouchPressControl(RootUiObject, Point, TouchRetargetPoint);
+          if TouchControl <> nil then
+          begin
+            LogGameMessage(
+                gllDebug,
+                'input',
+                'Touch at ' + IntToStr(Point.X) + ',' + IntToStr(Point.Y) + ' retargeted to ' + TouchControl.ClassName
+                    + ' at ' + IntToStr(TouchRetargetPoint.X) + ',' + IntToStr(TouchRetargetPoint.Y)
+            );
+            Point := ViewportToInputPoint(TouchRetargetPoint);
+            TouchRetargetLParam := PackGamePoint(Point.X, Point.Y);
+            TouchRetargetActive := True;
+            Point := TouchRetargetPoint;
+          end;
+        end;
         if TouchControl <> nil then
         begin
           TouchPressControl := TouchControl;
@@ -2459,6 +2613,15 @@ begin
           begin
             TouchPressControl := nil;
             TouchPressConsumed := False;
+            TouchRetargetActive := False;
+          end
+          else if TouchControl.TouchLongPressRightClick then
+          begin
+            if TouchRetargetActive then
+              TouchLongPressLParam := TouchRetargetLParam
+            else
+              TouchLongPressLParam := LParam;
+            TouchLongPressTimer := ScheduleCallbackTimer(TouchLongPressMs, 0, FireTouchLongPress);
           end;
         end;
       end;
@@ -2469,9 +2632,13 @@ begin
       begin
         Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
         ConvertMousePointToViewport;
+        // Small movements stay a tap on the retargeted owner; a drag cancels it.
+        if TouchRetargetActive then
+          Point := TouchRetargetPoint;
         if not TouchPressControl.TouchPressContains(Point) or (FindTouchPressControl(RootUiObject, Point) <> TouchPressControl) then
         begin
           TouchPressConsumed := True;
+          CancelTouchLongPress;
           CancelTouchPress;
         end;
       end;
@@ -2480,11 +2647,22 @@ begin
     begin
       // Physical release precedes the recognizer's synthesized down/up events.
       // Clear only the preview: AllowsTouchActivation still needs the borrowed owner.
+      // A release before the hold delay is an ordinary tap.
+      CancelTouchLongPress;
       if TouchPressControl <> nil then
         TouchPressControl.CancelTouchPress;
     end
     else if Message = WM_GAME_TOUCH_DRAG_BEGIN then
     begin
+      CancelTouchLongPress;
+      // A retargeted tap that becomes a drag behaves as if nothing had been hit.
+      if TouchRetargetActive then
+      begin
+        TouchRetargetActive := False;
+        CancelTouchPress;
+        TouchPressControl := nil;
+        TouchPressConsumed := False;
+      end;
       Point := Classes.Point(SmallInt(LParam), SmallInt(LParam shr 16));
       ConvertMousePointToViewport;
       TouchButton := WParam;
@@ -3457,6 +3635,26 @@ begin
     Control.CancelTouchPress;
 end;
 
+procedure TMessageLoopGI.CancelTouchLongPress;
+begin
+  if TouchLongPressTimer <> nil then
+    CancelCallbackTimer(TouchLongPressTimer);
+  TouchLongPressTimer := nil;
+end;
+
+procedure TMessageLoopGI.FireTouchLongPress(Timer: PCallbackTimerGI; UserData: PtrInt);
+begin
+  CancelTouchLongPress;
+  if TouchPressControl = nil then
+    Exit;
+  // The release must not also click: swallow the queued left down/up.
+  TouchPressConsumed := True;
+  TouchRetargetActive := False;
+  CancelTouchPress;
+  ProcessWindowMessage(WM_RBUTTONDOWN, MK_RBUTTON, TouchLongPressLParam);
+  ProcessWindowMessage(WM_RBUTTONUP, 0, TouchLongPressLParam);
+end;
+
 procedure TMessageLoopGI.ProcessPinchGesture(Factor: Double; Point: TPoint);
 begin
   // Only screens with an explicit zoom implementation consume pinches.
@@ -3470,8 +3668,10 @@ procedure TMessageLoopGI.CancelPointerInput;
 begin
   if TouchPinchAllowed then
     EndPinchGesture;
+  CancelTouchLongPress;
   CancelTouchPress;
   TouchPressConsumed := True;
+  TouchRetargetActive := False;
   TouchDragKind := tdNone;
   TouchScrollControl := nil;
   PanWheelRemainder := 0;

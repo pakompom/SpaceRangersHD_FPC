@@ -62,7 +62,7 @@ type
     procedure FinalizeLayout;
     function ContentLayoutHeight: Integer;
     function ContentBounds: TRect;
-    procedure FitContent(Control: TObjectGI);
+    procedure FitContent(Control: TObjectGI; MaximumScale: Single = 1.5);
     function VerticalContentOffset: Integer;
     procedure OnOpen;
     procedure OnClose;
@@ -325,13 +325,13 @@ begin
   Result := Classes.Rect(0, 0, GameScreenWidth, ContentLayoutHeight - ShipButton.Parent.ClientSize.Y);
 end;
 
-procedure TfPanelMain.FitContent(Control: TObjectGI);
+procedure TfPanelMain.FitContent(Control: TObjectGI; MaximumScale: Single);
 var
   Bounds: TRect;
 begin
   Bounds := ContentBounds;
   InflateRect(Bounds, -10, -10);
-  FitMobileControl(Control, Bounds, 1.5);
+  FitMobileControl(Control, Bounds, MaximumScale);
 end;
 
 function TfPanelMain.VerticalContentOffset: Integer;
@@ -1026,6 +1026,8 @@ begin
       Button.MouseEnterCallback := MessageMouseEnter;
       Button.MouseLeaveCallback := MessageMouseLeave;
       Button.RightButtonDownCallback := MessageRightButtonDown;
+      // Holding a message on a phone dismisses it, like the right button.
+      Button.TouchLongPressRightClick := True;
       Button.UpCallback := MessageClicked;
       Button.EnterSound := 'Sound.ButtonInfoEnter';
       Button.LeaveSound := 'Sound.ButtonInfoLeave';

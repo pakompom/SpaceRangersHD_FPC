@@ -107,6 +107,8 @@ uses
   GameDiagnostics,
   GI_GI,
   GI_Main,
+  GI_MobileSkin,
+  GameWindow,
   GI_Inspection,
   aCalc,
   Classes,
@@ -148,6 +150,7 @@ end;
 procedure TfScaner.InitializeLayout;
 var
   I: Integer;
+  Window: TObjectGI;
 begin
   inherited InitializeLayout;
   LogGameMessage(gllDebug, 'ui', 'Initializing layout fScaner');
@@ -163,6 +166,13 @@ begin
     end;
     with FindByNameRecursive('PanelRight').Parent.Parent do
       SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth div 2, LocalPosition.Y + ExtraScreenHeight div 2));
+    if GameMobileUiEnabled and HardwareRenderingEnabled then
+    begin
+      // The scanner has no live HUD; its window may use the whole screen.
+      Window := FindByNameRecursive('PanelRight').Parent.Parent;
+      FitMobileControl(Window, Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12));
+      FadeMobileWindowArt(Window, nil, MobileReadingWindowAlpha);
+    end;
     with FindByNameRecursive('RankWnd') do
       SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth div 2, LocalPosition.Y));
     with FindByNameRecursive('RewardWnd') do

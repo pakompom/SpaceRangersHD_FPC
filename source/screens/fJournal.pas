@@ -59,6 +59,8 @@ implementation
 
 uses
   GameDiagnostics,
+  GameWindow,
+  GI_MobileSkin,
   ThreadCalc,
   aCalc,
   aScript,
@@ -103,6 +105,7 @@ begin
 end;
 
 procedure TfJournal.InitializeLayout;
+var ReadingBounds, InputBounds: TRect; Window: TObjectGI;
 begin
   inherited InitializeLayout;
   MainPanel.InitializeLayout(Self);
@@ -116,6 +119,21 @@ begin
       SetPosition(Types.Point(LocalPosition.X + ExtraScreenWidth div 2, LocalPosition.Y + MainPanel.VerticalContentOffset));
   end;
   InfoPanel := GetByName('PanelInfo') as TPanelScrollBarGI;
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    // A phone needs the whole window larger, not only its text: the frame, input
+    // row and buttons grow together, and the scene shows through the artwork.
+    Window := GetByName('ButFormClose').Parent;
+    // Stay above the HUD: its frame is drawn over the window's own buttons.
+    FitMobileControl(Window, Types.Rect(12, 12, GameScreenWidth - 12, MobileScreenRect(GetByName('PM_Ship')).Top - 24));
+    FadeMobileWindowArt(Window, InfoPanel, MobileReadingWindowAlpha);
+    ScaleMobileViewport(InfoPanel, 0.8);
+    ReadingBounds := MobileScreenRect(InfoPanel);
+    InputBounds := MobileScreenRect(GetByName('TextRecord'));
+    InfoPanel.SetSize(Types.Point(InfoPanel.ClientSize.X,
+        Min(InfoPanel.ClientSize.Y, Floor((InputBounds.Top - ReadingBounds.Top - 12) / InfoPanel.GetDisplayScale))));
+    InfoPanel.UpdateScrollbarPlacement;
+  end;
 end;
 
 procedure TfJournal.OnOpen;
@@ -139,6 +157,8 @@ begin
     KeyDownCallback := MainPanelKeyDown;
     KeyUpCallback := MainPanelKeyUp;
     LeftButtonDownCallback := MainPanelMouseDown;
+    // The handler only returns focus to the text field; see TouchRetargetBackground.
+    TouchRetargetBackground := True;
   end;
   (GetByName('AddRecord') as TGraphButtonGI).UpCallback := AddRecordClicked;
   (GetByName('ButFormClose') as TGraphButtonGI).UpCallback := CloseClicked;
@@ -178,7 +198,7 @@ begin
   Galaxy.CheckIntegrityChecksum(202);
   if GetPlayer <> nil then
     GetPlayer.ScriptItemsAct(satOnLeavingForm, nil, nil, 0);
-  InfoPanel.FreeOwnedChildren;
+  InfoPanel.FreeContentChildren;
   MainPanel.OnClose;
 end;
 
@@ -232,7 +252,7 @@ end;
 procedure TfJournal.ClearEntries;
 begin
   ContentHeight := 0;
-  InfoPanel.FreeOwnedChildren;
+  InfoPanel.FreeContentChildren;
   InfoPanel.SetScrollOffset(Types.Point(0, 0));
   InfoPanel.Invalidate;
 end;
@@ -268,6 +288,8 @@ begin
   else
     Image.SetImagePath('GI,Bm.FormInfo2.' + GiResourceSuffix + 'Caption');
   Image.SetSize(Image.GetContentSize);
+  if GameMobileUiEnabled then
+    Image.SetSize(Types.Point(InfoPanel.ClientSize.X, 48));
   if Compact = 0 then
     Image.SetPosition(Types.Point(InfoPanel.ClientSize.X div 2 - Image.ClientSize.X div 2, ContentHeight))
   else
@@ -296,6 +318,12 @@ begin
     SetPositionModeW(True);
     SetTextAlignX(taxCenter);
     SetTextAlignY(tayCenterEx);
+    if GameMobileUiEnabled then
+    begin
+      SetFontName(NormalFontName);
+      SetPosition(Types.Point(0, Image.LocalPosition.Y));
+      SetSize(Types.Point(InfoPanel.ClientSize.X, 24));
+    end;
     SetText(Text);
     SetTextColor(CurrentPixelFormat.PackRgbBytes(0, 0, 0));
   end;
@@ -317,6 +345,8 @@ begin
                 Image.LocalPosition.Y - GiScalePixels(5)
             )
         );
+      if GameMobileUiEnabled then
+        SetPosition(Types.Point(LocalPosition.X, Image.LocalPosition.Y + 25));
       SetKind(gbkDisable);
       SetPositionModeW(True);
       HelpText := MessageText;
@@ -345,6 +375,8 @@ begin
                   Image.LocalPosition.Y - GiScalePixels(3)
               )
           );
+          if GameMobileUiEnabled then
+            SetPosition(Types.Point(LocalPosition.X, Image.LocalPosition.Y + 25));
           SetKind(gbkDisable);
           SetPositionModeW(True);
           UpCallback := DeleteEntryClicked;
@@ -376,13 +408,18 @@ begin
     end
     else
       SetFontName(FontName);
+    if GameMobileUiEnabled then
+      SetFontName(SmoothIntroFontName);
     SetPosition(Types.Point(0, ContentHeight));
     SetSize(Types.Point(InfoPanel.ClientSize.X, 1));
     SetWordWrapEnabled(True);
     SetPositionModeW(True);
     if JournalSelected then
       SetAutoHeightPadding(8);
-    SetTextAlignX(Align);
+    if GameMobileUiEnabled and (Align = taxAuto) then
+      SetTextAlignX(taxLeft)
+    else
+      SetTextAlignX(Align);
     SetTextAlignY(tayAuto);
     SetText(Text);
     SetTextColor(CurrentPixelFormat.PackRgbBytes(0, 0, 0));
@@ -647,9 +684,11 @@ begin
         1,
         0
     );
-    AddEntryText(' .', taxCenter, '');
+    if not GameMobileUiEnabled then
+      AddEntryText(' .', taxCenter, '');
     AddEntryText(Entry.Text, taxAuto, '');
-    AddEntryText(' .', taxCenter, '');
+    if not GameMobileUiEnabled then
+      AddEntryText(' .', taxCenter, '');
     AddEntrySpacing(10);
   end;
   FinishEntries;
@@ -675,9 +714,11 @@ begin
         1,
         I
     );
-    AddEntryText(' .', taxCenter, '');
+    if not GameMobileUiEnabled then
+      AddEntryText(' .', taxCenter, '');
     AddEntryText(Entry.Text, taxAuto, '');
-    AddEntryText(' .', taxCenter, '');
+    if not GameMobileUiEnabled then
+      AddEntryText(' .', taxCenter, '');
     AddEntrySpacing(10);
     Inc(Displayed);
   end;
@@ -687,8 +728,9 @@ begin
         taxCenter,
         SmallFontName
     );
-  for I := 1 to 12 do
-    AddEntryText(' .', taxCenter, '');
+  if not GameMobileUiEnabled then
+    for I := 1 to 12 do
+      AddEntryText(' .', taxCenter, '');
   FinishEntries;
 end;
 

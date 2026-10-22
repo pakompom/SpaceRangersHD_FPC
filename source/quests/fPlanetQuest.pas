@@ -495,6 +495,8 @@ begin
   TextLabel.SetTextAlignY(tayCenterEx);
   TextLabel.SetTextColor(GetTextColor(QuestStyleIndex));
   Panel.SetSize(Classes.Point(Panel.ClientSize.X, GiScalePixelsEx(2, 1) * 2 + TextLabel.ClientSize.Y));
+  if MobileArtwork <> nil then
+    Panel.SetSize(Point(Panel.ClientSize.X, Max(Panel.ClientSize.Y, Ceil(44 * GetGameMobileUiScale / MobileTextScale))));
   TextLabel.SetSize(Classes.Point(TextLabel.ClientSize.X, Panel.ClientSize.Y));
   Highlight.SetSize(Panel.ClientSize);
   Inc(NextChoiceTop, Panel.ClientSize.Y);
@@ -563,6 +565,8 @@ begin
   TextLabel.SetTextAlignY(tayCenterEx);
   TextLabel.SetTextColor(GetDisabledTextColor(QuestStyleIndex));
   Panel.SetSize(Classes.Point(Panel.ClientSize.X, GiScalePixelsEx(2, 1) * 2 + TextLabel.ClientSize.Y));
+  if MobileArtwork <> nil then
+    Panel.SetSize(Point(Panel.ClientSize.X, Max(Panel.ClientSize.Y, Ceil(44 * GetGameMobileUiScale / MobileTextScale))));
   TextLabel.SetSize(Panel.ClientSize);
   Highlight.SetSize(Panel.ClientSize);
   Inc(NextChoiceTop, Panel.ClientSize.Y);
@@ -1305,7 +1309,8 @@ begin
       Text.SetTextAlignY(tayAuto);
       Text.SetSize(Point(Panel.ClientSize.X - 20, 1));
       Child.SetPosition(Point(0, NextChoiceTop));
-      Child.SetSize(Point(Panel.ClientSize.X, Text.ClientSize.Y + GiScalePixelsEx(2, 1) * 2));
+      Child.SetSize(Point(Panel.ClientSize.X, Max(Text.ClientSize.Y + GiScalePixelsEx(2, 1) * 2,
+          Ceil(44 * GetGameMobileUiScale / MobileTextScale))));
       Text.SetTextAlignY(tayCenterEx);
       Text.SetSize(Point(Text.ClientSize.X, Child.ClientSize.Y));
       Child.FirstChild.SetSize(Child.ClientSize);

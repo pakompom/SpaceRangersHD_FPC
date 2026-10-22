@@ -42,6 +42,8 @@ uses
   SysUtils,
   Types,
   GameInput,
+  GameWindow,
+  Math,
   GR_Main,
   Globals,
   GlobalsV,
@@ -193,6 +195,7 @@ end;
 procedure TfPlanet.RefreshPlanetInfo;
 var
   Window: TWindowGI;
+  Scale: Single;
 begin
   Window := GetByName('PanelInfo') as TWindowGI;
   with GetByName('PanelInfo_Name') as TLabelGI do
@@ -239,6 +242,12 @@ begin
   end;
   with GetByName('PanelInfo_Text') as TLabelGI do
     SetTextAlignX(taxLeft);
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    // The card's small font needs about one dp per source pixel on a phone.
+    Scale := Min(GetGameMobileUiScale(1.1), GameScreenWidth * 0.32 / Window.ClientSize.X);
+    PlaceControlAtScreen(Window, Classes.Point(GameScreenWidth - 12 - Round(Window.ClientSize.X * Scale), 12), Scale);
+  end;
 end;
 
 procedure TfPlanet.StartTextQuest(Sender: TObjectGI);

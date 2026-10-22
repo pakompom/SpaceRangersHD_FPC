@@ -12,6 +12,7 @@ uses
   GI_Label,
   GI_MessageLoop,
   GI_Panel,
+  GI_CharacterLayout,
   Types,
   aGalaxyStruct;
 
@@ -22,6 +23,7 @@ type
   TNewGameSliderEvent = procedure(Sender: TCountBarGI) of object;
 
   TfGameSettings2 = class(TMessageLoopGI)
+    MobileLayout: TMobileCharacterLayout;
     CollapsedLevelPanelTop: Integer;
     LevelPanelTop: Integer;
     LevelPanelTimer: PCallbackTimerGI;
@@ -126,6 +128,7 @@ uses
   fGameSettings,
   Classes,
   GameInput,
+  GameWindow,
   SysUtils,
   Math,
   EC_Str,
@@ -160,6 +163,7 @@ var
   Text: WideString;
   Race: TOwnerId;
 begin
+  MobileLayout := nil;
   inherited InitializeLayout;
   LogGameMessage(gllDebug, 'ui', 'Initializing layout fGameSettings2');
   for Race := oiMaloc to oiGaal do
@@ -395,6 +399,8 @@ begin
     DownCallback := ExtendedGroupClicked;
     ExtendedGroupButtonTops[2] := LocalPosition.Y;
   end;
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+    MobileLayout := TMobileCharacterLayout.CreateForScreen(Self);
 end;
 
 procedure TfGameSettings2.OnOpen;
@@ -863,6 +869,8 @@ begin
   Owner.VerticalScrollBar.SetPageSize(Owner.ClientSize.Y);
   ActiveExtendedGroup := 0;
   RefreshExtendedGroup;
+  if MobileLayout <> nil then
+    MobileLayout.Open(IronWillImage, IronWillLabel);
 end;
 
 procedure TfGameSettings2.OnClose;
@@ -992,6 +1000,11 @@ end;
 
 procedure TfGameSettings2.ToggleLevelPanel(Sender: TObjectGI);
 begin
+  if MobileLayout <> nil then
+  begin
+    MobileLayout.ShowPage(2);
+    Exit;
+  end;
   if LevelPanelTimer = nil then
     LevelPanelTimer := ScheduleCallbackTimer(10, 10, AnimateLevelPanel);
   GetByName('LevelOpen').SetActive(not GetByName('LevelOpen').Active);
@@ -1139,6 +1152,8 @@ var
 begin
   with GetByName('SkillCur') do
     SetPosition(Classes.Point(68 + 55 * Ord(StartingSkills[SelectedSkillSlot]), 109));
+  if MobileLayout <> nil then
+    MobileLayout.UpdateCursor('SkillCur', 'Skill' + IntToStr(Ord(StartingSkills[SelectedSkillSlot]) + 1));
   Number := 1;
   for Skill := Low(TPilotSkill) to High(TPilotSkill) do
   begin
@@ -1159,7 +1174,7 @@ var
   Slot: Integer;
   Skill: TPilotSkill;
 begin
-  if (GetByName('LevelOpen') as TGraphButtonGI).Active then
+  if (MobileLayout <> nil) or (GetByName('LevelOpen') as TGraphButtonGI).Active then
   begin
     Skill := TPilotSkill(ExtractDigitsToIntW(Sender.ControlName) - 1);
     for Slot := 0 to 1 do
@@ -1196,13 +1211,15 @@ begin
       end;
     (GetByName(AnsiString('Item') + IntToStr(Item)) as TGraphButtonGI).SetDown(Selected);
   end;
+  if MobileLayout <> nil then
+    MobileLayout.UpdateCursor('ItemCur', 'Item' + IntToStr(StartingItemChoices[SelectedItemSlot]));
 end;
 
 procedure TfGameSettings2.StartingItemClicked(Sender: TObjectGI);
 var
   Slot, Item: Integer;
 begin
-  if (GetByName('LevelOpen') as TGraphButtonGI).Active then
+  if (MobileLayout <> nil) or (GetByName('LevelOpen') as TGraphButtonGI).Active then
   begin
     Item := ExtractDigitsToIntW(Sender.ControlName);
     for Slot := 0 to 1 do
@@ -1227,7 +1244,7 @@ begin
     for Level := 1 to 4 do
       with FindControlByPath('Level' + IntToStr(Level) + '_' + IntToStr(I)) as TGraphButtonGI do
       begin
-        SetActive(LevelPanelTop > CollapsedLevelPanelTop);
+        SetActive((MobileLayout <> nil) or (LevelPanelTop > CollapsedLevelPanelTop));
         SetDown(DifficultyLevels[I] = Byte(UserIndex));
       end;
     if DifficultyLevels[I] <> DifficultyLevels[1] then
@@ -1421,6 +1438,8 @@ begin
         SetActive(False);
       with GetByName('PanelExtended') do
         SetActive(True);
+      if MobileLayout <> nil then
+        MobileLayout.ShowPage(3);
     end
     else
     begin
@@ -1511,6 +1530,7 @@ end;
 
 procedure TfGameSettings2.CancelClicked(Sender: TObjectGI);
 begin
+  if (MobileLayout <> nil) and MobileLayout.CloseHelp then Exit;
   if GetByName('PanelExtended').Active then
     ToggleExtendedSettings(nil)
   else
@@ -1551,6 +1571,8 @@ begin
   Text := LocalizedColorText('FormGameSet2.' + OwnerInfo[RaceToOwner(PlayerRace)].InternalName + '.Char' + IntToStr(CharacterPreset));
   ReplaceTextToken(Text, '<Name>', TrimWideString((GetByName('PlayerName') as TEditGI).Text), TextHighlightColorTag);
   (GetByName('Info') as TLabelGI).SetText(Text);
+  if MobileLayout <> nil then
+    MobileLayout.UpdateDescription;
 end;
 
 function TfGameSettings2.ValidatePlayerName(Name: WideString): Boolean;
@@ -1590,12 +1612,19 @@ begin
   if Result and not PlayerNameValid then
     HelpLabel.SetActive(False);
   PlayerNameValid := Result;
+  if MobileLayout <> nil then
+    MobileLayout.NameValidityChanged(Result);
 end;
 
 procedure TfGameSettings2.ShowControlHelp(Sender: TObjectGI; Show: Boolean);
 var
   HelpLabel: TLabelGI;
 begin
+  if MobileLayout <> nil then
+  begin
+    if Show then MobileLayout.ShowHelp(Sender);
+    Exit;
+  end;
   if PlayerNameValid then
   begin
     HelpLabel := GetByName('LabelHelp') as TLabelGI;
@@ -1647,6 +1676,8 @@ begin
     SetActive(True);
   with GetByName('PanelSkills') do
     SetActive(True);
+  if MobileLayout <> nil then
+    MobileLayout.ShowPage(2);
 end;
 
 procedure TfGameSettings2.ResetExtendedSettingsClicked(Sender: TObjectGI);
@@ -1748,6 +1779,7 @@ begin
     end;
   Result := TLabelGI.Create(ExtendedGroupPanels[BuildExtendedGroup]);
   Result.SetFontName(NormalFontName);
+  if MobileLayout <> nil then Result.SetFontName(SmoothHugeFontName);
   Result.SetPositionModeW(False);
   Result.SetPosition(Classes.Point(0, ExtendedGroupNextY[BuildExtendedGroup]));
   Result.SetSize(Classes.Point(ExtendedGroupPanels[BuildExtendedGroup].ClientSize.X, 1));
@@ -1759,6 +1791,8 @@ begin
   Result.SetTextAlignY(tayTop);
   Result.SetSize(Classes.Point(Result.ClientSize.X, Result.ClientSize.Y + 1));
   Inc(ExtendedGroupNextY[BuildExtendedGroup], 2);
+  if MobileLayout <> nil then
+    Inc(ExtendedGroupNextY[BuildExtendedGroup], Result.ClientSize.Y + 4);
 end;
 
 procedure TfGameSettings2.AddExtendedOptionChoice(Value: Integer; Caption: WideString; Selected, Disabled: Boolean);
@@ -1770,6 +1804,7 @@ begin
   Indent := GiScalePixelsEx(50, 30);
   CaptionLabel := TLabelGI.Create(ExtendedGroupPanels[BuildExtendedGroup]);
   CaptionLabel.SetFontName(NormalFontName);
+  if MobileLayout <> nil then CaptionLabel.SetFontName(SmoothHugeFontName);
   CaptionLabel.SetPositionModeW(False);
   CaptionLabel.SetPosition(Classes.Point(0, ExtendedGroupNextY[BuildExtendedGroup]));
   CaptionLabel.SetSize(Classes.Point(ExtendedGroupPanels[BuildExtendedGroup].ClientSize.X - Indent, 1));
@@ -1801,6 +1836,13 @@ begin
       )
   );
   ChoiceImage.SetSize(ChoiceImage.GetContentSize);
+  if MobileLayout <> nil then
+  begin
+    ChoiceImage.SetSize(Classes.Point(44, 44));
+    ChoiceImage.SetPosition(
+        Classes.Point(ExtendedGroupPanels[BuildExtendedGroup].ClientSize.X - Indent - 44, ExtendedGroupNextY[BuildExtendedGroup])
+    );
+  end;
   ChoiceImage.SetImageKindY(ikyCenter);
   if not Disabled then
   begin
@@ -1892,6 +1934,11 @@ begin
   Slider.SetPositionInternal(Position);
   Slider.SetName(CurrentExtendedOption);
   Slider.UserIndex := PtrInt(ValueLabel);
+  if MobileLayout <> nil then
+  begin
+    PrepareMobileCharacterSlider(Slider);
+    TObjectGI(Slider).SetPosition(Classes.Point(0, ExtendedGroupNextY[BuildExtendedGroup]));
+  end;
   ExtendedGroupNextY[BuildExtendedGroup] := ExtendedGroupNextY[BuildExtendedGroup] + Slider.ClientSize.Y + GiScalePixels(6);
   Callback(Slider);
 end;

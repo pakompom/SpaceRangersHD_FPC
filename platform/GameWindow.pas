@@ -44,6 +44,12 @@ function GameWindowHasSystemCursor: Boolean;
 function GamePointerCursorVisible: Boolean;
 function GameWindowIsMobile: Boolean;
 function GameWindowIsFullscreenOnly: Boolean;
+// Android: shows the on-screen keyboard for a text field, placing SDL's editor
+// at Bounds (input coordinates, as pointer messages report them) so the system
+// can keep the field visible. The Controls keyboard button reuses these bounds
+// until ForgetGameTextInputBounds. Other platforms ignore both calls.
+procedure ShowGameTextInput(const Bounds: TRect);
+procedure ForgetGameTextInputBounds;
 // Commit layout policy only when rebuilding the control tree. Live docking
 // changes remain pending while a dialog or screen delays the rebuild.
 procedure ConfigureGameUi(Mode: TGameUiMode);
@@ -156,6 +162,8 @@ var
 {$IFDEF ANDROID}
 var
   AndroidKeyboardSession: Boolean;
+  // Window coordinates of the focused text field; W = 0 when unknown.
+  AndroidTextInputRect: TSDL_Rect;
 {$ENDIF}
 
 {$IFDEF SWITCH}
@@ -925,6 +933,55 @@ begin
   Result := Types.Point(Floor((X - OffsetX) / Scale), Floor((Y - OffsetY) / Scale));
 end;
 
+// The inverse of WindowPoint, for handing input coordinates back to SDL.
+function LogicalWindowPoint(X, Y: Integer): TPoint;
+var
+  Scale: Double;
+  OffsetX, OffsetY: Integer;
+  Presentation: TGamePresentation;
+begin
+  if GameWindowUsesNativeRaster then
+  begin
+    Presentation := CalculateGamePresentation(GetGameDisplayMetrics, LogicalWidth, LogicalHeight);
+    Exit(Presentation.LogicalToWindow(X, Y));
+  end;
+  WindowTransform(Scale, OffsetX, OffsetY);
+  Result := Types.Point(Round(X * Scale) + OffsetX, Round(Y * Scale) + OffsetY);
+end;
+
+procedure ShowGameTextInput(const Bounds: TRect);
+{$IFDEF ANDROID}
+var
+  TopLeft, BottomRight: TPoint;
+{$ENDIF}
+begin
+{$IFDEF ANDROID}
+  if AppInBackground or (GameSDLWindow = nil) then
+    Exit;
+  TopLeft := LogicalWindowPoint(Bounds.Left, Bounds.Top);
+  BottomRight := LogicalWindowPoint(Bounds.Right, Bounds.Bottom);
+  AndroidTextInputRect.X := TopLeft.X;
+  AndroidTextInputRect.Y := TopLeft.Y;
+  AndroidTextInputRect.W := Max(1, BottomRight.X - TopLeft.X);
+  AndroidTextInputRect.H := Max(1, BottomRight.Y - TopLeft.Y);
+  // An open keyboard keeps its editor; SDL reads the rectangle when it shows one.
+  if AndroidKeyboardSession and (SDL_IsTextInputActive <> 0) then
+    Exit;
+  SDL_SetTextInputRect(@AndroidTextInputRect);
+  // The same session as the Controls keyboard button: Back or that button ends it.
+  SDL_SetHint('SDL_ENABLE_SCREEN_KEYBOARD', '1');
+  SDL_StartTextInput;
+  AndroidKeyboardSession := True;
+{$ENDIF}
+end;
+
+procedure ForgetGameTextInputBounds;
+begin
+{$IFDEF ANDROID}
+  AndroidTextInputRect := Default(TSDL_Rect);
+{$ENDIF}
+end;
+
 function PollGameMessage(out Message: TGameMessage): Boolean;
 var
   Event: TSDL_Event;
@@ -1027,9 +1084,12 @@ begin
         SDL_StopTextInput;
         Continue;
       end;
-      InputRect := Default(TSDL_Rect);
-      InputRect.W := 400;
-      InputRect.H := 40;
+      InputRect := AndroidTextInputRect;
+      if InputRect.W = 0 then
+      begin
+        InputRect.W := 400;
+        InputRect.H := 40;
+      end;
       SDL_SetTextInputRect(@InputRect);
       // Leave keyboard management enabled until Back or the next button press
       // stops input and releases the hidden Java editor and its old contents.

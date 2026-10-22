@@ -66,7 +66,9 @@ implementation
 uses
   GlobalsV,
   SysUtils,
+  Math,
   GameInput,
+  GameWindow,
   EC_Cache,
   GR_Main,
   GR_GraphBuf,
@@ -200,10 +202,25 @@ begin
 end;
 
 procedure TEditGI.ProcessLeftButtonDown(KeyState: Cardinal; Point: TPoint);
+var
+  Scale: Single;
+  Bounds: TRect;
 begin
   inherited ProcessLeftButtonDown(KeyState, Point);
   if Active = True then
+  begin
     MessageLoop.SetFocusedControl(Self);
+    // A finger on a text field asks for the on-screen keyboard beside that field.
+    if GameWindowIsMobile and GamePointerInputIsTouch and (MessageLoop.FocusedControl = Self) then
+    begin
+      Scale := GetDisplayScale;
+      Bounds := Rect(Floor(HitTestBounds.Left * Scale), Floor(HitTestBounds.Top * Scale),
+          Ceil(HitTestBounds.Right * Scale), Ceil(HitTestBounds.Bottom * Scale));
+      Bounds.TopLeft := MessageLoop.ViewportToInputPoint(Bounds.TopLeft);
+      Bounds.BottomRight := MessageLoop.ViewportToInputPoint(Bounds.BottomRight);
+      ShowGameTextInput(Bounds);
+    end;
+  end;
 end;
 
 procedure TEditGI.OnFocusGained;
@@ -218,6 +235,7 @@ procedure TEditGI.OnFocusLost;
 begin
   inherited OnFocusLost;
   HasFocus := False;
+  ForgetGameTextInputBounds;
   if Assigned(FocusLostCallback) then
     FocusLostCallback(Self);
   Invalidate;

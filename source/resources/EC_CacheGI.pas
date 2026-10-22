@@ -303,9 +303,9 @@ begin
     if (Separator > 0)
         and TryStrToInt(Copy(HudDimensions, 1, Separator - 1), HudWidth)
         and TryStrToInt(Copy(HudDimensions, Separator + 1, MaxInt), HudHeight)
-        and (HudWidth >= 1024)
+        and (HudWidth >= 880)
         and (HudWidth <= LayoutWidth)
-        and (HudHeight >= 480)
+        and (HudHeight >= 400)
         and (HudHeight <= LayoutHeight) then
       HudKey := ResourceKey;
   end;

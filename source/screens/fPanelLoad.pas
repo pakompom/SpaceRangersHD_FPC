@@ -68,6 +68,8 @@ implementation
 
 uses
   GameDiagnostics,
+  GameWindow,
+  GI_Main,
   Classes,
   GR_Main,
   Globals,
@@ -91,6 +93,7 @@ procedure TfPanelLoad.InitializeLayout(Screen: TMessageLoopGI);
 var
   I: Integer;
   Panel: TObjectGI;
+  Scale: Single;
 begin
   Self.Screen := Screen;
   LogGameMessage(gllDebug, 'ui', 'Initializing layout fPanelLoad');
@@ -114,6 +117,17 @@ begin
       SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth div 2, LocalPosition.Y + ExtraScreenHeight div 2));
     with Panel.FindByNameRecursive('PLProgress') do
       SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth div 2, LocalPosition.Y + ExtraScreenHeight div 2));
+    if GameMobileUiEnabled and HardwareRenderingEnabled then
+    begin
+      Scale := GetGameMobileUiScale;
+      with Panel.FindByNameRecursive('PLProgress') as TLabelGI do
+      begin
+        SetFontName(SmoothIntroFontName);
+        SetSize(Classes.Point(160, 30));
+        PlaceControlAtScreen(Panel.FindByNameRecursive('PLProgress'), Classes.Point((GameScreenWidth - Round(160 * Scale)) div 2,
+            GameScreenHeight - Round(64 * Scale)), Scale);
+      end;
+    end;
     with Panel.FindByNameRecursive('PLBar') do
       SetActive(False);
     LayoutAdjusted := True;

@@ -187,7 +187,12 @@ public final class GameActivity extends SDLActivity {
             mouse.setText(textContext.getString(right ? R.string.controls_right_click_on
                                                       : R.string.controls_right_click));
         });
-        button(row, R.string.controls_keyboard).setOnClickListener(v -> nativeToggleKeyboard());
+        button(row, R.string.controls_keyboard).setOnClickListener(v -> {
+            // Close the panel first: while it is laid out, Android does not pan the
+            // game to keep the focused text field visible above the keyboard.
+            scroll.setVisibility(View.GONE);
+            nativeToggleKeyboard();
+        });
         row = row();
         Button inspect = button(row, R.string.controls_hover);
         if (hover)

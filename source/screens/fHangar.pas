@@ -46,6 +46,7 @@ type
     procedure OnClose; override;
     procedure SelectMusic; override;
     procedure InitializeLayout; override;
+    procedure PrepareMobileHangar;
     procedure ExecuteUiCode(Block: TBlockParEC; Key: Cardinal); override;
     constructor Create;
     destructor Destroy; override;
@@ -110,6 +111,9 @@ uses
   aSaveLoad,
   aScript,
   GI_Main,
+  GI_MobileSkin,
+  GI_Panel,
+  GameWindow,
   GI_Inspection,
   GI_MessageBox,
   EC_Cache,
@@ -233,6 +237,76 @@ begin
   (GetByName('ButRefuel') as TGraphButtonGI).UpCallback := RefuelClicked;
   (GetByName('ButTakeOff') as TGraphButtonGI).UpCallback := TakeOffClicked;
   (GetByName('ButClose') as TGraphButtonGI).UpCallback := PlanetPanel.PlanetClicked;
+  if GameMobileUiEnabled and HardwareRenderingEnabled and MobileSideBySideFits then
+    PrepareMobileHangar;
+end;
+
+procedure TfHangar.PrepareMobileHangar;
+const
+  PadNames: array[0..14] of WideString = (
+      'OpenImage', 'AnimOpen', 'AnimRnd', 'AnimRepair', 'AnimFuel',
+      'Ship0', 'Ship1', 'Ship2', 'Ship3', 'Ship4', 'Ship5', 'Ship6', 'Ship7', 'Ship8', ''
+  );
+var
+  Root, Pad, Up, Down, Control: TObjectGI;
+  Union, Bounds: TRect;
+  I, Gap, Height, Right: Integer;
+  PadScale, UpScale, DownScale: Single;
+begin
+  // The pads, the system report and the buttons share one 1024 px column on
+  // a desktop. A phone has room beside the pads: put the report and larger
+  // buttons there, each sized for reading and touch.
+  Root := GetByName('MainPanel');
+  Union := Classes.Rect(MaxInt, MaxInt, -MaxInt, -MaxInt);
+  for I := 0 to High(PadNames) - 1 do
+    with GetByName(PadNames[I]) do
+      Union := Classes.Rect(
+          Min(Union.Left, LocalPosition.X), Min(Union.Top, LocalPosition.Y),
+          Max(Union.Right, LocalPosition.X + ClientSize.X), Max(Union.Bottom, LocalPosition.Y + ClientSize.Y)
+      );
+  Pad := TPanelGI.Create(Root);
+  Pad.SetName('MobileHangarPads');
+  Pad.SetDepth(GetByName('OpenImage').Depth);
+  Pad.SetPosition(Union.TopLeft);
+  Pad.SetSize(Classes.Point(Union.Right - Union.Left, Union.Bottom - Union.Top));
+  for I := 0 to High(PadNames) - 1 do
+  begin
+    Control := GetByName(PadNames[I]);
+    Control.Reparent(Pad);
+    Control.SetPosition(Classes.Point(Control.LocalPosition.X - Union.Left, Control.LocalPosition.Y - Union.Top));
+  end;
+  Up := GetByName('PanelUp');
+  Down := GetByName('PanelDown');
+  Bounds := MainPanel.ContentBounds;
+  Gap := 12;
+  Height := Bounds.Bottom - Bounds.Top - 2 * Gap;
+  PadScale := Min(GetGameMobileUiScale(1.3), Height / Pad.ClientSize.Y);
+  Right := Bounds.Right - Bounds.Left - 3 * Gap - Round(Pad.ClientSize.X * PadScale);
+  if Right < Up.ClientSize.X then
+  begin
+    PadScale := (Bounds.Right - Bounds.Left - 3 * Gap - Up.ClientSize.X) / Pad.ClientSize.X;
+    Right := Up.ClientSize.X;
+  end;
+  UpScale := Min(GetGameMobileUiScale(1.4), Right / Up.ClientSize.X);
+  DownScale :=
+      Min(GetGameMobileUiScale(2.2), Min(Right / Down.ClientSize.X, (Height - Up.ClientSize.Y * UpScale - Gap) / Down.ClientSize.Y));
+  PlaceControlAtScreen(
+      Pad,
+      Classes.Point(Bounds.Left + Gap, Bounds.Top + Gap + (Height - Round(Pad.ClientSize.Y * PadScale)) div 2),
+      PadScale
+  );
+  Union.Left := Bounds.Right - Gap - Right;
+  PlaceControlAtScreen(Up, Classes.Point(Union.Left + (Right - Round(Up.ClientSize.X * UpScale)) div 2, Bounds.Top + Gap), UpScale);
+  PlaceControlAtScreen(
+      Down,
+      Classes.Point(
+          Union.Left + (Right - Round(Down.ClientSize.X * DownScale)) div 2,
+          Bounds.Top + 2 * Gap + Round(Up.ClientSize.Y * UpScale)
+      ),
+      DownScale
+  );
+  RootUiObject.UpdateAbsolutePosition;
+  RootUiObject.UpdateSubtreeHitBounds;
 end;
 
 procedure TfHangar.OnOpen;

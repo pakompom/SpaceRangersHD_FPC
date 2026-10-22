@@ -55,6 +55,11 @@ type
     TouchItemId, TouchItemTurn: Integer;
     TouchItemStar: TStar;
     TouchItemWasPickupTarget: Boolean;
+    // A touch has no hover: the first tap on a ship that would get a risky
+    // order shows its card, and only a second tap on it gives the order.
+    TouchConfirmObject: TObject;
+    TouchConfirmTurn: Integer;
+    function TouchOrderNeedsConfirm(Obj: TObject): Boolean;
     procedure ApplySpaceZoom(Scale: Double);
     procedure UpdateSpaceZoom;
     function TouchItemInspectionEnabled: Boolean;
@@ -214,6 +219,7 @@ type
     procedure ClearMapAnimations;
     procedure MapAnimationFinished(Sender: TObjectGI);
     function FindObjectAtCursor: TObject;
+    function FindObjectAtCursorPoint: TObject;
     procedure QueueInterfaceImages;
     procedure ShowLargeHelp(const Text: WideString);
     procedure HideLargeHelp;
@@ -1051,6 +1057,60 @@ begin
           and (PlayerStar.Items.IndexOf(TouchItem) >= 0)
           and (TouchItem.Id = TouchItemId)
           and (GetPlayer.HasPickupTarget(TouchItem) = TouchItemWasPickupTarget);
+end;
+
+function TfStarMap.TouchOrderNeedsConfirm(Obj: TObject): Boolean;
+var
+  Index: Integer;
+  Text: WideString;
+  Russian: Boolean;
+begin
+  Result := False;
+  if not GamePointerInputIsTouch or GamePointerInputIsTouchHover or (Mode <> smmOrders) or not (Obj is TShip) then
+    Exit;
+  if ScannerSelectionActive or TalkSelectionActive or InterceptorSelectionActive or CustomSelectionActive then
+    Exit;
+  Russian := LowerCaseWideString(SelectedLanguage) = 'russian';
+  if Obj = GetPlayer then
+  begin
+    // Tapping the own ship stops it and drops its route.
+    if GetPlayer.Order = soNone then
+      Exit;
+    if Russian then
+      Text := 'Коснись корабля ещё раз, чтобы остановиться'
+    else
+      Text := 'Tap the ship again to stop';
+  end
+  else
+  begin
+    Result := False;
+    for Index := 0 to 4 do
+      if SelectedWeapons[Index] then
+        Result := True;
+    // Firing at a non-hostile ship or station turns its side against you.
+    // A ship that cannot be a target gets the game's own refusal instead.
+    if not Result
+        or (TShip(Obj).GetRelationLevelToShip(GetPlayer) = rlHostile)
+        or not GetPlayer.CanSelectShipTarget(TShip(Obj)) then
+    begin
+      Result := False;
+      Exit;
+    end;
+    if Russian then
+      Text := 'Это не враг. Коснись ещё раз, чтобы атаковать'
+    else
+      Text := 'Not an enemy. Tap again to attack';
+  end;
+  Result := (TouchConfirmObject <> Obj) or (TouchConfirmTurn <> Galaxy.CurrentTurn);
+  if Result then
+  begin
+    TouchConfirmObject := Obj;
+    TouchConfirmTurn := Galaxy.CurrentTurn;
+    ShowObjectInfo(Obj);
+    ShowLargeHelp(Text);
+  end
+  else
+    TouchConfirmObject := nil;
 end;
 
 procedure TfStarMap.ClearTouchItem;
@@ -2377,6 +2437,51 @@ begin
 end;
 
 function TfStarMap.FindObjectAtCursor: TObject;
+const
+  // Finger slop around the touch point, in dp; nearer rings win.
+  TouchObjectReachDp = 20;
+  Directions: array[0..7, 0..1] of Integer = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1));
+var
+  Origin: TPoint;
+  Ring, Direction, Reach: Integer;
+  Candidate: TObject;
+begin
+  Result := FindObjectAtCursorPoint;
+  // Ships, loot, asteroids and missiles are hit pixel-exactly: a fingertip
+  // easily misses them. A touch that hit nothing tries the points around it.
+  if (Result <> nil) or (Mode <> smmOrders) or not GameWindowIsMobile
+      or not GamePointerInputIsTouch or GamePointerInputIsTouchHover or (CursorControl = nil) then
+    Exit;
+  Origin := CursorControl.LocalPosition;
+  if MainPanel.BackgroundImage.HitTestPixel(Origin) or IsMapPointBlocked(MapControls, Origin) then
+    Exit;
+  Reach := Round(TouchObjectReachDp * GetGameMobileUiScale);
+  try
+    for Ring := 1 to 3 do
+      for Direction := 0 to High(Directions) do
+      begin
+        CursorControl.LocalPosition := Classes.Point(
+            Origin.X + Directions[Direction, 0] * Reach * Ring div 3,
+            Origin.Y + Directions[Direction, 1] * Reach * Ring div 3
+        );
+        Candidate := FindObjectAtCursorPoint;
+        // Stations are large and a near tap on one would dock: not probed.
+        if ((Candidate is TShip) and not (TShip(Candidate).TypeId in [rstRangerCenter..rstCustomStation]))
+            or (Candidate is TItem) or (Candidate is TAsteroid) or (Candidate is TMissile) then
+        begin
+          Result := Candidate;
+          Exit;
+        end;
+      end;
+  finally
+    CursorControl.LocalPosition := Origin;
+    // Keep the hit description consistent with the original point.
+    if Result = nil then
+      FindObjectAtCursorPoint;
+  end;
+end;
+
+function TfStarMap.FindObjectAtCursorPoint: TObject;
 var
   Index, Count: Integer;
   Ship: TShip;
@@ -3163,6 +3268,10 @@ begin
       Exit;
     end;
   end;
+  if TouchOrderNeedsConfirm(CursorObject) then
+    Exit;
+  if not (CursorObject is TShip) then
+    TouchConfirmObject := nil;
   // Consume before the native action or a modal transition, never on hover.
   ClearTouchItem;
   ScanUnresolved := ScannerSelectionActive;

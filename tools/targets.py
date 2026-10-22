@@ -1,6 +1,7 @@
 """Shared build options and output paths for the build and run commands."""
 
 import argparse
+import os
 import platform
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,7 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = ("linux", "macos", "win32", "win64", "wasm", "android", "ios", "ios-simulator", "switch")
 # Installed Android identity, independent of the Java/JNI class namespace.
-ANDROID_APPLICATION_ID = "io.github.pakompom.spacerangershd"
+# A side-by-side test build may set another one; see package_android.
+ANDROID_APPLICATION_ID = os.environ.get("ANDROID_APPLICATION_ID", "io.github.pakompom.spacerangershd")
 # Package versions change for releases, not local rebuilds.
 PACKAGE_VERSION = "0.1"
 ANDROID_VERSION_CODE = 28

@@ -4444,7 +4444,9 @@ begin
   Result := Layout;
   if GameMobileUiEnabled and UseDesktopDisplayMode then
   begin
-    GetGameAutomaticLayoutSize(1024, 480, Result.X, Result.Y);
+    // Narrower and shorter than the desktop minimum, so the bar scales up on a
+    // phone. 880 still holds the bar's fixed left (430) and right (431) parts.
+    GetGameAutomaticLayoutSize(880, 400, Result.X, Result.Y);
     Result.X := Min(Result.X, Layout.X);
     Result.Y := Min(Result.Y, Layout.Y);
   end;

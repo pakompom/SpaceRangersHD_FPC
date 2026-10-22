@@ -100,6 +100,8 @@ uses
   GI_GraphBuf,
   GI_GraphButton,
   GI_Main,
+  GI_MobileSkin,
+  GameWindow,
   GR_Main,
   GR_Music,
   Globals,
@@ -124,6 +126,8 @@ begin
 end;
 
 procedure TfRating2.InitializeLayout;
+var
+  Window: TObjectGI;
 begin
   inherited InitializeLayout;
   MainPanel.InitializeLayout(Self);
@@ -143,6 +147,14 @@ begin
   TablePanel := GetByName('PTable') as TPanelScrollBarGI;
   TablePanel.VerticalScrollBar.SetPageSize(TablePanel.ClientSize.Y);
   TablePanel.VerticalScrollBar.SetLargeChange(TablePanel.ClientSize.Y);
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    // As the journal: the whole window grows above the HUD and the scene shows
+    // through its frame. Table rows are created later and stay opaque.
+    Window := GetByName('ButClose').Parent;
+    FitMobileControl(Window, Classes.Rect(12, 12, GameScreenWidth - 12, MobileScreenRect(GetByName('PM_Ship')).Top - 24));
+    FadeMobileWindowArt(Window, TablePanel, MobileReadingWindowAlpha);
+  end;
 end;
 
 procedure TfRating2.OnOpen;

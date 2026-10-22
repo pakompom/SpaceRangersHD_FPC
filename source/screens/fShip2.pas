@@ -134,6 +134,7 @@ type
     StoragePanelRestTop: Integer;
     StorageFirstSlot: Integer;
     PropertyHintRightEdge: Integer;
+    MobileStatBounds: array[0..3] of TRect;
     ScriptVideoStartedAt: Cardinal;
     ScriptVideoTimer: PCallbackTimerGI;
     HoldScrollTimer: PCallbackTimerGI;
@@ -392,6 +393,7 @@ uses
   GameInput,
   GameWindow,
   GI_ShipLayout,
+  GI_MobileSkin,
   GI_Inspection,
   fStarMap,
   aTranclucator,
@@ -413,6 +415,16 @@ uses
 var
   SelfSkillPointColor: Cardinal;
   OtherSkillPointColor: Cardinal;
+
+const
+  MobileStatNames: array[0..3] of WideString = ('IMass', 'IEmpty', 'ISpeed', 'IDef');
+
+var
+  // One ship screen exists; its mobile arrangements and stat number bounds,
+  // indexed by "local storage is available".
+  MobileShipLayout: TMobileShipLayout;
+  MobileShipRelayout: Boolean;
+  MobileModeStatBounds: array[Boolean, 0..3] of TRect;
 
 function RankToImage(Rank: TShipRank): WideString;
 begin
@@ -909,6 +921,7 @@ end;
 procedure TfShip2.InitializeLayout;
 var
   I: Integer;
+  Storage: Boolean;
   Column, Row: Integer;
   Panel: TPanelGI;
   Button: TGraphButtonGI;
@@ -1108,7 +1121,22 @@ begin
   OtherSkillPointColor := GetStyleColorGI('Ship.ExpPointsToSpendOnOther', 180, 60, 60);
   PrepareMobileShipInventory(Self, MainPanel.ContentBounds, StorageVisibleCount, RemoteHoldColumns, RemoteHoldRows);
   if GameMobileUiEnabled then
+  begin
     StoragePanelRestTop := 0;
+    MobileShipRelayout := MobileSideBySideFits;
+    if MobileShipRelayout then
+      PrepareMobileShipWindow(Self, MainPanel.ContentBounds, MobileShipLayout);
+    for Storage := True downto False do
+    begin
+      // Before any number is fitted, so the bounds are the original rows.
+      if MobileShipRelayout then
+        ApplyMobileShipWindow(Self, MobileShipLayout, Storage);
+      for I := 0 to High(MobileStatNames) do
+        MobileModeStatBounds[Storage, I] := MobileScreenRect(GetByName(MobileStatNames[I]));
+    end;
+    for I := 0 to High(MobileStatNames) do
+      MobileStatBounds[I] := MobileModeStatBounds[False, I];
+  end;
 end;
 
 procedure TfShip2.OnOpen;
@@ -1128,6 +1156,13 @@ begin
     PlayerHoldShip := ShipToInspect
   else
     PlayerHoldShip := GetPlayer;
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    if MobileShipRelayout then
+      ApplyMobileShipWindow(Self, MobileShipLayout, CanUseLocalStorage);
+    for I := 0 to High(MobileStatNames) do
+      MobileStatBounds[I] := MobileModeStatBounds[CanUseLocalStorage, I];
+  end;
   (GetByName('PM_Ship') as TGraphButtonGI).SetHitTestDisabled(True);
   (GetByName('PM_Gal') as TGraphButtonGI).SetHitTestDisabled(True);
   (GetByName('PM_Quest') as TGraphButtonGI).SetHitTestDisabled(True);
@@ -2369,6 +2404,9 @@ begin
   else
     Text := '';
   (GetByName('IEmpty') as TLabelGI).SetText(WrapTextInColor(IntToStr(PlayerHoldShip.GetCargoFreeSpace), Text));
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+    for I := 0 to High(MobileStatNames) do
+      FitMobileNumber(GetByName(MobileStatNames[I]) as TLabelGI, MobileStatBounds[I]);
   (GetByName('S_Left') as TGraphButtonGI).SetDisabled(HoldFirstIndex <= 0);
   (GetByName('S_Right') as TGraphButtonGI).SetDisabled(HoldFirstIndex + 6 > PlayerHoldEntries.Count);
   (GetByName('UpRH') as TGraphButtonGI).SetDisabled(RemoteHoldFirstOrder <= 0);
@@ -4948,6 +4986,8 @@ begin
     if GetByName('PanelLH').ContainsPoint(Point) then
       Exit;
     if GetByName('PanelDS').ContainsPoint(Point) then
+      Exit;
+    if GameMobileUiEnabled and MobileShipRelayout and GetByName('MobileHoldBar').ContainsPoint(Point) then
       Exit;
     Panels := FindControlByPath('TestHitPanels');
     if Panels <> nil then

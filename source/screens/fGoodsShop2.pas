@@ -44,6 +44,7 @@ type
     CargoWarningTicks: Integer;
     CargoWarningTimer: PCallbackTimerGI;
     AmbientSound: TSoundBufferControl;
+    MobileNumberBounds: array[0..17, 0..1] of TRect;
     procedure OnOpen; override;
     procedure OnClose; override;
     procedure ProcessCallbackTimers; override;
@@ -112,6 +113,8 @@ uses
   Math,
   GameInput,
   GI_Main,
+  GI_MobileSkin,
+  GameWindow,
   GI_Image,
   GI_GraphButton,
   GI_GraphBuf,
@@ -167,6 +170,7 @@ begin
 end;
 
 procedure TfGoodsShop2.InitializeLayout;
+var I: Integer;
 begin
   inherited InitializeLayout;
   MainPanel.InitializeLayout(Self);
@@ -196,7 +200,15 @@ begin
       SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth div 2, LocalPosition.Y + MainPanel.VerticalContentOffset));
     FindByNameRecursive('BGShrLight').SetSize(Classes.Point(GameScreenWidth, GameScreenHeight));
   end;
-  MainPanel.FitContent(GetByName('GoodsPanel'));
+  // Trade is used constantly; let it fill the space above the HUD (0 = no cap).
+  MainPanel.FitContent(GetByName('GoodsPanel'), 0);
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+    for I := 0 to 17 do
+      if (I <> 8) and (I <> 9) then
+      begin
+        MobileNumberBounds[I, 0] := MobileScreenRect(GetByName('TovCnt' + IntToStr(I)));
+        MobileNumberBounds[I, 1] := MobileScreenRect(GetByName('TovPrice' + IntToStr(I)));
+      end;
   (GetByName('PM_EndTurn') as TGraphButtonGI).UpCallback := EndTurnClicked;
   (GetByName('PM_Ship') as TGraphButtonGI).UpCallback := ShipClicked;
   (GetByName('PM_Gal') as TGraphButtonGI).UpCallback := GalaxyClicked;
@@ -744,6 +756,13 @@ begin
       SetDisabled(True)
     else
       SetDisabled(FindPlayerBubbleByText(BuildPriceText(Location), False) <> nil);
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+    for I := 0 to 17 do
+      if (I <> 8) and (I <> 9) then
+      begin
+        FitMobileNumber(GetByName('TovCnt' + IntToStr(I)) as TLabelGI, MobileNumberBounds[I, 0]);
+        FitMobileNumber(GetByName('TovPrice' + IntToStr(I)) as TLabelGI, MobileNumberBounds[I, 1]);
+      end;
 end;
 
 procedure TfGoodsShop2.GoodsMouseUp(Sender: TObjectGI; KeyState: Cardinal; Point: TPoint);

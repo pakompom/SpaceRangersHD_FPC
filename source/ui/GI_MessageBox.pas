@@ -234,7 +234,8 @@ begin
   TextSize := TextLabel.MeasureContentSize(nil);
   if GameMobileUiEnabled and HardwareRenderingEnabled then
   begin
-    FitMobileControl(ContentPanel, Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12));
+    // Its font is small: twice the desktop size, unless the screen is too small.
+    FitMobileControl(ContentPanel, Classes.Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12), 0, 2);
     // Redraw and background restoration use screen coordinates, while the
     // fitted dialog and its children retain their original logical bounds.
     Scale := ContentPanel.GetDisplayScale;

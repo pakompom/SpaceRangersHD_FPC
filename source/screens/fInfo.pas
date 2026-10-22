@@ -77,6 +77,7 @@ type
     function IsAtBusinessCenter: Boolean;
     procedure CategoryStateChanged(Sender: TObjectGI);
     procedure CategoryClicked(Sender: TObjectGI);
+    procedure PrepareMobileSearchCategories;
     procedure NextSearchPageClicked(Sender: TObjectGI);
     procedure BindFilterLabels(Parent: TObjectGI);
     procedure FilterLabelMouseEnter(Sender: TObjectGI);
@@ -119,6 +120,7 @@ implementation
 
 uses
   GameDiagnostics,
+  GI_MobileSkin,
   aCalc,
   aScript,
   Classes,
@@ -222,6 +224,7 @@ end;
 procedure TfInfo.InitializeLayout;
 var
   ExtraHeight, ContentExtraHeight: Integer;
+  Window: TObjectGI;
 begin
   inherited InitializeLayout;
   MainPanel.InitializeLayout(Self);
@@ -266,7 +269,44 @@ begin
   (GetByName('PM_EndTurn') as TGraphButtonGI).UpCallback := EndTurnClicked;
   (GetByName('PM_Ship') as TGraphButtonGI).UpCallback := ShipClicked;
   InfoPanel := GetByName('PanelInfo') as TPanelScrollBarGI;
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    // A phone needs the whole window larger, not only its text: the frame, input
+    // row and buttons grow together, and the scene shows through the artwork.
+    Window := GetByName('ButFormClose').Parent;
+    // Stay above the HUD: its frame is drawn over the window's own buttons.
+    FitMobileControl(Window, Types.Rect(12, 12, GameScreenWidth - 12, MobileScreenRect(GetByName('PM_Ship')).Top - 24));
+    FadeMobileWindowArt(Window, InfoPanel, MobileReadingWindowAlpha);
+    ScaleMobileViewport(InfoPanel, 0.8);
+    PrepareMobileSearchCategories;
+  end;
   (GetByName('TextSearch') as TEditGI).ClearFocusOnEnter := False;
+end;
+
+procedure TfInfo.PrepareMobileSearchCategories;
+const
+  // Equipment, hulls, weapons, goods, objects, persons; help last.
+  Order: array[0..14] of Integer = (1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 8, 9, 10, 15, 14);
+var
+  Panel, Child: TObjectGI;
+  Buttons: array[0..14] of TGraphButtonGI;
+  I: Integer;
+begin
+  // The circuit scheme packs its categories 18 px apart; on a phone they become
+  // a grid of buttons. The search row above stays unchanged.
+  Panel := GetByName('PanelSearch');
+  Child := Panel.FirstChild;
+  while Child <> nil do
+  begin
+    if ((Child is TImageGI) or (Child is TLabelGI)) and (Child.LocalPosition.Y >= 110) then
+      Child.SetActive(False);
+    Child := Child.NextSibling;
+  end;
+  for I := 0 to High(Order) do
+    Buttons[I] := GetByName('ButMM_' + IntToFixedWidthWideString(Order[I], 2)) as TGraphButtonGI;
+  // Above the window's bottom bar, which covers the lowest part of this panel.
+  LayoutMobileChoiceGrid(Buttons, Types.Rect(8, 112, Panel.ClientSize.X - 8, 392), 3, 5,
+      'Bm.FormLoadQuest.' + GiResourceSuffix + 'SlotNormal', Types.Rect(12, 12, 12, 12));
 end;
 
 procedure TfInfo.OnOpen;
@@ -300,6 +340,8 @@ begin
     KeyDownCallback := MainPanelKeyDown;
     KeyUpCallback := MainPanelKeyUp;
     LeftButtonDownCallback := MainPanelMouseDown;
+    // The handler only returns focus to the text field; see TouchRetargetBackground.
+    TouchRetargetBackground := True;
   end;
   (GetByName('OkSearch') as TGraphButtonGI).UpCallback := SearchClicked;
   (GetByName('ButClear') as TGraphButtonGI).UpCallback := ClearSearchText;
@@ -390,7 +432,7 @@ begin
   Galaxy.CheckIntegrityChecksum(202);
   if GetPlayer <> nil then
     GetPlayer.ScriptItemsAct(satOnLeavingForm, nil, nil, 0);
-  InfoPanel.FreeOwnedChildren;
+  InfoPanel.FreeContentChildren;
   MainPanel.OnClose;
   LoadPanel.OnClose;
   if (GetPlayer <> nil) and GetPlayer.IsOnPlanet then
@@ -505,7 +547,7 @@ end;
 procedure TfInfo.ClearInfoContents;
 begin
   InfoContentHeight := 0;
-  InfoPanel.FreeOwnedChildren;
+  InfoPanel.FreeContentChildren;
   InfoPanel.SetScrollOffset(Types.Point(0, 0));
   InfoPanel.Invalidate;
 end;
@@ -556,6 +598,8 @@ begin
   else
     Image.SetImagePath('GI,Bm.FormInfo2.' + GiResourceSuffix + 'Caption');
   Image.SetSize(Image.GetContentSize);
+  if GameMobileUiEnabled then
+    Image.SetSize(Types.Point(InfoPanel.ClientSize.X, 48));
   if LayoutKind = 0 then
     Image.SetPosition(Types.Point(InfoPanel.ClientSize.X div 2 - Image.ClientSize.X div 2, InfoContentHeight))
   else
@@ -583,6 +627,12 @@ begin
   Caption.SetPositionModeW(True);
   Caption.SetTextAlignX(taxCenter);
   Caption.SetTextAlignY(tayCenterEx);
+  if GameMobileUiEnabled then
+  begin
+    Caption.SetFontName(NormalFontName);
+    Caption.SetPosition(Types.Point(0, Image.LocalPosition.Y));
+    Caption.SetSize(Types.Point(InfoPanel.ClientSize.X, 24));
+  end;
   Caption.SetText(Title);
   Caption.SetTextColor(CurrentPixelFormat.PackRgbBytes(0, 0, 0));
   if BookmarkText <> WideString('') then
@@ -604,6 +654,8 @@ begin
               Image.LocalPosition.Y - GiScalePixels(5)
           )
       );
+    if GameMobileUiEnabled then
+      Button.SetPosition(Types.Point(Button.LocalPosition.X, Image.LocalPosition.Y + 25));
     Button.SetKind(gbkDisable);
     Button.SetPositionModeW(True);
     Button.HelpText := BookmarkText;
@@ -626,6 +678,8 @@ begin
   Image := TImageGI.Create(InfoPanel);
   Image.SetImagePath('GI,Bm.FormInfo2.' + GiResourceSuffix + 'FindPrice');
   Image.SetSize(Image.GetContentSize);
+  if GameMobileUiEnabled then
+    Image.SetSize(Types.Point(InfoPanel.ClientSize.X div 3, Image.ClientSize.Y));
   Image.SetPosition(Types.Point(InfoPanel.ClientSize.X - Image.ClientSize.X - GiScalePixels(40), InfoContentHeight));
   Image.SetDepth(1);
   Image.SetImageKindX(ikxLeftFill);
@@ -666,11 +720,16 @@ begin
   end
   else
     Caption.SetFontName(Font);
+  if GameMobileUiEnabled then
+    Caption.SetFontName(SmoothIntroFontName);
   Caption.SetPosition(Types.Point(0, InfoContentHeight));
   Caption.SetSize(Types.Point(InfoPanel.ClientSize.X, 1));
   Caption.SetWordWrapEnabled(True);
   Caption.SetPositionModeW(True);
-  Caption.SetTextAlignX(Alignment);
+  if GameMobileUiEnabled and (Alignment = taxAuto) then
+    Caption.SetTextAlignX(taxLeft)
+  else
+    Caption.SetTextAlignX(Alignment);
   Caption.SetTextAlignY(tayAuto);
   Caption.SetText(Text);
   Caption.SetTextColor(CurrentPixelFormat.PackRgbBytes(0, 0, 0));
@@ -795,7 +854,11 @@ begin
   Caption.SetPositionModeW(True);
   Caption.SetTextAlignX(taxLeft);
   Caption.SetTextAlignY(tayCenter);
+  if GameMobileUiEnabled then
+    Caption.SetTextAlignY(tayAuto);
   Caption.SetText(Text);
+  if GameMobileUiEnabled then
+    Size := Max(Size, Caption.ClientSize.Y - 20);
   Caption.SetTextColor(CurrentPixelFormat.PackRgbBytes(0, 0, 0));
   if Item is TEquipment then
   begin
@@ -2588,6 +2651,9 @@ var
   I: Integer;
   Button: TGraphButtonGI;
 begin
+  // The scheme's hover highlights are hidden with the scheme on mobile.
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+    Exit;
   I := ExtractDigitsToIntW(Sender.ControlName);
   Button := Sender as TGraphButtonGI;
   if (I >= 1) and (I <= 7) then

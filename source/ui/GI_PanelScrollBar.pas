@@ -38,6 +38,7 @@ type
     function IsVerticalScrollbarEnabled: Boolean;
     procedure SetVerticalScrollbarEnabled(Value: Boolean);
     procedure SetScrollbarsOutside(Value: Boolean);
+    procedure FreeContentChildren;
     procedure SetUnlimitedWorldEnabled(Value: Boolean);
     procedure UpdateScrollbarPlacement;
     procedure UpdateScrollRanges;
@@ -164,6 +165,22 @@ begin
     end;
     UpdateScrollbarPlacement;
     Invalidate;
+  end;
+end;
+
+procedure TPanelScrollBarGI.FreeContentChildren;
+var
+  Child, Next: TObjectGI;
+begin
+  // Inside bars are children too (see SetScrollbarsOutside). Free the contents
+  // only; FreeOwnedChildren would also destroy the bars and nil these fields.
+  Child := FirstChild;
+  while Child <> nil do
+  begin
+    Next := Child.NextSibling;
+    if (Child <> HorizontalScrollBar) and (Child <> VerticalScrollBar) then
+      FreeOwnedChild(Child);
+    Child := Next;
   end;
 end;
 

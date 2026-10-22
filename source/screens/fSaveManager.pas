@@ -10,6 +10,7 @@ uses
   Classes,
   GI_MessageLoop,
   GI_Panel,
+  GI_Image,
   GR_Sound,
   Types,
   GameInput;
@@ -58,6 +59,8 @@ type
     destructor Destroy; override;
     procedure RebuildSlotControls;
     procedure InitializeSlotPanel(Panel: TPanelGI);
+    procedure PrepareMobileSlot(Panel: TPanelGI);
+    procedure UpdateMobileSlotSkin(Image: TImageGI);
     procedure RefreshSlot(SlotIndex: Integer; UnusedEditingFlag: Boolean);
     procedure CloseClicked(Sender: TObjectGI);
     procedure LoadClicked(Sender: TObjectGI);
@@ -105,12 +108,15 @@ uses
   EC_BlockPar,
   GI_Main,
   GI_GAI,
-  GI_Image,
   GI_Edit,
   GI_Label,
   GI_GraphBuf,
   GI_PanelScrollBar,
   GI_GraphButton,
+  GI_MobileSkin,
+  GI_Artwork,
+  GameWindow,
+  GR_GraphBuf,
   Globals,
   GlobalsV,
   aConst,
@@ -144,6 +150,7 @@ begin
 end;
 
 procedure TfSaveManager.InitializeLayout;
+var Panel: TObjectGI; Scroll: TPanelScrollBarGI; R, B: TRect; H, Gap, W: Integer;
 begin
   inherited;
   LogGameMessage(gllDebug, 'ui', 'Initializing layout fSaveManager');
@@ -152,6 +159,24 @@ begin
   GetByName('BGBuf').SetSize(Classes.Point(GameScreenWidth, GameScreenHeight));
   with GetByName('ButClose').Parent do
     SetPosition(Classes.Point(LocalPosition.X + ExtraScreenWidth div 2, LocalPosition.Y + ExtraScreenHeight div 2));
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+  begin
+    Panel := GetByName('ButClose').Parent;
+    FitMobileControl(Panel, Rect(12, 12, GameScreenWidth - 12, GameScreenHeight - 12));
+    Scroll := GetByName('PanelSlot') as TPanelScrollBarGI;
+    ScaleMobileViewport(Scroll);
+    R := MobileScreenRect(GetByName('ButLoad'));
+    B := MobileScreenRect(GetByName('GameImage'));
+    H := Ceil(GetGameMobileUiScale(44));
+    Gap := Ceil(GetGameMobileUiScale(4));
+    R.Top := Min(R.Top, GameScreenHeight - 2 * H - Gap - 12);
+    W := (B.Right - R.Left - Gap) div 2;
+    ResizeMobileSkinButton(GetByName('ButLoad') as TGraphButtonGI, Rect(R.Left, R.Top, R.Left + W, R.Top + H));
+    ResizeMobileSkinButton(GetByName('ButSave') as TGraphButtonGI, Rect(R.Left, R.Top, R.Left + W, R.Top + H));
+    ResizeMobileSkinButton(GetByName('ButCancel') as TGraphButtonGI, Rect(R.Left + W + Gap, R.Top, B.Right, R.Top + H));
+    ResizeMobileSkinButton(GetByName('ButDelete') as TGraphButtonGI, Rect(R.Left, R.Top + H + Gap, B.Right, R.Top + 2 * H + Gap));
+    GetByName('ButClose').SetActive(False);
+  end;
   NewSaveNormalColor := GetStyleColorGI('SaveManager.NewSaveNormal', 0, 41, 65);
   NewSaveSelectedColor := GetStyleColorGI('SaveManager.NewSaveSelected', 87, 149, 175);
   SaveSlotNormalColor := GetStyleColorGI('SaveManager.SlotNormal', 97, 129, 143);
@@ -234,7 +259,7 @@ begin
     PreviewTimer := nil;
   end;
   ScrollPanel := GetByName('PanelSlot') as TPanelScrollBarGI;
-  ScrollPanel.FreeOwnedChildren;
+  ScrollPanel.FreeContentChildren;
   with GetByName('GameImage') as TGraphBufGI do
     GraphBuf.Clear;
   with GetByName('GameImage2') as TGraphBufGI do
@@ -259,12 +284,12 @@ begin
     SelectedSlot := Slots.Count - 1;
   ScrollPanel := GetByName('PanelSlot') as TPanelScrollBarGI;
   ScrollPanel.KeyDownCallback := SlotKeyDown;
-  ScrollPanel.FreeOwnedChildren;
+  ScrollPanel.FreeContentChildren;
   GetByName('PanelAutoSave').FreeOwnedChildren;
   Y := 0;
   for I := 0 to Slots.Count - 1 do
   begin
-    if FindAutoSaveSlot <> I then
+    if (FindAutoSaveSlot <> I) or (GameMobileUiEnabled and HardwareRenderingEnabled) then
     begin
       Panel := TPanelGI.Create(ScrollPanel);
       Panel.UserValue := I;
@@ -277,7 +302,7 @@ begin
       ScrollPanel.VerticalScrollBar.SetSmallChange(Panel.ClientSize.Y);
     end;
   end;
-  if FindAutoSaveSlot >= 0 then
+  if (FindAutoSaveSlot >= 0) and not (GameMobileUiEnabled and HardwareRenderingEnabled) then
   begin
     Panel := TPanelGI.Create(GetByName('PanelAutoSave'));
     Panel.UserValue := FindAutoSaveSlot;
@@ -439,7 +464,72 @@ begin
     SetTextAlignY(tayCenterEx);
     SetName('Slot' + IntToStr(Cardinal(Panel.UserValue)) + 'Date');
   end;
+  if GameMobileUiEnabled and HardwareRenderingEnabled then
+    PrepareMobileSlot(Panel);
+end;
 
+procedure TfSaveManager.PrepareMobileSlot(Panel: TPanelGI);
+var Prefix: WideString; W, TitleHeight: Integer; C: TObjectGI;
+  procedure PlaceText(const Name: WideString; X, Y, Width, Height: Integer);
+  var L: TLabelGI;
+  begin
+    L := GetByName(Prefix + Name) as TLabelGI;
+    L.SetPosition(Point(X, Y));
+    L.SetSize(Point(Width, Height));
+    L.SetFontName(SmoothHugeFontName);
+    L.SetTextAlignX(taxLeft);
+  end;
+begin
+  Prefix := 'Slot' + IntToStr(Panel.UserValue);
+  W := Panel.Parent.ClientSize.X - 5;
+  Panel.SetSize(Point(W, 120));
+  Panel.MouseEnterCallback := nil;
+  Panel.MouseLeaveCallback := nil;
+  GetByName(Prefix + 'onmouse').SetHitTestDisabled(True);
+  GetByName(Prefix + 'BG').SetPosition(Point(0, 0));
+  GetByName(Prefix + 'Emblem').SetPosition(Point(3, 3));
+  GetByName(Prefix + 'Emblem').SetDepth(8);
+  C := GetByName(Prefix + 'Edit');
+  C.SetPosition(Point(68, 4));
+  C.SetSize(Point(W - 76, 42));
+  if C is TLabelGI then
+  begin
+    TLabelGI(C).SetFontName(SmoothIntroFontName);
+    TLabelGI(C).SetWordWrapEnabled(True);
+    TLabelGI(C).SetTextAlignY(tayAuto);
+    TLabelGI(C).SetSize(Point(W - 76, 1));
+  end
+  else
+    TEditGI(C).SetFontName(SmoothIntroFontName);
+  TitleHeight := Max(42, C.ClientSize.Y);
+  Panel.SetSize(Point(W, TitleHeight + 78));
+  PlaceText('Date', 68, TitleHeight + 4, W - 76, 22);
+  PlaceText('Captain', 8, TitleHeight + 30, W - 16, 21);
+  PlaceText('Turn', 8, TitleHeight + 53, W - 95, 21);
+  PlaceText('Money', W - 85, TitleHeight + 53, 77, 21);
+end;
+
+procedure TfSaveManager.UpdateMobileSlotSkin(Image: TImageGI);
+var Source: TGraphBufGR; Path: WideString; Size: TPoint;
+begin
+  if not GameMobileUiEnabled or not HardwareRenderingEnabled then Exit;
+  Path := Image.GetImagePath;
+  Source := TGraphBufGR.Create(False);
+  try
+    LoadOriginalGiArtwork(Copy(Path, 4, MaxInt), Source);
+    Size := Point(Image.Parent.ClientSize.X, Image.Parent.ClientSize.Y - 4);
+    Image.AutoUpdateFlags := 0;
+    Image.SetImagePath('GraphBuf');
+    Image.SetSize(Size);
+    Image.GraphBufControl.SourceHasPerPixelAlpha := True;
+    Image.GraphBufControl.GraphBuf.AllocateRgbaTight(Size.X, Size.Y);
+    Image.GraphBufControl.GraphBuf.FillPixels(0);
+    { Reuse the original blue gradient, without the three tiny metadata wells. }
+    Image.GraphBufControl.GraphBuf.DrawNinePatch(0, 0, Size.X, Size.Y, Source,
+        Rect(0, 0, Source.Width, 32), Rect(8, 15, 8, 16));
+  finally
+    Source.Free;
+  end;
 end;
 
 procedure TfSaveManager.RefreshSlot(SlotIndex: Integer; UnusedEditingFlag: Boolean);
@@ -455,6 +545,7 @@ begin
       State := 'N';
     with GetByName('Slot' + IntToStr(SlotIndex) + 'BG') as TImageGI do
       SetImagePath('GI,Bm.FormSave2.2Slot' + State);
+    UpdateMobileSlotSkin(GetByName('Slot' + IntToStr(SlotIndex) + 'BG') as TImageGI);
     with GetByName('Slot' + IntToStr(SlotIndex) + 'Emblem') as TImageGI do
     begin
       SetImagePath('GI,Bm.FormSave2.2' + PSMSlot(Slots[SlotIndex]).RaceName + State);
@@ -489,6 +580,13 @@ begin
       Color := CurrentPixelFormat.PackRgbBytes(255, 255, 255)
     else
       Color := CurrentPixelFormat.PackRgbBytes(0, 0, 0);
+    if GameMobileUiEnabled and HardwareRenderingEnabled then
+    begin
+      (GetByName('Slot' + IntToStr(SlotIndex) + 'Captain') as TLabelGI).SetTextColor(Color);
+      (GetByName('Slot' + IntToStr(SlotIndex) + 'Turn') as TLabelGI).SetTextColor(Color);
+      (GetByName('Slot' + IntToStr(SlotIndex) + 'Money') as TLabelGI).SetTextColor(Color);
+      (GetByName('Slot' + IntToStr(SlotIndex) + 'Date') as TLabelGI).SetTextColor(Color);
+    end;
     if GetByName('Slot' + IntToStr(SlotIndex) + 'Edit') is TEditGI then
     begin
       with GetByName('Slot' + IntToStr(SlotIndex) + 'Edit') as TEditGI do
@@ -743,7 +841,7 @@ begin
   if (SelectedSlot >= 0) and (Slots.Count > SelectedSlot) then
   begin
     ScrollPanel := GetByName('PanelSlot') as TPanelScrollBarGI;
-    if FindAutoSaveSlot <> SlotIndex then
+    if (FindAutoSaveSlot <> SlotIndex) or (GameMobileUiEnabled and HardwareRenderingEnabled) then
       with GetByName('Slot' + IntToStr(SlotIndex)) as TPanelGI do
         ScrollPanel.ScrollRectIntoView(GetLocalBounds);
     RefreshSlot(SlotIndex, SaveManagerMode = smmSave);

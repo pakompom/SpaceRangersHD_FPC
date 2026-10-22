@@ -87,6 +87,18 @@ controls: close callbacks must still see the mode that created their tree.
   must not activate a different row under the finger. Inventory and slider drags
   keep their own behavior. Inspection selection is separate from gesture ownership.
 
+- **A tap that just misses a small control may be retargeted to it.**
+  On Android, a touch landing on nothing interactive goes to the nearest tap or
+  hold control under 44 dp within 12 dp, unless another is nearly as close.
+  Backgrounds with left-button handlers block this, because some act on the point
+  (trade). Set `TouchRetargetBackground` only where those handlers merely restore
+  focus or selection.
+
+- **Inside scrollbars are children of their panel.**
+  `SetScrollbarsOutside(False)`, which `ScaleMobileViewport` uses, reparents both
+  bars into the panel. `FreeOwnedChildren` would then destroy them and leave the
+  bar fields nil. Rebuild scrolling contents with `TPanelScrollBarGI.FreeContentChildren`.
+
 - **Callbacks and screen changes can invalidate control references.**
   The control tree owns its children; references held by screens and helpers are
   borrowed and become invalid on a rebuild. A callback can open a dialog or

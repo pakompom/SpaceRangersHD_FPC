@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from build_support import (
     build_codecs,
@@ -265,6 +266,30 @@ def package_version() -> tuple[int, str]:
     return code, name
 
 
+def test_label_overlay(directory: Path, build_tools: Path) -> Path | None:
+    """Optional names for a test build installed beside the game, in every locale."""
+    app_name = os.environ.get("ANDROID_APP_NAME", "").strip()
+    launcher_name = os.environ.get("ANDROID_LAUNCHER_NAME", "").strip() or app_name
+    if not app_name:
+        return None
+    source = directory / "label-res"
+    for values in ("values", "values-ru"):
+        folder = source / values
+        folder.mkdir(parents=True)
+        strings = "".join(
+            f'  <string name="{name}">{escape(text)}</string>\n'
+            for name, text in (("app_name", app_name), ("launcher_name", launcher_name))
+        )
+        (folder / "strings.xml").write_text(
+            f'<?xml version="1.0" encoding="utf-8"?>\n<resources>\n{strings}</resources>\n', encoding="utf-8"
+        )
+    overlay = directory / "label-res.zip"
+    run_step(directory, "label-resources", [
+        build_tools / "aapt2", "compile", "--dir", source, "-o", overlay,
+    ])  # fmt: skip
+    return overlay
+
+
 def package_android(config: BuildConfig, native: Path, ndk: Path) -> Path:
     work = config.work / "package"
     work.mkdir(parents=True, exist_ok=True)
@@ -311,6 +336,7 @@ def package_android(config: BuildConfig, native: Path, ndk: Path) -> Path:
         run_step(work, "resources", [
             build_tools / "aapt2", "compile", "--dir", app / "res", "-o", resources,
         ])  # fmt: skip
+        overlay = test_label_overlay(Path(temporary), build_tools)
         unsigned = work / "unsigned.apk"
         run_step(work, "apk", [
             build_tools / "aapt2", "link", "-I", android,
@@ -320,6 +346,7 @@ def package_android(config: BuildConfig, native: Path, ndk: Path) -> Path:
             "-A", app / "assets",
             *([] if config.release else ["--debug-mode"]),
             "--version-name", version_name, "--java", generated, "-o", unsigned, resources,
+            *(["-R", overlay] if overlay else []),
         ])  # fmt: skip
         run_step(work, "java", [
             java / "bin/javac", "-encoding", "UTF-8", "--release", "8",
