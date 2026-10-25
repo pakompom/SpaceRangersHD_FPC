@@ -386,7 +386,7 @@ begin
     case Star.Planets.Count of
       0:
       begin
-        Orbit.Radius := Radius + Star.SystemRadius + 175;
+        Orbit.Radius := Radius + Star.SystemRadius + 400;
         OwnerId := oiUninhabited;
         Government := pgAnarchy;
         Economy := peAgricultural;
@@ -394,7 +394,7 @@ begin
       1:
       begin
         PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
-        Orbit.Radius := PreviousPlanet.Orbit.Radius + PreviousPlanet.Radius + Radius + 200;
+        Orbit.Radius := PreviousPlanet.Orbit.Radius + PreviousPlanet.Radius * 2 + Radius * 2 + 450 + Star.Planets.Count * 120;
         OwnerId := oiHuman;
         Government := pgDemocracy;
         Economy := peAgricultural;
@@ -403,14 +403,14 @@ begin
       2:
       begin
         PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
-        Orbit.Radius := PreviousPlanet.Orbit.Radius + PreviousPlanet.Radius + Radius + 200;
+        Orbit.Radius := PreviousPlanet.Orbit.Radius + PreviousPlanet.Radius * 2 + Radius * 2 + 450 + Star.Planets.Count * 120;
         OwnerId := oiHuman;
         Government := pgDemocracy;
         Economy := peIndustrial;
         Population := 1000000;
         Satellite := TSputnik.Create;
         Satellites.Add(Satellite);
-        MinOrbitRadius := Round(Radius * 1.3);
+        MinOrbitRadius := Round(Radius * 1.3 * 3);
         RetainSpaceObject(TObjectSE(Satellite.Graphic), TSputnikSE.Create('Sputnik.Moon', Classes.Point(0, 0)));
         Satellite.Graphic.DepthOrder := 0;
         Satellite.Graphic.OrbitCenter := GetPosition;
@@ -430,9 +430,9 @@ begin
         PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
         Orbit.Radius :=
             PreviousPlanet.Orbit.Radius
-                + PreviousPlanet.Radius
-                + Radius
-                + 200
+                + PreviousPlanet.Radius * 2
+                + Radius * 2
+                + 450 + Star.Planets.Count * 120
                 + Round(200 - RemapClamped(Star.Planets.Count, 1, 6, 0, 200));
         OwnerId := oiHuman;
         Government := pgDictatorship;
@@ -443,8 +443,8 @@ begin
         begin
           Satellite := TSputnik.Create;
           Satellites.Add(Satellite);
-          MinOrbitRadius := Round(Radius * 1.3);
-          MaxOrbitRadius := Radius * 2;
+          MinOrbitRadius := Round(Radius * 1.3 * 3);
+          MaxOrbitRadius := Radius * 2 * 3;
           RetainSpaceObject(TObjectSE(Satellite.Graphic), TSputnikSE.Create('Sputnik.Mars' + IntToStr(I), Classes.Point(0, 0)));
           Satellite.Graphic.DepthOrder := I;
           Satellite.Graphic.OrbitCenter := GetPosition;
@@ -465,9 +465,9 @@ begin
         PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
         Orbit.Radius :=
             PreviousPlanet.Orbit.Radius
-                + PreviousPlanet.Radius
-                + Radius
-                + 200
+                + PreviousPlanet.Radius * 2
+                + Radius * 2
+                + 450 + Star.Planets.Count * 120
                 + Round(200 - RemapClamped(Star.Planets.Count, 1, 6, 0, 200));
         OwnerId := oiUninhabited;
         Government := pgAnarchy;
@@ -477,8 +477,8 @@ begin
         begin
           Satellite := TSputnik.Create;
           Satellites.Add(Satellite);
-          MinOrbitRadius := Round(Radius * 1.3);
-          MaxOrbitRadius := Radius * 2;
+          MinOrbitRadius := Round(Radius * 1.3 * 3);
+          MaxOrbitRadius := Radius * 2 * 3;
           RetainSpaceObject(
               TObjectSE(Satellite.Graphic),
               TSputnikSE.Create(
@@ -518,9 +518,9 @@ begin
         PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
         Orbit.Radius :=
             PreviousPlanet.Orbit.Radius
-                + PreviousPlanet.Radius
-                + Radius
-                + 200
+                + PreviousPlanet.Radius * 2
+                + Radius * 2
+                + 450 + Star.Planets.Count * 120
                 + Round(200 - RemapClamped(Star.Planets.Count, 1, 6, 0, 200));
         OwnerId := oiUninhabited;
         Government := pgRepublic;
@@ -533,9 +533,9 @@ begin
         PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
         Orbit.Radius :=
             PreviousPlanet.Orbit.Radius
-                + PreviousPlanet.Radius
-                + Radius
-                + 200
+                + PreviousPlanet.Radius * 2
+                + Radius * 2
+                + 450 + Star.Planets.Count * 120
                 + Round(200 - RemapClamped(Star.Planets.Count, 1, 6, 0, 200));
         OwnerId := oiUninhabited;
         Government := pgAnarchy;
@@ -545,8 +545,8 @@ begin
         begin
           Satellite := TSputnik.Create;
           Satellites.Add(Satellite);
-          MinOrbitRadius := Round(Radius * 1.3);
-          MaxOrbitRadius := Radius * 2;
+          MinOrbitRadius := Round(Radius * 1.3 * 3);
+          MaxOrbitRadius := Radius * 2 * 3;
           RetainSpaceObject(
               TObjectSE(Satellite.Graphic),
               TSputnikSE.Create(
@@ -726,7 +726,7 @@ begin
       Graphic.SetSurfaceMapStep(NextRandomIntRange(0, 1, RandomState) * 2 - 1);
       Graphic.OrbitalVelocity := OrbitalVelocity;
       PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
-      Orbit.Radius := PreviousPlanet.Orbit.Radius + PreviousPlanet.Radius + Radius + 200;
+      Orbit.Radius := PreviousPlanet.Orbit.Radius + PreviousPlanet.Radius * 2 + Radius * 2 + 450 + Star.Planets.Count * 120;
     end
     else
     begin
@@ -819,15 +819,15 @@ begin
         Graphic.SetRingKind(0);
       Radius := GraphicRadius;
       if Star.Planets.Count = 0 then
-        Orbit.Radius := Radius + Star.SystemRadius + 350
+        Orbit.Radius := Radius + Star.SystemRadius + 800
       else
       begin
         PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
         Orbit.Radius :=
             PreviousPlanet.Orbit.Radius
-                + PreviousPlanet.Radius
-                + Radius
-                + 200
+                + PreviousPlanet.Radius * 2
+                + Radius * 2
+                + 450 + Star.Planets.Count * 120
                 + Round(200 - RemapClamped(Star.Planets.Count, 1, 6, 0, 200));
       end;
       OrbitalVelocity := (NextRandomIntRange(0, 1, RandomState) * 2 - 1) * (4.5 - Star.Planets.Count / 2);
@@ -838,10 +838,10 @@ begin
       Graphic.OrbitalVelocity := OrbitalVelocity;
       SatelliteConfig := GameDataConfig.GetBlockByPath('SE.Sputnik');
       if Graphic.RingKind = 0 then
-        MinOrbitRadius := Round(Radius * 1.3)
+        MinOrbitRadius := Round(Radius * 1.3 * 3)
       else
-        MinOrbitRadius := Round(Radius * 1.5);
-      MaxOrbitRadius := Radius * 2;
+        MinOrbitRadius := Round(Radius * 1.5 * 3);
+      MaxOrbitRadius := Radius * 2 * 3;
       if Graphic.RingKind = 0 then
         SatelliteCount := NextRandomIntRange(1, 4, RandomState)
       else if Graphic.RingKind < 20 then
@@ -1312,7 +1312,7 @@ begin
   Radius := GraphicRadius;
   PreviousPlanet := Star.Planets[Star.Planets.Count - 1];
   Orbit.Radius :=
-      PreviousPlanet.Orbit.Radius + PreviousPlanet.Radius + Radius + 200 + Round(200 - RemapClamped(Star.Planets.Count, 1, 6, 0, 200));
+      PreviousPlanet.Orbit.Radius + PreviousPlanet.Radius * 2 + Radius * 2 + 450 + Star.Planets.Count * 120 + Round(200 - RemapClamped(Star.Planets.Count, 1, 6, 0, 200));
   OrbitalVelocity := (NextRandomIntRange(0, 1, RandomState) * 2 - 1) * (4.5 - Star.Planets.Count / 2);
   Orbit.AngleDegrees := NextRandomIntRange(0, 359, RandomState);
   Graphic.SetPosition(PolarToPoint(Orbit));
@@ -1321,10 +1321,10 @@ begin
   Graphic.OrbitalVelocity := OrbitalVelocity;
   SatelliteConfig := GameDataConfig.GetBlockByPath('SE.Sputnik');
   if Graphic.RingKind = 0 then
-    MinOrbitRadius := Round(Radius * 1.3)
+    MinOrbitRadius := Round(Radius * 1.3 * 3)
   else
-    MinOrbitRadius := Round(Radius * 1.5);
-  MaxOrbitRadius := Radius * 2;
+    MinOrbitRadius := Round(Radius * 1.5 * 3);
+  MaxOrbitRadius := Radius * 2 * 3;
   if Graphic.RingKind = 0 then
     SatelliteCount := NextRandomIntRange(1, 4, RandomState)
   else if Graphic.RingKind < 20 then

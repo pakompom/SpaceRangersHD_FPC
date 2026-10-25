@@ -55,6 +55,7 @@ type
     TextureCache: TTextureGR;
     TextureSize: TPoint;
     AtmosphereTextureSize: TPoint;
+	IsScaled: Boolean;  // SR3D: True для планет (×3), False для спутников (оригинал)
     procedure Clear; override;
     procedure QueueImageLoad(PendingLoads: TList); override;
     procedure LoadFromConfigPath(const Path: WideString); override;
@@ -126,6 +127,7 @@ begin
   RenderedMapOffsets[2] := RenderedMapOffsets[0];
   RenderedMapOffsets[3] := RenderedMapOffsets[0];
   TextureCache := nil;
+    IsScaled := False;  // по умолчанию — оригинальное поведение
 end;
 
 destructor TPlanetGI.Destroy;
@@ -329,6 +331,7 @@ var
   LightImage: TCPalBitmapEC;
 begin
   Invalidate;
+  IsScaled := True;  // SR3D: помечаем как масштабируемую планету
   if SourceLightBuffer <> nil then
   begin
     Ex_OKGR_LightBuf_Destroy(SourceLightBuffer);
@@ -357,7 +360,9 @@ begin
         and (Image.Bitmap.Width <> 2048) then
       raise Exception.Create('TPlanetGI.SetImage. Error create template planet. LenX<>16 or 32 or 64 or 128 or 256 or 512 or 1024 or 2048');
     MapWidthMask := Image.Bitmap.Width - 1;
-    SetSize(Classes.Point(Radius * 2 + 1, Radius * 2 + 1));
+    SetSize(Classes.Point(Radius * 2 * 3 + 1, Radius * 2 * 3 + 1));
+	SetOrigin(Classes.Point((Radius * 2 * 3 + 1) div 2, (Radius * 2 * 3 + 1) div 2));
+    UpdateSubtreeHitBounds;
     TemplateCache.SetCacheKey(MaskPath + '?' + IntToStr(Cardinal(Image.Bitmap.Width)) + ',' + IntToStr(Cardinal(Image.Bitmap.Height)));
     LightControl := TCPalBitmapControlEC.Create;
     GlobalCache.ResetControl(LightControl);
@@ -511,7 +516,9 @@ begin
             + ','
             + IntToStr(Cardinal(Mask.Bitmap.Height shr 1))
     );
-    SetSize(Classes.Point(Image.Bitmap.Width, Image.Bitmap.Height));
+    SetSize(Classes.Point(Image.Bitmap.Width * 3, Image.Bitmap.Height * 3));
+	SetOrigin(Classes.Point((Image.Bitmap.Width * 3) div 2, (Image.Bitmap.Height * 3) div 2));
+	UpdateSubtreeHitBounds;
     AtmosphereDirty := True;
     AtmospherePaletteDirty := True;
   finally
@@ -742,7 +749,7 @@ begin
     begin
       if TextureCache = nil then
         TextureCache := CreateTextureCache;
-      if ((HitTestBounds.Right - HitTestBounds.Left) <> TextureSize.X) or ((HitTestBounds.Bottom - HitTestBounds.Top) <> TextureSize.Y) then
+      if (((HitTestBounds.Right - HitTestBounds.Left) div 3) <> TextureSize.X) or (((HitTestBounds.Bottom - HitTestBounds.Top) div 3) <> TextureSize.Y) then
       begin
         RenderedMapOffsets[0] := $FFFFFF;
         RenderedMapOffsets[1] := RenderedMapOffsets[0];
@@ -751,7 +758,32 @@ begin
         for Index := 0 to 3 do
           TextureCache.SetSurface(nil, Index);
       end;
-      TextureSize := Classes.Point(HitTestBounds.Right - HitTestBounds.Left, HitTestBounds.Bottom - HitTestBounds.Top);
+            if IsScaled then
+      begin
+        if (((HitTestBounds.Right - HitTestBounds.Left) div 3) <> TextureSize.X) or (((HitTestBounds.Bottom - HitTestBounds.Top) div 3) <> TextureSize.Y) then
+        begin
+          RenderedMapOffsets[0] := $FFFFFF;
+          RenderedMapOffsets[1] := RenderedMapOffsets[0];
+          RenderedMapOffsets[2] := RenderedMapOffsets[0];
+          RenderedMapOffsets[3] := RenderedMapOffsets[0];
+          for Index := 0 to 3 do
+            TextureCache.SetSurface(nil, Index);
+        end;
+        TextureSize := Classes.Point((HitTestBounds.Right - HitTestBounds.Left) div 3, (HitTestBounds.Bottom - HitTestBounds.Top) div 3);
+      end
+      else
+      begin
+        if ((HitTestBounds.Right - HitTestBounds.Left) <> TextureSize.X) or ((HitTestBounds.Bottom - HitTestBounds.Top) <> TextureSize.Y) then
+        begin
+          RenderedMapOffsets[0] := $FFFFFF;
+          RenderedMapOffsets[1] := RenderedMapOffsets[0];
+          RenderedMapOffsets[2] := RenderedMapOffsets[0];
+          RenderedMapOffsets[3] := RenderedMapOffsets[0];
+          for Index := 0 to 3 do
+            TextureCache.SetSurface(nil, Index);
+        end;
+        TextureSize := Classes.Point(HitTestBounds.Right - HitTestBounds.Left, HitTestBounds.Bottom - HitTestBounds.Top);
+      end;
       Texture := TextureCache.GetSurface(0);
       if (SurfaceMapOffset <> RenderedMapOffsets[0]) or (Texture = nil) then
       begin
@@ -793,7 +825,10 @@ begin
           TextureCache.SetSurface(Texture, 0);
         end;
       end;
-      DrawTexture(Texture, HitTestBounds.Left, HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False);
+      if IsScaled then
+          DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, HitTestBounds.Right - HitTestBounds.Left, HitTestBounds.Bottom - HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False)
+        else
+          DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, TextureSize.X, TextureSize.Y, 255, RgbWhite, @ClipRect, False, False);
       if HasCloud1 then
       begin
         Texture := TextureCache.GetSurface(1);
@@ -820,7 +855,10 @@ begin
           Texture.UnlockRect(0);
           TextureCache.SetSurface(Texture, 1);
         end;
-        DrawTexture(Texture, HitTestBounds.Left, HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False);
+        if IsScaled then
+  DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, HitTestBounds.Right - HitTestBounds.Left, HitTestBounds.Bottom - HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False)
+else
+  DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, TextureSize.X, TextureSize.Y, 255, RgbWhite, @ClipRect, False, False);
       end
       else
         TextureCache.SetSurface(nil, 1);
@@ -850,7 +888,10 @@ begin
           Texture.UnlockRect(0);
           TextureCache.SetSurface(Texture, 2);
         end;
-        DrawTexture(Texture, HitTestBounds.Left, HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False);
+        if IsScaled then
+  DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, HitTestBounds.Right - HitTestBounds.Left, HitTestBounds.Bottom - HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False)
+else
+  DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, TextureSize.X, TextureSize.Y, 255, RgbWhite, @ClipRect, False, False);
       end
       else
         TextureCache.SetSurface(nil, 2);
@@ -880,7 +921,10 @@ begin
           Texture.UnlockRect(0);
           TextureCache.SetSurface(Texture, 3);
         end;
-        DrawTexture(Texture, HitTestBounds.Left, HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False);
+        if IsScaled then
+  DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, HitTestBounds.Right - HitTestBounds.Left, HitTestBounds.Bottom - HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False)
+else
+  DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, TextureSize.X, TextureSize.Y, 255, RgbWhite, @ClipRect, False, False);
       end
       else
         TextureCache.SetSurface(nil, 3);
@@ -909,7 +953,10 @@ begin
       end;
       Texture := TextureCache.GetSurface(4);
       if not AtmosphereImageCache.HasEmptyCacheKey and (Texture <> nil) and (AtmosphereColor <> 0) then
-        DrawTexture(Texture, HitTestBounds.Left, HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False);
+        if IsScaled then
+  DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, HitTestBounds.Right - HitTestBounds.Left, HitTestBounds.Bottom - HitTestBounds.Top, 255, RgbWhite, @ClipRect, False, False)
+else
+  DrawTextureSized(Texture, HitTestBounds.Left, HitTestBounds.Top, TextureSize.X, TextureSize.Y, 255, RgbWhite, @ClipRect, False, False);
     end
     else
     begin

@@ -15,7 +15,7 @@ const
 
   gerTerronConversion = 4;
 
-  MinSpaceZoomPercent = 50;
+  MinSpaceZoomPercent = 10;
 
   MaxSpaceZoomPercent = 200;
 

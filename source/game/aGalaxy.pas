@@ -4794,8 +4794,8 @@ begin
     Definition := GameDataConfig.GetBlockByPath('Star.' + Definition.GetBlockNameByIndex(I));
   end;
   Radius := StrToInt(AnsiString(Definition.GetParam('Radius')));
-  SafeRadius := ExtractDecimalToSingleW(Definition.GetParam('SafeRadius'));
-  DamageRadius := ExtractDecimalToSingleW(Definition.GetParam('DamageRadius'));
+    SafeRadius := ExtractDecimalToSingleW(Definition.GetParam('SafeRadius')) * 2.2;
+  DamageRadius := ExtractDecimalToSingleW(Definition.GetParam('DamageRadius')) * 2.2;
   SystemRadius := Radius;
   RetainSpaceObject(Graphic, CreateSpaceObjectByName('Star', Definition.GetParam('SEGraph'), Classes.Point(0, 0)));
   SystemProcessName := Definition.GetParam('SEProcess');

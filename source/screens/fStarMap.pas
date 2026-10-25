@@ -498,10 +498,11 @@ var
   end;
 
 begin
-  if MapControls = nil then
+    if MapControls = nil then
     Exit;
-  if not HardwareRenderingEnabled then
-    Scale := 1;
+  // SR3D: 
+  // if not HardwareRenderingEnabled then
+  //   Scale := 1;
   MapControls.ChildWorldScale := Scale;
   Size := Classes.Point(Ceil(GameScreenWidth / Scale), Ceil(GameScreenHeight / Scale));
   Center := Classes.Point(Round(MapControls.AbsolutePosition.X / Scale), Round(MapControls.AbsolutePosition.Y / Scale));
@@ -2485,7 +2486,7 @@ begin
         Exit;
       end;
     end
-    else if Sqr(Point.X - Planet.GetPosition.X) + Sqr(Point.Y - Planet.GetPosition.Y) < Sqr(Planet.GraphicRadius) then
+     else if Sqr(Point.X - Planet.GetPosition.X) + Sqr(Point.Y - Planet.GetPosition.Y) < Sqr(Planet.GraphicRadius * 3) then
     begin
       HitObjectPosition :=
           Classes.Point(Round(Planet.Graphic.Position.X) - GetMapCenter.X, Round(Planet.Graphic.Position.Y) - GetMapCenter.Y);
@@ -2494,7 +2495,7 @@ begin
       Exit;
     end;
   end;
-  if Point.X * Point.X + Point.Y * Point.Y < Sqr(PlayerStar.Radius) then
+    if Point.X * Point.X + Point.Y * Point.Y < Sqr(PlayerStar.Radius * 2) then
   begin
     HitObjectPosition :=
         Classes.Point(Round(PlayerStar.Graphic.Position.X) - GetMapCenter.X, Round(PlayerStar.Graphic.Position.Y) - GetMapCenter.Y);
@@ -2610,6 +2611,13 @@ var
   SavedTransform: TGameGraphicsTransform;
   BackgroundClip: TRect;
   Scale: Single;
+  // SR3D: 
+  Index, I: Integer;
+  Planet: TPlanet;
+  OrbitRadius: Integer;
+  Center: TPoint;
+  Angle, Step: Single;
+  X1, Y1, X2, Y2: Integer;
 begin
   UpdateSpaceZoom;
   if (TouchItem <> nil) and not TouchItemSelectionValid then
@@ -2666,8 +2674,38 @@ begin
       RectNode := RectNode.Next;
     end;
     Stage := 9;
-    if not HardwareRenderingEnabled then
-      PrepareFrameDraw;
+        // SR3D: 
+    if HardwareRenderingEnabled and (SpaceProcess <> nil) and SpaceProcess.IsSpaceOpen then
+    begin
+      // Вычисляем центр звезды на экране
+      Center.X := MapControls.AbsolutePosition.X - Round(MapControls.ScrollOffset.X * MapControls.ChildWorldScale);
+      Center.Y := MapControls.AbsolutePosition.Y - Round(MapControls.ScrollOffset.Y * MapControls.ChildWorldScale);
+      
+      for Index := 0 to PlayerStar.Planets.Count - 1 do
+      begin
+        Planet := PlayerStar.Planets[Index];
+        // Вычисляем радиус с учётом зума
+        OrbitRadius := Round(Sqrt(Sqr(Planet.GetPosition.X) + Sqr(Planet.GetPosition.Y)) * MapControls.ChildWorldScale);
+        
+        if OrbitRadius > 10 then
+        begin
+          Step := Pi * 2 / 64;
+          Angle := 0;
+          X2 := Center.X + Round(Cos(Angle) * OrbitRadius);
+          Y2 := Center.Y + Round(Sin(Angle) * OrbitRadius);
+          for I := 1 to 64 do
+          begin
+            X1 := X2;
+            Y1 := Y2;
+            Angle := Angle + Step;
+            X2 := Center.X + Round(Cos(Angle) * OrbitRadius);
+            Y2 := Center.Y + Round(Sin(Angle) * OrbitRadius);
+            DrawAlphaLine(X1, Y1, X2, Y2, $88888888, 80, nil);
+          end;
+        end;
+      end;
+    end;
+
     Stage := 10;
     DrawQueuedControlRects;
     Stage := 11;
@@ -6708,6 +6746,7 @@ procedure TfStarMap.ProcessMouseWheel(KeyState: Cardinal; Point: TPoint; Delta: 
 var
   FollowMode: Integer;
   Ship: TShip;
+  CurrentZoom, NewZoom: Integer;
 begin
   if (Mode = smmOrders) and ((GetPlayer.Order = soFollowShip) or (PendingPlayerFollowTarget <> nil)) then
   begin
@@ -6763,6 +6802,24 @@ begin
     end;
     Galaxy.PrimeIntegrityChecksum(90);
     BuildShipPathOverlay(GetPlayer, False, '');
+  end
+  else
+  begin
+    // SR3D: Зум камеры колесом мыши (от 50% до 100%)
+    CurrentZoom := Round(MapControls.ChildWorldScale * 100);
+    if Delta > 0 then
+      NewZoom := CurrentZoom + 5
+    else
+      NewZoom := CurrentZoom - 5;
+    
+    NewZoom := EnsureRange(NewZoom, MinSpaceZoomPercent, 100);
+    
+    if NewZoom <> CurrentZoom then
+    begin
+      ApplySpaceZoom(NewZoom / 100);
+      SpaceZoomPercent := NewZoom;
+      UserSettingsConfig.SetOrAddParam('SpaceZoomPercent', IntToStr(SpaceZoomPercent));
+    end;
   end;
 end;
 
