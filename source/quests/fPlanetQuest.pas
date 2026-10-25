@@ -1050,9 +1050,13 @@ begin
 end;
 
 procedure TfPlanetQuest.InitializeLayout;
+const
+  // Rows 40..417 of the 1920x1200 background artwork are the cut-out for the quest picture.
+  BackgroundCutOutBottom = 420;
 var
-  I, Shift: Integer;
+  I, Shift, Top: Integer;
   Control: TObjectGI;
+  BottomCopy: TImageGI;
 begin
   MobileArtwork := nil;
   MobileStatsToggle := nil;
@@ -1087,8 +1091,41 @@ begin
       SetPosition(Point(LocalPosition.X + Shift, LocalPosition.Y));
       SetSize(Point(ClientSize.X + (ExtraScreenWidth - Shift), ClientSize.Y + ExtraScreenHeight));
     end;
-    with FindByNameRecursive('BGImage') do
-      SetPosition(Point(GameScreenWidth - ClientSize.X, LocalPosition.Y));
+    Control := FindByNameRecursive('BGImage');
+    Control.SetPosition(Point(GameScreenWidth - Control.ClientSize.X, Control.LocalPosition.Y));
+    // The 1920 px artwork is right-aligned; tile it leftwards to paint the strip outside the frame.
+    if Control is TImageGI then
+    begin
+      if Control.LocalPosition.X > 0 then
+      begin
+        Control.SetSize(Point(Control.ClientSize.X + Control.LocalPosition.X, Control.ClientSize.Y));
+        Control.SetPosition(Point(0, Control.LocalPosition.Y));
+        TImageGI(Control).SetImageKindX(ikxRightFill);
+      end;
+      // Cover the strip below the artwork with bottom-anchored copies, each no taller than
+      // the artwork below the cut-out, so the cut-out never shows a second time.
+      Top := Control.LocalPosition.Y + Control.ClientSize.Y;
+      I := 0;
+      while Top < GameScreenHeight do
+      begin
+        Inc(I);
+        BottomCopy := FindByNameRecursive('BGImageBottom' + IntToWideString(I)) as TImageGI;
+        if BottomCopy = nil then
+        begin
+          BottomCopy := TImageGI.Create(Control.Parent);
+          BottomCopy.SetName('BGImageBottom' + IntToWideString(I));
+          BottomCopy.SetDepth(Control.Depth);
+          BottomCopy.SetImagePath(TImageGI(Control).ImagePath);
+          BottomCopy.SetImageKindX(ikxRightFill);
+          BottomCopy.SetImageKindY(ikyBottom);
+        end;
+        BottomCopy.SetPosition(Point(Control.LocalPosition.X, Top));
+        BottomCopy.SetSize(Point(Control.ClientSize.X, Min(Control.ClientSize.Y - BackgroundCutOutBottom, GameScreenHeight - Top)));
+        if BottomCopy.ClientSize.Y <= 0 then
+          Break;
+        Inc(Top, BottomCopy.ClientSize.Y);
+      end;
+    end;
     with FindByNameRecursive('PanelImage') do
       if (ExtraScreenWidth > 0) or (ExtraScreenHeight > 0) then
       begin
@@ -1158,7 +1195,7 @@ end;
 procedure TfPlanetQuest.InitializeMobileLayout;
 var
   I: Integer;
-  Root: TObjectGI;
+  Root, BottomCopy: TObjectGI;
 begin
   if not GameMobileUiEnabled or not HardwareRenderingEnabled then
     Exit;
@@ -1182,6 +1219,14 @@ begin
   MobileStatsToggle.UpCallback := StatsButtonClick;
   LayoutMobileControls;
   GetByName('BGImage').SetActive(False);
+  I := 1;
+  BottomCopy := Root.FindByNameRecursive('BGImageBottom1');
+  while BottomCopy <> nil do
+  begin
+    BottomCopy.SetActive(False);
+    Inc(I);
+    BottomCopy := Root.FindByNameRecursive('BGImageBottom' + IntToWideString(I));
+  end;
   GetByName('PanelImage').SetActive(False);
   GetByName('BGStyle').SetActive(False);
   GetByName('ImageFrame').SetActive(False);
@@ -1875,9 +1920,11 @@ begin
 end;
 
 procedure TfPlanetQuest.ApplyStyle;
+const
+  FillNames: array[0..1] of WideString = ('BGUpperTextImage', 'BGLowerTextImage');
 var
   I: Integer;
-  Control: TObjectGI;
+  Control, Frame: TObjectGI;
   Path: WideString;
 begin
   (GetByName('AnimTextOn') as TGraphButtonGI).SetActive(QuestPageAnimationEnabled);
@@ -1885,6 +1932,25 @@ begin
   for I := 1 to QuestStyleCount do
     (GetByName('Style' + IntToStr(I)) as TGraphButtonGI).SetDisabled(QuestStyleIndex = I - 1);
   (GetByName('BGStyle') as TImageGI).SetImagePath('GI,Bm.FormPQuest2.' + GiResourceSuffix + 'S' + IntToWideString(QuestStyleIndex + 1));
+  // The fills are 1435x1200; extend them to the frame and tile them.
+  Frame := GetByName('BGStyle');
+  for I := Low(FillNames) to High(FillNames) do
+  begin
+    Control := GetByName('MainPanel').FindByNameRecursive(FillNames[I]);
+    if not (Control is TImageGI) or (Control.ClientSize.X <= 0) then
+      Continue;
+    if Control.ClientSize.X < Frame.ClientSize.X then
+    begin
+      Control.SetPosition(Point(Control.LocalPosition.X - (Frame.ClientSize.X - Control.ClientSize.X), Control.LocalPosition.Y));
+      Control.SetSize(Point(Frame.ClientSize.X, Control.ClientSize.Y));
+      TImageGI(Control).SetImageKindX(ikxLeftFill);
+    end;
+    if Control.ClientSize.Y < Frame.LocalPosition.Y + Frame.ClientSize.Y then
+    begin
+      Control.SetSize(Point(Control.ClientSize.X, Frame.LocalPosition.Y + Frame.ClientSize.Y));
+      TImageGI(Control).SetImageKindY(ikyTopFill);
+    end;
+  end;
   (GetByName('MessageWindow') as TPanelScrollBarGI)
       .VerticalScrollbar
       .SetConfigPath('Style.ScrollBar.' + GiResourceSuffix + 'PQS' + IntToWideString(QuestStyleIndex + 1));
